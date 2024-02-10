@@ -1,0 +1,89 @@
+.nav_sep {
+	margin-top: 60px;
+}
+
+body {
+	min-width: 300px;
+}
+
+.txtEstado {
+	font-size: 25px;
+}
+
+.inputName {
+	width: 60px !important;
+	min-width: 50px;
+}
+
+.imgSortHeader {
+	margin-left: 2px;
+	margin-right: 2px;
+	width: 16px;
+	height: 16px;
+}
+
+.imgSortHeader:hover {
+	margin-left: 0px;
+	margin-right: 0px;
+	width: 20px;
+	height: 20px;
+	transition-duration: 200ms;
+}
+
+.imgEditRow {
+	margin-left: 2px;
+	margin-right: 2px;
+	color: rgb(64, 64, 64);
+}
+
+.imgDeleteRow {
+	margin-left: 2px;
+	margin-right: 2px;
+	color: rgb(64, 64, 64);
+}
+
+.imgEditRow:hover,
+.imgDeleteRow:hover {
+	border-radius: 3px;
+	-webkit-border-radius: 3px;
+	-moz-border-radius: 3px;
+	-ms-border-radius: 3px;
+	-o-border-radius: 3px;
+	width: 20px;
+	height: 20px;
+	margin-left: 0px;
+	margin-right: 0px;
+	transition-duration: 200ms;
+	color: blue;
+}
+
+.btnTable {
+	margin-left: 3px;
+	padding-top: 1px !important;
+	padding-bottom: 1px !important;
+	padding-left: 0.2rem !important;
+	padding-right: 0.2rem !important;
+}
+
+/* 
+input[type=range][orient=vertical] {
+	appearance: slider-vertical;
+	width: 8px;
+	height: 175px;
+	padding: 0 5px;
+} */
+
+.vranger {
+	margin-top: 50px;
+	transform: rotate(270deg);
+	-moz-transform: rotate(270deg);
+	/*do same for other browsers if required*/
+}
+
+.escalasLabel {
+	width: 28%;
+}
+
+.escalasRange {
+	width: 35%;
+}
