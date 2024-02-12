@@ -34,15 +34,22 @@ void Draw_Angulos();
 void Draw_Battery();
 void UI();
 boardButtons_t getButtons();
+void testFormat()
+{
+  float vals[] = { 1.0, 12.0, 123.0, 1234.0, 12345.0, 123456.0, 1234567.0, 12345678.0, 123456789.0 };
+  float divs[] = { 0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0 };
+  int32_t pos = 0, dec = 0;
 
-const uint8_t NOMINAL_INPUT_VOLTAGE = 220;
-const float NOMINAL_INPUT_CURRENT = 1;/* Current nominal RMS for Input in Amperes */
-const uint8_t INPUT_FREQUENCY = 50;/* Frequency in Hertz */
-const uint8_t CALIBRATION_ANGLE_DEGREES = 60;/* Used for funtion transform current in Ohm */
-const float BURDEN_RESISTOR = 11.24;/* Current nominal RMS for Input in Amperes */
-const uint16_t TURNS_RATIO_TRANSFORMER = 5000;/* Used for funtion transform current */
-const float ATTEUNATION_FACTOR = 1001;/* The defaul atteunation factor on board used funtion transform in Ohm/Ohm ((R1 + R2)/ R2) */
-const uint8_t ACCUMULATION_TIME = 5;/* Accumulation time in seconds when EGY_TIME=7999, accumulation mode= sample based */
+
+  for (dec = 0; dec < 10; dec++) {
+    Serial.printf("Paso: %d -> ", dec);
+    for (pos = 0; pos < 9; pos++) {
+      float x = vals[pos] * divs[dec];
+      Serial.printf("%-20s ", ade.format(x, 5, "V").c_str());
+    }
+    Serial.println("");
+  }
+}
 
 void initWiFi() {
   // Initialize WiFi
@@ -131,6 +138,8 @@ void setup(void)
   MeterInit();
 
   Serial.println("Set up finished");
+
+  testFormat();
 }
 
 
@@ -264,28 +273,40 @@ void UI()
 
 void Draw_Main()
 {
+  const uint32_t c1 = 0, c2 = 10, c3 = 50, c4 = 90;
+  const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
+
   static uint32_t update = 0;
   char str[128];
 
-  if (millis() - update > 199) {
+  if (millis() - update > 333) {
     update = millis();
     lcd.fillRect(0, 0, 128, 64, 0);
 
     Draw_Title("MAIN");
 
+
     lcd.setFont(c64enh);
     lcd.setFont(Small5x7PLBold);
-    snprintf(str, sizeof(str), "R: %03.2fV  %02.3fA %.1f", Meter.phaseR.Vrms, Meter.phaseR.Irms, Meter.phaseR.Watt);
-    lcd.printStr(1, 10, str);
+    lcd.printStr(c1, l1, "R");
+    lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 5, "V").c_str());
+    lcd.printStr(c3, l1, ade.format(Meter.phaseR.Irms, 5, "A").c_str());
+    lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt, 4, "W").c_str());
 
-    snprintf(str, sizeof(str), "S: %03.2fV  %02.3fA %.1f", Meter.phaseS.Vrms, Meter.phaseS.Irms, Meter.phaseS.Watt);
-    lcd.printStr(1, 19, str);
+    lcd.printStr(c1, l2, "S");
+    lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 5, "V").c_str());
+    lcd.printStr(c3, l2, ade.format(Meter.phaseS.Irms, 5, "A").c_str());
+    lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt, 4, "W").c_str());
 
-    snprintf(str, sizeof(str), "T: %03.2fV  %02.3fA %.1f", Meter.phaseT.Vrms, Meter.phaseT.Irms, Meter.phaseT.Watt);
-    lcd.printStr(1, 28, str);
+    lcd.printStr(c1, l3, "T");
+    lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 5, "V", 1).c_str());
+    lcd.printStr(c3, l3, ade.format(Meter.phaseT.Irms, 5, "A", 1).c_str());
+    lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt, 4, "W").c_str());
 
-    snprintf(str, sizeof(str), "N: %02.3fA", Meter.neutral.Irms);
-    lcd.printStr(1, 37, str);
+    lcd.printStr(c1, l4, "N");
+    lcd.printStr(c3, l4, ade.format(Meter.neutral.Irms, 5, "A", 1).c_str());
+
+    lcd.printStr(c4, l5, ade.format(Meter.power.Watt, 5, "W", 1).c_str());
 
 
     snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery_charging.getVBUS(), battery_charging.getVBAT(), battery_charging.getICHG(), battery_charging.getTemperature());
@@ -309,6 +330,9 @@ void Draw_Main()
 
 void Draw_Fase()
 {
+  const uint32_t c1 = 0, c2 = 50, c3 = 64, c4 = 90;
+  const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
+
   static int32_t fase = 0;
   if (millis() - update > 199) {
     update = millis();
@@ -329,20 +353,22 @@ void Draw_Fase()
     Draw_Title(vals.Name);
 
     lcd.setFont(Small5x7PLBold);
-    snprintf(str, sizeof(str), "%03.2fV  %02.3fA %2.2fHz", vals.Vrms, vals.Irms, vals.Freq);
-    lcd.printStr(1, 10, str);
+    lcd.printStr(c1, l1, ade.format(vals.Vrms, 6, "V").c_str());
+    lcd.printStr(c2, l1, ade.format(vals.Irms, 5, "A").c_str());
+    lcd.printStr(c4, l1, ade.format(vals.Freq, 5, "Hz").c_str());
 
-    snprintf(str, sizeof(str), "%03.1fW  %3.1fVar %3.1fVa", vals.Watt, vals.VAR, vals.VA);
-    lcd.printStr(1, 19, str);
+    lcd.printStr(c1, l2, ade.format(vals.Vthd, 4, "%", formatNoPrefix).c_str());
+    lcd.printStr(c2, l2, ade.format(vals.Ithd, 4, "%", formatNoPrefix).c_str());
+    lcd.printStr(c4, l2, "THD");
 
-    snprintf(str, sizeof(str), "%2.2fHz  %2.2fPF %3.1fg", vals.Freq, vals.PowerFactor, vals.AngleVI);
-    lcd.printStr(1, 28, str);
+    lcd.printStr(c1, l3, ade.format(vals.Watt, 6, "W").c_str());
+    lcd.printStr(c3, l3, ade.format(vals.PowerFactor, 5, "PF", formatNoPrefix).c_str());
 
-    snprintf(str, sizeof(str), "%2.2fHz  %3.1fg %2.1fPF", vals.Freq, vals.AngleVI, vals.PowerFactor);
-    lcd.printStr(1, 37, "Energia");
+    lcd.printStr(c1, l4, ade.format(vals.VAR, 6, "VAR").c_str());
+    lcd.printStr(c3, l4, ade.format(vals.AngleVI, 5, "°", formatNoPrefix).c_str());
 
-    lcd.printStr(1, 46, "THD");
-
+    lcd.printStr(c1, l5, ade.format(vals.VA, 6, "VA").c_str());
+    lcd.printStr(c3, l5, ade.format(vals.VA, 6, "Wh").c_str());
 
     snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery_charging.getVBUS(), battery_charging.getVBAT(), battery_charging.getICHG(), battery_charging.getTemperature());
     Serial.println(str);
@@ -500,7 +526,6 @@ boardButtons_t getButtons()
   else
     return buttonNone;
 }
-
 
 
 

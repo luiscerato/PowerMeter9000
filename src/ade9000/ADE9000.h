@@ -47,6 +47,10 @@ extern const float ATTEUNATION_FACTOR;
 /* Accumulation time in seconds when EGY_TIME=7999, accumulation mode= sample based */
 extern const uint8_t ACCUMULATION_TIME;
 
+#define formatNoPrefix		0x10000		//No cambia la escala del valor
+#define formatAddZeros		0x20000		//Agrega 0 de relleno a la izquierda
+#define formatRemoveSpaces	0x40000		//No agrega espacios para completar el ancho indicado
+
 /****************************************************************************************************************
  Definitions
 ****************************************************************************************************************/
@@ -397,6 +401,7 @@ public:
 	void initADE9000(bool initSPI = false);
 	void initADE9000(uint8_t clkPin, uint8_t misoPin, uint8_t mosiPin);
 
+	String format(float value, uint32_t width, const char* unit, uint32_t minDec = 0);
 	/*
 	Initializes the ADE9000. The initial settings for registers are defined in ADE9000API.h header file
 	Input: Register settings in header files

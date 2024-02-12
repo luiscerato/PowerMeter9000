@@ -10,6 +10,48 @@
 
 // SPIClass port(VSPI);
 
+/*
+    Formatea un numero para que según el ancho pueda contener la mayor cantidad de decimales posibles
+    A su vez, verifica si puede cambiar la unidad de medición
+    Width: mínimo 3: x.x
+
+*/
+String ADE9000::format(float value, uint32_t width, const char* unit, uint32_t format)
+{
+    float val = abs(value);
+    if (width < 3) width = 3;
+    uint32_t dec = width - 2;
+    float div = 1.0;
+    char prefix = 0;
+    char str[32] = {};
+
+    if (!(format & formatNoPrefix)) {
+        if (val > 1000000) { div = 1000000;  prefix = 'M'; }  //Mega
+        else if (val > 1000) { div = 1000;   prefix = 'k'; }   //Kilo
+        else if (val < 1) { div = 0.001; prefix = 'm'; }     //Mili
+    }
+    val = abs(value / div);
+
+    while (val >= 10) {
+        val /= 10;
+        dec--;
+        if (dec == 0) break;
+    }
+
+    if (dec < (format & 0x7)) dec = (format & 0x7);
+    if (format & formatRemoveSpaces) width = 1;
+    
+    if (prefix) {
+        width -= 1;
+        if (dec) dec--;
+        snprintf(str, sizeof(str), "%*.*f%c%s", width, dec, value / div, prefix, unit);
+    }
+    else
+        snprintf(str, sizeof(str), "%*.*f%s", width, dec, value / div, unit);
+
+    return String(str);
+}
+
 ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin)
 {
     this->_SPI_speed = SPI_speed;
@@ -57,6 +99,9 @@ void ADE9000::setupADE9000(void)
     SPI_Write_32(ADDR_DICOEFF, ADE9000_DICOEFF);
     SPI_Write_16(ADDR_EGY_TIME, ADE9000_EGY_TIME);
     SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
+    SPI_Write_32(ADDR_APHCAL0, 0xFADEDF5A);
+    SPI_Write_32(ADDR_BPHCAL0, 0xFADEDF5A);
+    SPI_Write_32(ADDR_CPHCAL0, 0xFADEDF5A);
     SPI_Write_16(ADDR_RUN, ADE9000_RUN_ON);    //DSP ON
 }
 
@@ -279,14 +324,18 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_IA));
     Data->AngleReg_VA_IA = tempReg;
     tempValue = tempReg * mulConstant;
+    if (tempValue > 180) tempValue = tempValue - 360;
     Data->AngleValue_VA_IA = constrain(tempValue, 0, 360);
+
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_IB));
     Data->AngleReg_VB_IB = tempReg;
     tempValue = tempReg * mulConstant;
+    if (tempValue > 180) tempValue = tempValue - 360;
     Data->AngleValue_VB_IB = constrain(tempValue, 0, 360);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VC_IC));
     Data->AngleReg_VC_IC = tempReg;
     tempValue = tempReg * mulConstant;
+    if (tempValue > 180) tempValue = tempValue - 360;
     Data->AngleValue_VC_IC = constrain(tempValue, 0, 360);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IB));
     Data->AngleReg_IA_IB = tempReg;
@@ -386,6 +435,7 @@ uint32_t ADE9000::ReadFundCurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / ONE_MILLION;
     Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / ONE_MILLION;
     Data->CurrentRMS_N = 0;
+    return micros() - time;
 }
 
 uint32_t ADE9000::ReadHalfVoltageRMSRegs(VoltageRMSRegs* Data)

@@ -6,6 +6,8 @@ struct phaseValues
 	char Name[8];		//Nombre de fase
 	float Vrms;			//Voltaje RMS
 	float Irms;			//Corriente RMS
+	float FastVrms;		//Voltaje RMS rápida
+	float FastIrms;		//Corriente RMS rápida
 	float Watt;			//Potencia Activa
 	float VAR;			//Potencia Reactiva
 	float VA;			//Potencia Aparente
@@ -41,7 +43,7 @@ struct meterValues
 		float VA;
 	} power;
 
-	meterValues() : phaseR("Fase R"), phaseS("Fase S"), phaseT("Fase T"), neutral("Neutro") {
+	meterValues() : phaseR("FASE R"), phaseS("FASE S"), phaseT("FASE T"), neutral("NEUTRO") {
 		power.Watt = power.VAR = power.VA = 0;
 	};
 };
