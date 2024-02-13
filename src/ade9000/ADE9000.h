@@ -66,20 +66,27 @@ extern const uint8_t ACCUMULATION_TIME;
 #define ADE9000_ACCMODE 0x0000        /* 50Hz operation, 3P4W Wye configuration, signed accumulation Clear bit 8 i.e. ACCMODE=0x00xx for 50Hz operation ACCMODE=0x0x9x for 3Wire delta when phase B is used as reference */
 #define ADE9000_TEMP_CFG 0x000C       /* Temperature sensor enabled */
 #define ADE9000_ZX_LP_SEL 0x001E      /* Line period and zero crossing obtained from combined signals VA,VB and VC */
-#define ADE9000_MASK0 0x00000001      /* Enable EGYRDY interrupt */
+#define ADE9000_MASK0 0x00000001      /* Enable EGYRDY interrupt */ 
 #define ADE9000_MASK1 0x00000000      /* MASK1 interrupts disabled*/
 #define ADE9000_EVENT_MASK 0x00000000 /* Events disabled */
 #define ADE9000_VLEVEL 0x0022EA28     /* Assuming Vnom=1/2 of full scale. Refer Technical reference manual for detailed calculations.*/
 #define ADE9000_DICOEFF 0x00000000    /* Set DICOEFF= 0xFFFFE000 when integrator is enabled */
+#define ADE9000_CFMODE	0x00000007	  /* Setup CF1 pin function. CF1: Total active power */
+#define ADE9000_COMPMODE 0x00000007	  /* Phases to include in CF1 pulse output: ABC*/
 
 /*Constant Definitions***/
 #define ADE9000_FDSP 8000     /* Signal update Rate ADE9000 FDSP: 8000sps */
 #define ADE9000_RUN_ON 0x0001 /* DSP ON */
 
 /*Energy Accumulation Settings*/
-#define ADE9000_EP_CFG 0x0011   /* Enable energy accumulation, accumulate samples at 8ksps */
+//#define ADE9000_EP_CFG 0x0011   /* Enable energy accumulation, accumulate samples at 8ksps */
 								/* latch energy accumulation after EGYRDY */
 								/* If accumulation is changed to half line cycle mode, change EGY_TIME */
+
+#define ADE9000_EP_CFG 0x0021   /* Enable energy accumulation, accumulate samples at 8ksps */
+								/* add energy accumulation after EGYRDY */
+								/* reset registers after reading */
+
 #define ADE9000_EGY_TIME 0x1F3F /* Accumulate 8000 samples */
 
 /*Waveform buffer Settings*/
@@ -107,6 +114,17 @@ enum CAL_STATE
 	CAL_RESTART,
 	CAL_COMPLETE
 };
+
+typedef enum {
+	adeChannel_IA = 0,
+	adeChannel_IB = 1,
+	adeChannel_IC = 2,
+	adeChannel_IN = 3,
+	adeChannel_VA = 4,
+	adeChannel_VB = 5,
+	adeChannel_VC = 6,
+	adeChannel_Default = 7,
+} adeChannel;
 
 /*Transfer function*/
 /****************************************************************************************************************
@@ -382,6 +400,29 @@ struct TemperatureRegnValue
 	float Temperature;
 };
 
+struct EnergyPhaseVals
+{
+	double Watt_H;
+	double VAR_H;
+	double VA_H;
+
+	EnergyPhaseVals() {
+		Watt_H = VAR_H = VA_H = 0.0;
+	};
+};
+
+struct TotalEnergyVals
+{
+	struct EnergyPhaseVals PhaseR;
+	struct EnergyPhaseVals PhaseS;
+	struct EnergyPhaseVals PhaseT;
+};
+
+typedef struct {
+	float angle;
+	int32_t factor;
+} calibratePhaseResult;
+
 
 class ADE9000
 {
@@ -453,7 +494,15 @@ public:
 	Output: 32 bit data
 	*/
 	uint32_t SPI_Read_32(uint16_t Address);
-	// void SPI_Burst_Read_Resampled_Wfb(uint16_t Address, uint16_t Read_Element_Length, ResampledWfbData *ResampledData);
+
+
+	/*
+	Description: Burst reads the content of waveform buffer. This function only works with resampled data. Configure waveform buffer to have Resampled data, and burst enabled (BURST_CHAN=0000 in WFB_CFG Register).
+	Input: The starting address. Use the starting address of a data set. e.g 0x800, 0x804 etc to avoid data going into incorrect arrays.
+		   Read_Element_Length is the number of data sets to read. If the starting address is 0x800, the maximum sets to read are 512.
+	Output: Resampled data returned in structure
+	*/
+	void SPI_Burst_Read_Resampled_Wfb(uint16_t Address, uint16_t Read_Element_Length, ResampledWfbData* ResampledData);
 
 	/*----- ADE9000 Calculated Parameter Read Functions -----*/
 
@@ -562,6 +611,15 @@ public:
 	*/
 	double convertCodeToEnergy(int32_t value);
 
+	/*----- ADE9000 Configuration functions -----*/
+
+	/*
+		Redirect ADC channel datapath
+		Source: channel to redirect
+		Destination: channel to change default adc origin
+	*/
+	void ADC_Redirect(adeChannel source, adeChannel destination);
+
 	/*----- ADE9000 Calibration functions -----*/
 
 	/*
@@ -592,6 +650,8 @@ public:
 	*/
 	void phase_calibrate(int32_t*, int32_t*, int32_t*, int);
 
+	calibratePhaseResult phaseCalibrate(char phase);
+
 	/*
 	Power gain calibration function
 	Input: Stored in respective structure
@@ -606,9 +666,18 @@ public:
 	*/
 	void updateEnergyRegisterFromInterrupt(int32_t*, int32_t*, int32_t*);
 
+
+	/*
+	Update energy register by interrupt
+	Input: Array size 3 to save each channels (A, B, C), the register for active, reactive and apparence energy
+	Output:-
+	*/
+	bool updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fundEnergy = nullptr);
+
 private:
 	uint32_t _SPI_speed;
 	uint8_t _chipSelect_Pin;
+	uint32_t ADC_REDIRECT = 0x001FFFFF;
 
 	SPIClass port;
 };

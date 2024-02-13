@@ -31,6 +31,7 @@ void Draw_Main();
 void Draw_Title(const char* Title);
 void Draw_Fase();
 void Draw_Angulos();
+void Draw_CalibrarFase();
 void Draw_Battery();
 void UI();
 boardButtons_t getButtons();
@@ -209,7 +210,7 @@ void loop(void)
     uint32_t tbatt = micros();
     battery_charging.properties();
     tbatt = micros() - tbatt;
-    Serial.printf("Tiempo de lectura de BQ25895: %u us\n\n", tbatt);
+    //Serial.printf("Tiempo de lectura de BQ25895: %u us\n\n", tbatt);
 
     // Serial.println("Battery Management System Parameter : \n===============================================================");
     // Serial.print("VBUS : "); Serial.println(battery_charging.getVBUS());
@@ -268,6 +269,8 @@ void UI()
     Draw_Fase();
   else if (indexUI == 2)
     Draw_Angulos();
+  else if (indexUI == 3)
+    Draw_CalibrarFase();
 }
 
 
@@ -306,11 +309,12 @@ void Draw_Main()
     lcd.printStr(c1, l4, "N");
     lcd.printStr(c3, l4, ade.format(Meter.neutral.Irms, 5, "A", 1).c_str());
 
+    lcd.printStr(c1, l5, ade.format(Meter.energy.Watt_H, 5, "Wh", 1).c_str());
     lcd.printStr(c4, l5, ade.format(Meter.power.Watt, 5, "W", 1).c_str());
 
 
     snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery_charging.getVBUS(), battery_charging.getVBAT(), battery_charging.getICHG(), battery_charging.getTemperature());
-    Serial.println(str);
+    //Serial.println(str);
     lcd.setFont(Small4x5PL);
     lcd.drawLineHfast(0, 127, 57, 1);
     lcd.printStr(0, 59, str);
@@ -324,6 +328,8 @@ void Draw_Main()
     indexUI = 1;
   else if (key == Keys::Next)
     indexUI = 2;
+  else if (key == Keys::Esc)
+    indexUI = 3;
   // else if (Keyboard.getNextKey() == Keys::Up)
   //   indexUI = 3;
 }
@@ -361,17 +367,17 @@ void Draw_Fase()
     lcd.printStr(c2, l2, ade.format(vals.Ithd, 4, "%", formatNoPrefix).c_str());
     lcd.printStr(c4, l2, "THD");
 
-    lcd.printStr(c1, l3, ade.format(vals.Watt, 6, "W").c_str());
+    lcd.printStr(c1, l3, ade.format(vals.Watt, 5, "W").c_str());
     lcd.printStr(c3, l3, ade.format(vals.PowerFactor, 5, "PF", formatNoPrefix).c_str());
 
-    lcd.printStr(c1, l4, ade.format(vals.VAR, 6, "VAR").c_str());
+    lcd.printStr(c1, l4, ade.format(vals.VAR, 5, "VAR").c_str());
     lcd.printStr(c3, l4, ade.format(vals.AngleVI, 5, "°", formatNoPrefix).c_str());
 
-    lcd.printStr(c1, l5, ade.format(vals.VA, 6, "VA").c_str());
-    lcd.printStr(c3, l5, ade.format(vals.VA, 6, "Wh").c_str());
+    lcd.printStr(c1, l5, ade.format(vals.VA, 5, "VA").c_str());
+    lcd.printStr(c3, l5, ade.format(vals.Watt_H, 5, "Wh").c_str());
 
     snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery_charging.getVBUS(), battery_charging.getVBAT(), battery_charging.getICHG(), battery_charging.getTemperature());
-    Serial.println(str);
+    //Serial.println(str);
     lcd.setFont(Small4x5PL);
     lcd.drawLineHfast(0, 127, 57, 1);
     lcd.printStr(0, 59, str);
@@ -429,7 +435,7 @@ void Draw_Angulos()
 
 
     snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery_charging.getVBUS(), battery_charging.getVBAT(), battery_charging.getICHG(), battery_charging.getTemperature());
-    Serial.println(str);
+    //Serial.println(str);
     lcd.setFont(Small4x5PL);
     lcd.drawLineHfast(0, 127, 57, 1);
     lcd.printStr(0, 59, str);
@@ -438,6 +444,61 @@ void Draw_Angulos()
   }
   if (Keyboard.getNextKey() == Keys::Esc)
     indexUI = 0;
+}
+
+
+void Draw_CalibrarFase()
+{
+  const uint32_t c1 = 0, c2 = 10, c3 = 55, c4 = 100;
+  const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
+  static  calibratePhaseResult r, s, t, n;
+
+  if (millis() - update > 999) {
+    update = millis();
+
+    r = ade.phaseCalibrate('R');
+    s = ade.phaseCalibrate('S');
+    t = ade.phaseCalibrate('T');
+    n.angle = (r.angle + s.angle + t.angle) / 3;
+    n.factor = ((int64_t)r.factor + (int64_t)s.factor + (int64_t)t.factor) / 3LL;
+
+    char str[128];
+    lcd.fillRect(0, 0, 128, 64, 0);
+
+    lcd.fillRect(0, 0, 128, 64, 0);
+    Draw_Title("CAL. FASE");
+
+    lcd.setFont(Small5x7PLBold);
+
+    lcd.printStr(c1, l1, "R");
+    lcd.printStr(c2, l1, ade.format(Meter.phaseR.Watt, 6, "W").c_str());
+    lcd.printStr(c3, l1, ade.format(Meter.phaseR.VAR, 4, "VAR").c_str());
+    lcd.printStr(c4, l1, ade.format(r.angle, 5, "°", formatNoPrefix).c_str());
+
+    lcd.printStr(c1, l2, "S");
+    lcd.printStr(c2, l2, ade.format(Meter.phaseS.Watt, 6, "W").c_str());
+    lcd.printStr(c3, l2, ade.format(Meter.phaseS.VAR, 4, "VAR").c_str());
+    lcd.printStr(c4, l2, ade.format(s.angle, 5, "°", formatNoPrefix).c_str());
+
+    lcd.printStr(c1, l3, "T");
+    lcd.printStr(c2, l3, ade.format(Meter.phaseT.Watt, 6, "W").c_str());
+    lcd.printStr(c3, l3, ade.format(Meter.phaseT.VAR, 4, "VAR").c_str());
+    lcd.printStr(c4, l3, ade.format(t.angle, 5, "°", formatNoPrefix).c_str());
+
+    lcd.printStr(c1, l4, "N");
+    lcd.printStr(c4, l4, ade.format(n.angle, 5, "°", formatNoPrefix).c_str());
+
+    lcd.display(0);
+  }
+
+  Keys key = Keyboard.getNextKey();
+
+  if (key == Keys::Esc)
+    indexUI = 0;
+  else if (key == Keys::Enter) {
+    Serial.printf("Calibracion de fases: R:%.2f [0x%X], S:%.2f [0x%X], T:%.2f [0x%X], N:%.2f [0x%X]\n", r.angle, r.factor, s.angle, s.factor, t.angle, t.factor, n.angle, n.factor);
+    indexUI = 0;
+  }
 }
 
 void Draw_Title(const char* Title)

@@ -40,7 +40,7 @@ String ADE9000::format(float value, uint32_t width, const char* unit, uint32_t f
 
     if (dec < (format & 0x7)) dec = (format & 0x7);
     if (format & formatRemoveSpaces) width = 1;
-    
+
     if (prefix) {
         width -= 1;
         if (dec) dec--;
@@ -84,6 +84,7 @@ void ADE9000::initADE9000(uint8_t clkPin, uint8_t misoPin, uint8_t mosiPin)
 void ADE9000::setupADE9000(void)
 {
     SPI_Write_16(ADDR_PGA_GAIN, ADE9000_PGA_GAIN1);
+    SPI_Write_32(ADDR_ADC_REDIRECT, ADC_REDIRECT);      //Load adc redirect configuration. Call ADC_redirect before thi function to change channels.
     SPI_Write_32(ADDR_CONFIG0, ADE9000_CONFIG0);
     SPI_Write_16(ADDR_CONFIG1, ADE9000_CONFIG1);
     SPI_Write_16(ADDR_CONFIG2, ADE9000_CONFIG2);
@@ -99,9 +100,12 @@ void ADE9000::setupADE9000(void)
     SPI_Write_32(ADDR_DICOEFF, ADE9000_DICOEFF);
     SPI_Write_16(ADDR_EGY_TIME, ADE9000_EGY_TIME);
     SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
-    SPI_Write_32(ADDR_APHCAL0, 0xFADEDF5A);
-    SPI_Write_32(ADDR_BPHCAL0, 0xFADEDF5A);
-    SPI_Write_32(ADDR_CPHCAL0, 0xFADEDF5A);
+    SPI_Write_32(ADDR_APHCAL0, 0xFBFC9813);
+    SPI_Write_32(ADDR_BPHCAL0, 0xFC1BC118);
+    SPI_Write_32(ADDR_CPHCAL0, 0xFBDE7F6F);
+    SPI_Write_32(ADDR_NPHCAL, 0xFBFCF2DE);
+    SPI_Write_32(ADDR_CFMODE, ADE9000_CFMODE);
+    SPI_Write_32(ADDR_COMPMODE, ADE9000_COMPMODE);
     SPI_Write_16(ADDR_RUN, ADE9000_RUN_ON);    //DSP ON
 }
 
@@ -117,13 +121,11 @@ void ADE9000::resetADE9000(uint8_t ADE9000_RESET_PIN)
 void ADE9000::SPI_Init()
 {
     port.begin();                                                       //Initiate SPI port
-    // port.beginTransaction(SPISettings(_SPI_speed, MSBFIRST, SPI_MODE0)); //Setup SPI parameters
 }
 
 void ADE9000::SPI_Init(uint8_t clkPin, uint8_t misoPin, uint8_t mosiPin)
 {
     port.begin(clkPin, misoPin, mosiPin);                                            //Initiate SPI port
-    // port.beginTransaction(SPISettings(_SPI_speed, MSBFIRST, SPI_MODE0)); //Setup SPI parameters
 }
 
 void ADE9000::SPI_Write_16(uint16_t Address, uint16_t Data)
@@ -186,6 +188,29 @@ uint32_t ADE9000::SPI_Read_32(uint16_t Address)
     digitalWrite(_chipSelect_Pin, HIGH);
     port.endTransaction();
     return returnData;
+}
+
+
+void ADE9000::SPI_Burst_Read_Resampled_Wfb(uint16_t Address, uint16_t Read_Element_Length, ResampledWfbData* ResampledData)
+{
+    uint16_t temp;
+    uint16_t i;
+    digitalWrite(_chipSelect_Pin, LOW);
+
+    SPI.transfer16(((Address << 4) & 0xFFF0) + 8);  //Send the starting address
+
+    //burst read the data upto Read_Length 
+    for (i = 0;i < Read_Element_Length;i++)
+    {
+        ResampledData->IA_Resampled[i] = SPI.transfer16(0);
+        ResampledData->VA_Resampled[i] = SPI.transfer16(0);
+        ResampledData->IB_Resampled[i] = SPI.transfer16(0);
+        ResampledData->VB_Resampled[i] = SPI.transfer16(0);
+        ResampledData->IC_Resampled[i] = SPI.transfer16(0);
+        ResampledData->VC_Resampled[i] = SPI.transfer16(0);
+        ResampledData->IN_Resampled[i] = SPI.transfer16(0);
+    }
+    digitalWrite(_chipSelect_Pin, HIGH);
 }
 
 uint32_t ADE9000::readActivePowerRegs(ActivePowerRegs* Data)
@@ -561,6 +586,18 @@ double ADE9000::convertCodeToEnergy(int32_t value)
     return result;
 }
 
+
+void ADE9000::ADC_Redirect(adeChannel source, adeChannel destination)
+{
+    if (destination >= adeChannel_Default) return;
+
+    uint32_t mask = ~(adeChannel_Default << (destination * 3));
+    ADC_REDIRECT &= mask;
+    ADC_REDIRECT |= source << (destination * 3);
+
+    Serial.printf("ADC_Redirect: origin: 0x%x, destination: 0x%x. Result: 0x%x\n", source, destination, ADC_REDIRECT);
+}
+
 void ADE9000::getPGA_gain(PGAGainRegs* Data)
 {
     int16_t pgaGainRegister;
@@ -698,6 +735,36 @@ void ADE9000::phase_calibrate(int32_t* phcalReg, int32_t* accActiveEgyReg, int32
     }
 }
 
+calibratePhaseResult ADE9000::phaseCalibrate(char phase)
+{
+    const double omega = (float)2 * (float)3.14159 * (float)INPUT_FREQUENCY / (float)ADE9000_FDSP;
+    calibratePhaseResult res = {0.0, 0};
+    int32_t watt, var;
+
+    if (phase == 'R' || phase == 'A') {
+        watt = SPI_Read_32(ADDR_AWATT);
+        var = SPI_Read_32(ADDR_AVAR);
+    }
+    else if (phase == 'S' || phase == 'B') {
+        watt = SPI_Read_32(ADDR_BWATT);
+        var = SPI_Read_32(ADDR_BVAR);
+    }
+    else if (phase == 'T' || phase == 'C') {
+        watt = SPI_Read_32(ADDR_CWATT);
+        var = SPI_Read_32(ADDR_CVAR);
+    }
+    else
+        return res;
+
+    double angle = degrees(atan((double)var / (double)watt));   //Calcular angulo actual
+    int32_t factor = ((sin(radians(angle) - omega) + sin(omega)) / (sin(2 * omega - radians(angle)))) * 134217728; //2^27
+
+    // Serial.printf("Calibracion de fase R: angulo actual: %.5f [w:%d, var:%d] => APHCAL0=0x%X\n", angle, watt, var, factor);
+    res.angle = angle;
+    res.factor = factor;
+    return res;
+}
+
 void ADE9000::pGain_calibrate(int32_t* pgainReg, int32_t* accActiveEgyReg, int arraySize, uint8_t currentPGA_gain, uint8_t voltagePGA_gain, float pGaincalPF)
 {
     Serial.println("Computing power gain calibration registers...");
@@ -772,3 +839,43 @@ void ADE9000::updateEnergyRegisterFromInterrupt(int32_t* accumulatedActiveEnergy
         return;
     }
 }
+
+bool ADE9000::updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fundEnergy)
+{
+    uint32_t temp;
+    if (energy == nullptr) return false;
+
+    temp = SPI_Read_32(ADDR_STATUS0);
+    temp &= EGY_INTERRUPT_MASK0;
+    if (temp == EGY_INTERRUPT_MASK0) {
+        SPI_Write_32(ADDR_STATUS0, 0xFFFFFFFF);
+        energy->PhaseR.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AWATTHR_HI)) / ONE_MILLION;
+        energy->PhaseS.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BWATTHR_HI)) / ONE_MILLION;
+        energy->PhaseT.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CWATTHR_HI)) / ONE_MILLION;
+
+        energy->PhaseR.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AVARHR_HI)) / ONE_MILLION;
+        energy->PhaseS.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BVARHR_HI)) / ONE_MILLION;
+        energy->PhaseT.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CVARHR_HI)) / ONE_MILLION;
+
+        energy->PhaseR.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AVAHR_HI)) / ONE_MILLION;
+        energy->PhaseS.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BVAHR_HI)) / ONE_MILLION;
+        energy->PhaseT.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CVAHR_HI)) / ONE_MILLION;
+
+        if (fundEnergy != nullptr) {    //Actualizar contadores de energía fundamental si se puede
+            fundEnergy->PhaseR.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AFWATTHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseS.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BFWATTHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseT.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CFWATTHR_HI)) / ONE_MILLION;
+
+            fundEnergy->PhaseR.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AFVARHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseS.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BFVARHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseT.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CFVARHR_HI)) / ONE_MILLION;
+
+            fundEnergy->PhaseR.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AFVAHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseS.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BFVAHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseT.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CFVAHR_HI)) / ONE_MILLION;
+        }
+        return true;    //exit function
+    }
+    return false;
+}
+

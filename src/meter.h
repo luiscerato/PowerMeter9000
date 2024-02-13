@@ -42,6 +42,12 @@ struct meterValues
 		float VAR;
 		float VA;
 	} power;
+	
+	struct {
+		double Watt_H;
+		double VAR_H;
+		double VA_H;
+	} energy;
 
 	meterValues() : phaseR("FASE R"), phaseS("FASE S"), phaseT("FASE T"), neutral("NEUTRO") {
 		power.Watt = power.VAR = power.VA = 0;

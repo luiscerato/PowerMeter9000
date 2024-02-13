@@ -16,19 +16,25 @@ const uint8_t ACCUMULATION_TIME = 5;/* Accumulation time in seconds when EGY_TIM
 
 
 meterValues Meter;
+struct TotalEnergyVals MeterEnergy;
 
 void MeterInit()
 {
 	Serial.println("Iniciando ADE9000!");
 	ade.initADE9000(pinAdeClk, pinAdeSdi, pinAdeSdo);
+	ade.ADC_Redirect(adeChannel_IA, adeChannel_IC);	//Cruzar los canales A con C
+	ade.ADC_Redirect(adeChannel_IC, adeChannel_IA);
+	ade.ADC_Redirect(adeChannel_VA, adeChannel_VC);
+	ade.ADC_Redirect(adeChannel_VC, adeChannel_VA);
 	ade.setupADE9000();              // Initialize ADE9000 registers according to values in ADE9000API.h
+
+	pinMode(pinAdeInt0, INPUT_PULLUP);
+	pinMode(pinAdeInt1, INPUT_PULLUP);
 }
 
 void MeterLoop()
 {
-	static uint32_t rms = 0, avg = 0, power = 0, thd = 0, angles = 0, energy = 0;
-
-
+	static uint32_t rms = 0, avg = 0, power = 0, thd = 0, angles = 0, energy_time = 0;
 
 	if (millis() - rms > 39) {	//Actualizar lecturas rms rápidas 
 		rms = millis();
@@ -66,12 +72,11 @@ void MeterLoop()
 	if (millis() - power > 499) {
 		power = millis();
 
-		ActivePowerRegs watt; ReactivePowerRegs var; ApparentPowerRegs va; PowerFactorRegs pf;
+		ActivePowerRegs watt; ReactivePowerRegs var; ApparentPowerRegs va;
 
 		ade.readActivePowerRegs(&watt);
 		ade.readReactivePowerRegs(&var);
 		ade.readApparentPowerRegs(&va);
-		ade.readPowerFactorRegsnValues(&pf);
 
 		Meter.phaseR.Watt = watt.ActivePower_A;
 		Meter.phaseS.Watt = watt.ActivePower_B;
@@ -88,31 +93,27 @@ void MeterLoop()
 		Meter.phaseT.VA = va.ApparentPower_C;
 		Meter.neutral.VA = 0;
 
-		Meter.phaseR.PowerFactor = pf.PowerFactorValue_A;
-		Meter.phaseS.PowerFactor = pf.PowerFactorValue_B;
-		Meter.phaseT.PowerFactor = pf.PowerFactorValue_C;
-		Meter.neutral.PowerFactor = 0;
-
 		Meter.power.Watt = Meter.phaseR.Watt + Meter.phaseS.Watt + Meter.phaseT.Watt;
 		Meter.power.VAR = Meter.phaseR.VAR + Meter.phaseS.VAR + Meter.phaseT.VAR;
 		Meter.power.VA = Meter.phaseR.VA + Meter.phaseS.VA + Meter.phaseT.VA;
 
-		Serial.printf("Fase R: %10.3fW, %10.3fVA, %10.3fVAR. Raw: %10d, %10d, %10d. Conversion: %10.6f\n", watt.ActivePower_A, var.ReactivePower_A, va.ApparentPower_A,
-			watt.ActivePowerReg_A, var.ReactivePowerReg_A, va.ApparentPowerReg_A, CAL_POWER_CC);
+		// Serial.printf("Fase R: %10.3fW, %10.3fVA, %10.3fVAR. Raw: %10d, %10d, %10d. Conversion: %10.6f\n", watt.ActivePower_A, var.ReactivePower_A, va.ApparentPower_A,
+		// 	watt.ActivePowerReg_A, var.ReactivePowerReg_A, va.ApparentPowerReg_A, CAL_POWER_CC);
 
-		Serial.printf("Fase S: %10.3fW, %10.3fVA, %10.3fVAR. Raw: %10d, %10d, %10d. Conversion: %10.6f\n", watt.ActivePower_B, var.ReactivePower_B, va.ApparentPower_B,
-			watt.ActivePowerReg_B, var.ReactivePowerReg_B, va.ApparentPowerReg_B, CAL_POWER_CC);
+		// Serial.printf("Fase S: %10.3fW, %10.3fVA, %10.3fVAR. Raw: %10d, %10d, %10d. Conversion: %10.6f\n", watt.ActivePower_B, var.ReactivePower_B, va.ApparentPower_B,
+		// 	watt.ActivePowerReg_B, var.ReactivePowerReg_B, va.ApparentPowerReg_B, CAL_POWER_CC);
 
-		Serial.printf("Fase T: %10.3fW, %10.3fVA, %10.3fVAR. Raw: %10d, %10d, %10d. Conversion: %10.6f\n", watt.ActivePower_C, var.ReactivePower_C, va.ApparentPower_C,
-			watt.ActivePowerReg_C, var.ReactivePowerReg_C, va.ApparentPowerReg_C, CAL_POWER_CC);
+		// Serial.printf("Fase T: %10.3fW, %10.3fVA, %10.3fVAR. Raw: %10d, %10d, %10d. Conversion: %10.6f\n", watt.ActivePower_C, var.ReactivePower_C, va.ApparentPower_C,
+		// 	watt.ActivePowerReg_C, var.ReactivePowerReg_C, va.ApparentPowerReg_C, CAL_POWER_CC);
 	}
 
 	if (millis() - thd > 1023) {
 		thd = millis();
-		CurrentTHDRegs curr; VoltageTHDRegs volt;
+		CurrentTHDRegs curr; VoltageTHDRegs volt; PowerFactorRegs pf;
 
 		ade.ReadVoltageTHDRegsnValues(&volt);
 		ade.ReadCurrentTHDRegsnValues(&curr);
+		ade.readPowerFactorRegsnValues(&pf);
 
 		Meter.phaseR.Ithd = curr.CurrentTHDValue_A;
 		Meter.phaseS.Ithd = curr.CurrentTHDValue_B;
@@ -120,9 +121,14 @@ void MeterLoop()
 		Meter.neutral.Ithd = 0;
 
 		Meter.phaseR.Vthd = volt.VoltageTHDValue_A;
-		Meter.phaseS.Vthd = volt.VoltageTHDValue_A;
-		Meter.phaseT.Vthd = volt.VoltageTHDValue_A;
+		Meter.phaseS.Vthd = volt.VoltageTHDValue_B;
+		Meter.phaseT.Vthd = volt.VoltageTHDValue_C;
 		Meter.neutral.Vthd = 0;
+
+		Meter.phaseR.PowerFactor = pf.PowerFactorValue_A;
+		Meter.phaseS.PowerFactor = pf.PowerFactorValue_B;
+		Meter.phaseT.PowerFactor = pf.PowerFactorValue_C;
+		Meter.neutral.PowerFactor = 0;
 	}
 
 	if (millis() - angles > 499) {
@@ -141,9 +147,33 @@ void MeterLoop()
 		Meter.phaseT.AngleVI = ang.AngleValue_VC_IC;
 	}
 
-	if (millis() - energy > 499) {
-		energy = millis();
+	if (digitalRead(pinAdeInt0) == 0) {	//Interrupcion por datos de energía?
+		uint32_t time = micros();
+		bool res = ade.updateEnergyRegister(&MeterEnergy);
+		time = micros() - time;
 
+		if (res) {
+			// Serial.printf("Actualizacion de energía (%d us)! R:%.2f Wh, S:%.2f VARh, T:%.2fVAh\n", time, (float)MeterEnergy.PhaseR.Watt_H, (float)MeterEnergy.PhaseS.Watt_H, (float)MeterEnergy.PhaseT.Watt_H);
 
+			Meter.phaseR.Watt_H = MeterEnergy.PhaseR.Watt_H;
+			Meter.phaseS.Watt_H = MeterEnergy.PhaseS.Watt_H;
+			Meter.phaseT.Watt_H = MeterEnergy.PhaseT.Watt_H;
+
+			Meter.phaseR.VAR_H = MeterEnergy.PhaseR.VAR_H;
+			Meter.phaseS.VAR_H = MeterEnergy.PhaseS.VAR_H;
+			Meter.phaseT.VAR_H = MeterEnergy.PhaseT.VAR_H;
+
+			Meter.phaseR.VA_H = MeterEnergy.PhaseR.VA_H;
+			Meter.phaseS.VA_H = MeterEnergy.PhaseS.VA_H;
+			Meter.phaseT.VA_H = MeterEnergy.PhaseT.VA_H;
+
+			Meter.energy.Watt_H = MeterEnergy.PhaseR.Watt_H + MeterEnergy.PhaseS.Watt_H + MeterEnergy.PhaseT.Watt_H;
+			Meter.energy.VAR_H = MeterEnergy.PhaseR.VAR_H + MeterEnergy.PhaseS.VAR_H + MeterEnergy.PhaseT.VAR_H;
+			Meter.energy.VA_H = MeterEnergy.PhaseR.VA_H + MeterEnergy.PhaseS.VA_H + MeterEnergy.PhaseT.VA_H;
+		}
+	}
+
+	if (millis() - energy_time > 499) {
+		energy_time = millis();
 	}
 }
