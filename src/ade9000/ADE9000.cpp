@@ -7,6 +7,9 @@
 ***************************************************************************************************************/
 
 #include "ADE9000.h"
+#include "Preferences.h"
+
+
 
 // SPIClass port(VSPI);
 
@@ -56,6 +59,9 @@ ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin)
 {
     this->_SPI_speed = SPI_speed;
     this->_chipSelect_Pin = chipSelect_Pin;
+    this->ADC_REDIRECT = 0x001FFFFF;
+    this->calibrationStep = calNone;
+    calA = calB = calC = calN = false;
 }
 
 ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin, uint8_t SPIport)
@@ -83,6 +89,8 @@ void ADE9000::initADE9000(uint8_t clkPin, uint8_t misoPin, uint8_t mosiPin)
 
 void ADE9000::setupADE9000(void)
 {
+    preferences.begin("ADE9000", false);
+
     SPI_Write_16(ADDR_PGA_GAIN, ADE9000_PGA_GAIN1);
     SPI_Write_32(ADDR_ADC_REDIRECT, ADC_REDIRECT);      //Load adc redirect configuration. Call ADC_redirect before thi function to change channels.
     SPI_Write_32(ADDR_CONFIG0, ADE9000_CONFIG0);
@@ -104,9 +112,22 @@ void ADE9000::setupADE9000(void)
     SPI_Write_32(ADDR_BPHCAL0, 0xFC1BC118);
     SPI_Write_32(ADDR_CPHCAL0, 0xFBDE7F6F);
     SPI_Write_32(ADDR_NPHCAL, 0xFBFCF2DE);
+
+    //Cargar current gain
+    SPI_Write_32(ADDR_AIGAIN, preferences.getInt("AIGAIN", 0));
+    SPI_Write_32(ADDR_BIGAIN, preferences.getInt("BIGAIN", 0));
+    SPI_Write_32(ADDR_CIGAIN, preferences.getInt("CIGAIN", 0));
+    SPI_Write_32(ADDR_NIGAIN, preferences.getInt("NIGAIN", 0));
+    //Cargar voltage gain
+    SPI_Write_32(ADDR_AVGAIN, preferences.getInt("AVGAIN", 0));
+    SPI_Write_32(ADDR_BVGAIN, preferences.getInt("BVGAIN", 0));
+    SPI_Write_32(ADDR_CVGAIN, preferences.getInt("CVGAIN", 0));
+
     SPI_Write_32(ADDR_CFMODE, ADE9000_CFMODE);
     SPI_Write_32(ADDR_COMPMODE, ADE9000_COMPMODE);
     SPI_Write_16(ADDR_RUN, ADE9000_RUN_ON);    //DSP ON
+
+    preferences.end();
 }
 
 void ADE9000::resetADE9000(uint8_t ADE9000_RESET_PIN)
@@ -738,7 +759,7 @@ void ADE9000::phase_calibrate(int32_t* phcalReg, int32_t* accActiveEgyReg, int32
 calibratePhaseResult ADE9000::phaseCalibrate(char phase)
 {
     const double omega = (float)2 * (float)3.14159 * (float)INPUT_FREQUENCY / (float)ADE9000_FDSP;
-    calibratePhaseResult res = {0.0, 0};
+    calibratePhaseResult res = { 0.0, 0 };
     int32_t watt, var;
 
     if (phase == 'R' || phase == 'A') {
@@ -879,3 +900,128 @@ bool ADE9000::updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fun
     return false;
 }
 
+bool ADE9000::startCalibration(calibrationStep_t step, bool phaseA, bool phaseB, bool phaseC, bool neutral)
+{
+    if (calibrationStep != calNone) return false;
+    if (step <= calNone || step >= calLastItem) return false;
+
+    Serial.println("Iniciando calibracion!");
+    calA = phaseA; calB = phaseB; calC = phaseC; calN = neutral;
+    calibrationAcc.accA = 0; calibrationAcc.accB = 0; calibrationAcc.accC = 0; calibrationAcc.accN = 0;
+    calibrationAcc.samples = 0;
+
+    calibrationStep = step;
+    if (calibrationStep == calCurrentGain) {
+        if (calA) SPI_Write_32(ADDR_AIGAIN, 0);
+        if (calB) SPI_Write_32(ADDR_BIGAIN, 0);
+        if (calC) SPI_Write_32(ADDR_CIGAIN, 0);
+        if (calN) SPI_Write_32(ADDR_NIGAIN, 0);
+    }
+    else if (calibrationStep == calVoltageGain) {
+        if (calA) SPI_Write_32(ADDR_AVGAIN, 0);
+        if (calB) SPI_Write_32(ADDR_BVGAIN, 0);
+        if (calC) SPI_Write_32(ADDR_CVGAIN, 0);
+        calN = false;
+    }
+    return true;
+}
+
+int32_t ADE9000::updateCalibration(float realValue)
+{
+    if (calibrationStep == calCurrentGain) {
+        if (calA) calibrationAcc.accA += (int32_t)SPI_Read_32(ADDR_AIRMS);
+        if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BIRMS);
+        if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CIRMS);
+        if (calN) calibrationAcc.accN += (int32_t)SPI_Read_32(ADDR_NIRMS);
+    }
+    else if (calibrationStep == calVoltageGain) {
+        if (calA) calibrationAcc.accA += (int32_t)SPI_Read_32(ADDR_AVRMS);
+        if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BVRMS);
+        if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CVRMS);
+        calibrationAcc.accN = 0;
+    }
+    else
+        calibrationAcc.samples = -1;
+
+    calibrationAcc.realValue = realValue;
+    calibrationAcc.samples++;
+    return calibrationAcc.samples;
+}
+
+bool ADE9000::endCalibration(bool save)
+{
+    bool result = false;
+
+    preferences.begin("ADE9000", false);
+    double gainA, gainB, gainC, gainN, convConst;
+    int32_t regA, regB, regC, regN, expectedValue;
+
+    if (calibrationStep == calCurrentGain || calibrationStep == calVoltageGain) {
+        char unit = calibrationStep == calCurrentGain ? 'A' : 'V';                    //Tipo de calibracion
+        convConst = calibrationStep == calCurrentGain ? (CAL_IRMS_CC) : (CAL_VRMS_CC);                  //Constante de conversion
+        expectedValue = ((double)calibrationAcc.realValue * (double)ONE_MILLION) / (convConst);         //Valor de conversion esperado
+
+        //gain=((AIRMSexpected / AIRMSmeasured) - 1) * 2^27
+        Serial.printf("Parametros de calculo:\n Valor real: %.3f%c, factor de conversion: %.5fu%c/LSB => Valor ADC: %d\n", calibrationAcc.realValue, unit, convConst, unit, expectedValue);
+        gainA = expectedValue / ((double)calibrationAcc.accA / calibrationAcc.samples);
+        gainB = expectedValue / ((double)calibrationAcc.accB / calibrationAcc.samples);
+        gainC = expectedValue / ((double)calibrationAcc.accC / calibrationAcc.samples);
+        gainN = expectedValue / ((double)calibrationAcc.accN / calibrationAcc.samples);
+        regA = (gainA - 1.0) * ADE9000_2to27;
+        regB = (gainB - 1.0) * ADE9000_2to27;
+        regC = (gainC - 1.0) * ADE9000_2to27;
+        regN = (gainN - 1.0) * ADE9000_2to27;
+
+        if (unit == 'A') unit = 'I';
+        Serial.printf("Ganancias calculadas en base a %d muestras\n", calibrationAcc.samples);
+        if (calA) Serial.printf("Fase A(R): gain = %0.5f A%cGAIN = 0x%x\n", gainA, unit, regA);
+        if (calB) Serial.printf("Fase B(S): gain = %0.5f B%cGAIN = 0x%x\n", gainB, unit, regB);
+        if (calC) Serial.printf("Fase C(T): gain = %0.5f C%cGAIN = 0x%x\n", gainC, unit, regC);
+        if (calN) Serial.printf("Neutro(N): gain = %0.5f N%cGAIN = 0x%x\n", gainN, unit, regN);
+
+        if (save) {
+            Serial.println("Guardando ajustes en memoria...");
+            if (calibrationStep == calCurrentGain) {
+                if (calA) { SPI_Write_32(ADDR_AIGAIN, (int32_t)regA);  preferences.putInt("AIGAIN", (int32_t)regA); };
+                if (calB) { SPI_Write_32(ADDR_BIGAIN, (int32_t)regB);  preferences.putInt("BIGAIN", (int32_t)regB); };
+                if (calC) { SPI_Write_32(ADDR_CIGAIN, (int32_t)regC);  preferences.putInt("CIGAIN", (int32_t)regC); };
+                if (calN) { SPI_Write_32(ADDR_NIGAIN, (int32_t)regN);  preferences.putInt("NIGAIN", (int32_t)regN); };
+            }
+            else {
+                if (calA) { SPI_Write_32(ADDR_AVGAIN, (int32_t)regA);  preferences.putInt("AVGAIN", (int32_t)regA); };
+                if (calB) { SPI_Write_32(ADDR_BVGAIN, (int32_t)regB);  preferences.putInt("BVGAIN", (int32_t)regB); };
+                if (calC) { SPI_Write_32(ADDR_CVGAIN, (int32_t)regC);  preferences.putInt("CVGAIN", (int32_t)regC); };
+            }
+        }
+    }
+    calibrationStep = calNone;
+    preferences.end();
+    return result;
+}
+
+
+
+
+// calibrationStep_t& operator++(calibrationStep_t& step) {
+// 	step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) + 1);
+// 	if (step >= calLastItem) step = calNone;
+// 	return step;
+// }
+
+calibrationStep_t operator++(calibrationStep_t& step, int32_t n) {
+    step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) + n);
+    if (step >= calLastItem) step = calNone;
+    return step;
+}
+
+// calibrationStep_t& operator--(calibrationStep_t& step) {
+// 	step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) - 1);
+// 	if (step <= calNone) step = static_cast<calibrationStep_t>(static_cast<int32_t>(calLastItem) - 1);
+// 	return step;
+// }
+
+calibrationStep_t operator--(calibrationStep_t& step, int32_t n) {
+    step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) - n);
+    if (step <= calNone) step = static_cast<calibrationStep_t>(static_cast<int32_t>(calLastItem) - 1);
+    return step;
+}

@@ -5,6 +5,7 @@
   Author: Ariel Rios
   Date: 12-07-2020
 */
+#pragma ONCE
 #ifndef ADE9000_H
 #define ADE9000_H 1
 
@@ -13,6 +14,7 @@
 ***************************************************************************************************************/
 
 #include "Arduino.h"
+#include "Preferences.h"
 #include "ADE9000RegMap.h"
 #include <SPI.h>
 
@@ -101,19 +103,29 @@ extern const uint8_t ACCUMULATION_TIME;
 #define ADE9000_WATT_FULL_SCALE_CODES 20694066
 #define ADE9000_RESAMPLED_FULL_SCALE_CODES 18196
 #define ADE9000_PCF_FULL_SCALE_CODES 74532013
+#define ADE9000_2to27	134217728
 
 /* State for calibration*/
-enum CAL_STATE
+typedef enum
 {
-	CAL_START,
-	CAL_VI_CALIBRATE,
-	CAL_PHASE_CALIBRATE,
-	CAL_PGAIN_CALIBRATE,
-	CAL_STORE,
-	CAL_STOP,
-	CAL_RESTART,
-	CAL_COMPLETE
-};
+	calNone = 0,
+	calCurrentGain = 1,
+	// calPhaseGain,
+	calVoltageGain,
+	calCurrentOffset,
+	calVoltageOffset,
+	// calPowerGain,
+	// calActivePowerOffset,
+	// calReactivePowerOffset,
+	// calFundCurrentOffset,
+	// calFundVoltageOffset,
+	// calCurrentOneOffset,
+	// calVoltageOneOffset,
+	// calCurrentTenOffset,
+	// calVoltageTenOffset,
+	calLastItem
+}calibrationStep_t;
+
 
 typedef enum {
 	adeChannel_IA = 0,
@@ -674,10 +686,34 @@ public:
 	*/
 	bool updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fundEnergy = nullptr);
 
+
+
+	bool startCalibration(calibrationStep_t step, bool phaseA, bool phaseB, bool phaseC, bool neutral);
+
+
+
+	int32_t updateCalibration(float realValue);
+
+
+	bool endCalibration(bool save);
+
 private:
+	Preferences preferences;		//Configuracion desde flash
+
 	uint32_t _SPI_speed;
 	uint8_t _chipSelect_Pin;
 	uint32_t ADC_REDIRECT = 0x001FFFFF;
+
+	calibrationStep_t calibrationStep = calNone;
+	bool calA, calB, calC, calN;
+	struct {
+		int64_t accA;
+		int64_t accB;
+		int64_t accC;
+		int64_t accN;
+		int32_t samples;
+		float realValue;
+	} calibrationAcc;
 
 	SPIClass port;
 };

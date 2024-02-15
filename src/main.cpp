@@ -27,12 +27,14 @@ AngleRegs angles;
 boardButtons_t readButtons();
 
 
+
 void Draw_Main();
 void Draw_Title(const char* Title);
 void Draw_Fase();
 void Draw_Angulos();
 void Draw_CalibrarFase();
 void Draw_Battery();
+void Draw_CalibrateCorriente();
 void UI();
 boardButtons_t getButtons();
 void testFormat()
@@ -271,12 +273,14 @@ void UI()
     Draw_Angulos();
   else if (indexUI == 3)
     Draw_CalibrarFase();
+  else if (indexUI == 4)
+    Draw_CalibrateCorriente();
 }
 
 
 void Draw_Main()
 {
-  const uint32_t c1 = 0, c2 = 10, c3 = 50, c4 = 90;
+  const uint32_t c1 = 0, c2 = 10, c3 = 52, c4 = 90;
   const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
 
   static uint32_t update = 0;
@@ -292,17 +296,17 @@ void Draw_Main()
     lcd.setFont(c64enh);
     lcd.setFont(Small5x7PLBold);
     lcd.printStr(c1, l1, "R");
-    lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 5, "V").c_str());
+    lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 6, "V").c_str());
     lcd.printStr(c3, l1, ade.format(Meter.phaseR.Irms, 5, "A").c_str());
     lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt, 4, "W").c_str());
 
     lcd.printStr(c1, l2, "S");
-    lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 5, "V").c_str());
+    lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 6, "V").c_str());
     lcd.printStr(c3, l2, ade.format(Meter.phaseS.Irms, 5, "A").c_str());
     lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt, 4, "W").c_str());
 
     lcd.printStr(c1, l3, "T");
-    lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 5, "V", 1).c_str());
+    lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 6, "V", 1).c_str());
     lcd.printStr(c3, l3, ade.format(Meter.phaseT.Irms, 5, "A", 1).c_str());
     lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt, 4, "W").c_str());
 
@@ -330,6 +334,8 @@ void Draw_Main()
     indexUI = 2;
   else if (key == Keys::Esc)
     indexUI = 3;
+  else if (key == Keys::Up)
+    indexUI = 4;
   // else if (Keyboard.getNextKey() == Keys::Up)
   //   indexUI = 3;
 }
@@ -498,6 +504,130 @@ void Draw_CalibrarFase()
   else if (key == Keys::Enter) {
     Serial.printf("Calibracion de fases: R:%.2f [0x%X], S:%.2f [0x%X], T:%.2f [0x%X], N:%.2f [0x%X]\n", r.angle, r.factor, s.angle, s.factor, t.angle, t.factor, n.angle, n.factor);
     indexUI = 0;
+  }
+}
+
+
+void Draw_CalibrateCorriente()
+{
+  const uint32_t c1 = 0, c2 = 10, c3 = 55, c4 = 100;
+  const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
+  const float steps[] = { 0.001, 0.01, 0.1, 1 };
+  static bool running = false;
+  static uint32_t calTime = micros(), step = 0;
+  static int32_t  samples = 0;
+  static float realValue = 20.0, inc;
+  static calibrationStep_t type = calCurrentGain;
+  char str[64];
+
+
+
+  inc = steps[step];
+  if (running) {
+    if (micros() - calTime > 19999) {
+      calTime = micros();
+      samples = ade.updateCalibration(realValue);
+    }
+  }
+
+  if (millis() - update > 199) {
+    update = millis();
+
+    char str[128];
+    lcd.fillRect(0, 0, 128, 64, 0);
+
+    lcd.fillRect(0, 0, 128, 64, 0);
+    Draw_Title("CALIBRACION");
+
+
+    if (running) {
+      lcd.setFont(Small5x7PLBold);
+      lcd.printStr(c1, l1, "R");
+      lcd.printStr(c1, l2, "S");
+      lcd.printStr(c1, l3, "T");
+      lcd.printStr(c3, l1, "N");
+
+      if (type == calCurrentGain) {
+        lcd.printStr(c2, l1, ade.format(Meter.phaseR.Irms, 6, "A").c_str());
+        lcd.printStr(c3 + 12, l1, ade.format(Meter.neutral.Irms, 6, "A").c_str());
+        lcd.printStr(c2, l2, ade.format(Meter.phaseS.Irms, 6, "A").c_str());
+        lcd.printStr(c2, l3, ade.format(Meter.phaseT.Irms, 6, "A").c_str());
+      }
+      else if (type == calVoltageGain) {
+        lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 6, "V").c_str());
+        lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 6, "V").c_str());
+        lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 6, "V").c_str());
+      }
+
+      lcd.printStr(c4, l3, ade.format(samples, 3, "s", formatNoPrefix).c_str());
+      snprintf(str, sizeof(str), "Real: %.3f.  I:%.3f", realValue, inc);
+      lcd.printStr(c1, l4, str);
+      lcd.printStr(c1, l5, "ENTER para terminar");
+    }
+    else {
+      lcd.setFont(Small5x7PLBold);
+      lcd.printStr(1, l2, "Presione ENTER para");
+      lcd.printStr(1, l3, "empezar calibracion");
+
+      static uint32_t blink = 0;
+      if (millis() - blink > 999) {
+        blink = millis();
+      }
+      else if (millis() - blink < 500) {
+        if (type == calCurrentGain)
+          lcd.printStr(1, l4, "ganancia corriente");
+        else if (type == calVoltageGain)
+          lcd.printStr(1, l4, "ganancia voltaje");
+      }
+    }
+
+    lcd.display(0);
+  }
+
+  Keys key = Keyboard.getNextKey();
+
+  if (key == Keys::Esc) {
+    indexUI = 0;
+    if (running)
+      ade.endCalibration(false);
+    running = false;
+  }
+  else if (key == Keys::Up) {
+    if (running)
+      realValue += inc;
+    else {
+      type = calCurrentGain;
+      realValue = 41.5;
+    }
+  }
+  else if (key == Keys::Down) {
+    if (running)
+      realValue -= inc;
+    else {
+      type = calVoltageGain;
+      realValue = 225;
+    }
+  }
+  else if (key == Keys::Next) {
+    step++;
+    if (step > 3) step = 0;
+  }
+  else if (key == Keys::Enter) {
+    if (!running) {
+      if (type != calNone) {
+        running = true;
+        ade.startCalibration(type, true, true, true, true);
+      }
+      else {
+        indexUI = 0;
+        running = false;
+      }
+    }
+    else {
+      ade.endCalibration(true);
+      indexUI = 0;
+      running = false;
+    }
   }
 }
 
