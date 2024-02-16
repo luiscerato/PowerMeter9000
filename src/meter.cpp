@@ -21,6 +21,9 @@ struct TotalEnergyVals MeterEnergy;
 void MeterInit()
 {
 	Serial.println("Iniciando ADE9000!");
+	pinMode(pinAdeInt0, INPUT_PULLUP);
+	pinMode(pinAdeInt1, INPUT_PULLUP);
+
 	ade.initADE9000(pinAdeClk, pinAdeSdi, pinAdeSdo);
 	ade.ADC_Redirect(adeChannel_IA, adeChannel_IC);	//Cruzar los canales A con C
 	ade.ADC_Redirect(adeChannel_IC, adeChannel_IA);
@@ -28,8 +31,8 @@ void MeterInit()
 	ade.ADC_Redirect(adeChannel_VC, adeChannel_VA);
 	ade.setupADE9000();              // Initialize ADE9000 registers according to values in ADE9000API.h
 
-	pinMode(pinAdeInt0, INPUT_PULLUP);
-	pinMode(pinAdeInt1, INPUT_PULLUP);
+	ade.setCurrentMultiplier(5.0);		//5 vueltas de cable por cada trafo
+	//ade.setNoCurrentCutoff(0.0005);		//0.5mA es 0A
 }
 
 void MeterLoop()
@@ -57,8 +60,8 @@ void MeterLoop()
 		avg = millis();
 
 		VoltageRMSRegs volts; CurrentRMSRegs curr;
-		ade.ReadTen12VoltageRMSRegs(&volts);
-		ade.ReadTen12CurrentRMSRegs(&curr);
+		ade.readVoltageRMSRegs(&volts);
+		ade.readCurrentRMSRegs(&curr);
 
 		Meter.phaseR.Vrms = volts.VoltageRMS_A;
 		Meter.phaseS.Vrms = volts.VoltageRMS_B;

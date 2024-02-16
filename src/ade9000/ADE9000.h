@@ -104,6 +104,7 @@ extern const uint8_t ACCUMULATION_TIME;
 #define ADE9000_RESAMPLED_FULL_SCALE_CODES 18196
 #define ADE9000_PCF_FULL_SCALE_CODES 74532013
 #define ADE9000_2to27	134217728
+#define ADE9000_2to15	32768
 
 /* State for calibration*/
 typedef enum
@@ -642,26 +643,10 @@ public:
 	void getPGA_gain(PGAGainRegs*);
 
 	/*
-	Current gain calibration function
-	Input: Stored in respective structure
-	Output:-
-	*/
-	void iGain_calibrate(int32_t*, int32_t*, int, uint8_t);
-
-	/*
-	Voltage gain calibration function
-	Input: Stored in respective structure
-	Output:-
-	*/
-	void vGain_calibrate(int32_t*, int32_t*, int, uint8_t);
-
-	/*
 	Phase gain calibration function
 	Input: Stored in respective structure
 	Output:-
 	*/
-	void phase_calibrate(int32_t*, int32_t*, int32_t*, int);
-
 	calibratePhaseResult phaseCalibrate(char phase);
 
 	/*
@@ -697,8 +682,62 @@ public:
 
 	bool endCalibration(bool save);
 
+
+	const double getMaxInputVoltage() {
+		return ((double)((CAL_VRMS_CC) * ((double)ADE9000_RMS_FULL_SCALE_CODES)) / (double)ONE_MILLION);
+	};
+
+	const double getMaxInputCurrent() {
+		return ((double)((CAL_IRMS_CC) * ((double)ADE9000_RMS_FULL_SCALE_CODES)) / (double)ONE_MILLION);
+	};
+
+	const double getMaxInputPower() {
+		return ((double)((CAL_POWER_CC) * ((double)ADE9000_WATT_FULL_SCALE_CODES)) / (double)ONE_THOUSAND);
+	};
+
+	void setCurrentMultiplier(float mult) {
+		if (mult < 0.5 || mult > 10.0) return;
+		currentMultiplier = mult;
+	};
+
+	float getCurrentMultiplier() {
+		return currentMultiplier;
+	};
+
+	void setNoVoltageCutoff(float val) {
+		if (val < 0) return;
+		noVoltageCutoff = val;
+	};
+
+	float getNoVoltageCutoff() {
+		return noVoltageCutoff;
+	};
+
+	void setNoCurrentCutoff(float val) {
+		if (val < 0) return;
+		noCurrentCutoff = val;
+	};
+
+	float getNoCurrentCutoff() {
+		return noCurrentCutoff;
+	};
+
+	void setNoPowerCutoff(float val) {
+		if (val < 0) return;
+		noPowerCutoff = val;
+	};
+
+	float getNoPowerCutoff() {
+		return noPowerCutoff;
+	};
+
 private:
 	Preferences preferences;		//Configuracion desde flash
+
+	float currentMultiplier;		//Multiplicador de corriente. Para dividir la corriente en caso de dar varias vueltas por el trafo de corriente
+	float noVoltageCutoff;			//Cortes por bajo niveles. Si es menor a estos umbrales se toma como 0
+	float noCurrentCutoff;			//Corte por baja corriente
+	float noPowerCutoff;			//Corte por baja potencia
 
 	uint32_t _SPI_speed;
 	uint8_t _chipSelect_Pin;

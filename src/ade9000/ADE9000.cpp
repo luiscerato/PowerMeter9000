@@ -62,6 +62,8 @@ ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin)
     this->ADC_REDIRECT = 0x001FFFFF;
     this->calibrationStep = calNone;
     calA = calB = calC = calN = false;
+    currentMultiplier = 1.0;
+    noVoltageCutoff = noCurrentCutoff = noPowerCutoff = 0.0;
 }
 
 ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin, uint8_t SPIport)
@@ -69,6 +71,11 @@ ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin, uint8_t SPIport)
     port = SPIClass(SPIport);
     this->_SPI_speed = SPI_speed;
     this->_chipSelect_Pin = chipSelect_Pin;
+    this->ADC_REDIRECT = 0x001FFFFF;
+    this->calibrationStep = calNone;
+    calA = calB = calC = calN = false;
+    currentMultiplier = 1.0;
+    noVoltageCutoff = noCurrentCutoff = noPowerCutoff = 0.0;
 }
 
 void ADE9000::initADE9000(bool initSPI)
@@ -123,11 +130,20 @@ void ADE9000::setupADE9000(void)
     SPI_Write_32(ADDR_BVGAIN, preferences.getInt("BVGAIN", 0));
     SPI_Write_32(ADDR_CVGAIN, preferences.getInt("CVGAIN", 0));
 
+    //Current offset
+    SPI_Write_32(ADDR_AIRMSOS, preferences.getInt("AIRMSOS", 0));
+    SPI_Write_32(ADDR_BIRMSOS, preferences.getInt("BIRMSOS", 0));
+    SPI_Write_32(ADDR_CIRMSOS, preferences.getInt("CIRMSOS", 0));
+    SPI_Write_32(ADDR_NIRMSOS, preferences.getInt("NIRMSOS", 0));
+
     SPI_Write_32(ADDR_CFMODE, ADE9000_CFMODE);
     SPI_Write_32(ADDR_COMPMODE, ADE9000_COMPMODE);
     SPI_Write_16(ADDR_RUN, ADE9000_RUN_ON);    //DSP ON
 
     preferences.end();
+
+    Serial.printf("ADE9000 rango de entradas:\nVoltaje maximo: % .3fV\nCorriente maxima : % .3fA\nPotencia maxima: %.2fW\n",
+        getMaxInputVoltage(), getMaxInputCurrent(), getMaxInputPower());
 }
 
 void ADE9000::resetADE9000(uint8_t ADE9000_RESET_PIN)
@@ -243,6 +259,9 @@ uint32_t ADE9000::readActivePowerRegs(ActivePowerRegs* Data)
     Data->ActivePower_A = (float)(CAL_POWER_CC * Data->ActivePowerReg_A) / ONE_THOUSAND;
     Data->ActivePower_B = (float)(CAL_POWER_CC * Data->ActivePowerReg_B) / ONE_THOUSAND;
     Data->ActivePower_C = (float)(CAL_POWER_CC * Data->ActivePowerReg_C) / ONE_THOUSAND;
+    if (abs(Data->ActivePower_A) < noPowerCutoff) Data->ActivePower_A = 0.0;
+    if (abs(Data->ActivePower_B) < noPowerCutoff) Data->ActivePower_B = 0.0;
+    if (abs(Data->ActivePower_C) < noPowerCutoff) Data->ActivePower_C = 0.0;
     return micros() - time;
 }
 
@@ -255,6 +274,9 @@ uint32_t ADE9000::readReactivePowerRegs(ReactivePowerRegs* Data)
     Data->ReactivePower_A = (float)(CAL_POWER_CC * Data->ReactivePowerReg_A) / ONE_THOUSAND;
     Data->ReactivePower_B = (float)(CAL_POWER_CC * Data->ReactivePowerReg_B) / ONE_THOUSAND;
     Data->ReactivePower_C = (float)(CAL_POWER_CC * Data->ReactivePowerReg_C) / ONE_THOUSAND;
+    if (abs(Data->ReactivePower_A) < noPowerCutoff) Data->ReactivePower_A = 0.0;
+    if (abs(Data->ReactivePower_B) < noPowerCutoff) Data->ReactivePower_B = 0.0;
+    if (abs(Data->ReactivePower_C) < noPowerCutoff) Data->ReactivePower_C = 0.0;
     return micros() - time;
 }
 
@@ -267,6 +289,9 @@ uint32_t ADE9000::readApparentPowerRegs(ApparentPowerRegs* Data)
     Data->ApparentPower_A = (float)(CAL_POWER_CC * Data->ApparentPowerReg_A) / ONE_THOUSAND;
     Data->ApparentPower_B = (float)(CAL_POWER_CC * Data->ApparentPowerReg_B) / ONE_THOUSAND;
     Data->ApparentPower_C = (float)(CAL_POWER_CC * Data->ApparentPowerReg_C) / ONE_THOUSAND;
+    if (abs(Data->ApparentPower_A) < noPowerCutoff) Data->ApparentPower_A = 0.0;
+    if (abs(Data->ApparentPower_B) < noPowerCutoff) Data->ApparentPower_B = 0.0;
+    if (abs(Data->ApparentPower_C) < noPowerCutoff) Data->ApparentPower_C = 0.0;
     return micros() - time;
 }
 
@@ -279,6 +304,9 @@ uint32_t ADE9000::readVoltageRMSRegs(VoltageRMSRegs* Data)
     Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
     Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
     Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
+    if (Data->VoltageRMS_A < noPowerCutoff) Data->VoltageRMS_A = 0.0;
+    if (Data->VoltageRMS_B < noPowerCutoff) Data->VoltageRMS_B = 0.0;
+    if (Data->VoltageRMS_C < noPowerCutoff) Data->VoltageRMS_C = 0.0;
     return micros() - time;
 }
 
@@ -289,12 +317,160 @@ uint32_t ADE9000::readCurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIRMS));
     Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIRMS));
     Data->CurrentRMSReg_N = int32_t(SPI_Read_32(ADDR_NIRMS));
-    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / ONE_MILLION;
-    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / ONE_MILLION;
-    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / ONE_MILLION;
-    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / ONE_MILLION;
+    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION / currentMultiplier;
+    if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
+    if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
+    if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
+    if (Data->CurrentRMS_N < noPowerCutoff) Data->CurrentRMS_N = 0.0;
     return micros() - time;
 }
+
+uint32_t ADE9000::ReadFundActivePowerRegs(ActivePowerRegs* Data)
+{
+    uint32_t time = micros();
+    Data->ActivePowerReg_A = int32_t(SPI_Read_32(ADDR_AFWATT));
+    Data->ActivePowerReg_B = int32_t(SPI_Read_32(ADDR_BFWATT));
+    Data->ActivePowerReg_C = int32_t(SPI_Read_32(ADDR_CFWATT));
+    Data->ActivePower_A = (float)(CAL_POWER_CC * Data->ActivePowerReg_A) / ONE_THOUSAND;
+    Data->ActivePower_B = (float)(CAL_POWER_CC * Data->ActivePowerReg_B) / ONE_THOUSAND;
+    Data->ActivePower_C = (float)(CAL_POWER_CC * Data->ActivePowerReg_C) / ONE_THOUSAND;
+    if (abs(Data->ActivePower_A) < noPowerCutoff) Data->ActivePower_A = 0.0;
+    if (abs(Data->ActivePower_B) < noPowerCutoff) Data->ActivePower_B = 0.0;
+    if (abs(Data->ActivePower_C) < noPowerCutoff) Data->ActivePower_C = 0.0;
+    return micros() - time;
+}
+
+uint32_t ADE9000::ReadFundReactivePowerRegs(ReactivePowerRegs* Data)
+{
+    uint32_t time = micros();
+    Data->ReactivePowerReg_A = int32_t(SPI_Read_32(ADDR_AFVAR));
+    Data->ReactivePowerReg_B = int32_t(SPI_Read_32(ADDR_BFVAR));
+    Data->ReactivePowerReg_C = int32_t(SPI_Read_32(ADDR_CFVAR));
+    Data->ReactivePower_A = (float)(CAL_POWER_CC * Data->ReactivePowerReg_A) / ONE_THOUSAND;
+    Data->ReactivePower_B = (float)(CAL_POWER_CC * Data->ReactivePowerReg_B) / ONE_THOUSAND;
+    Data->ReactivePower_C = (float)(CAL_POWER_CC * Data->ReactivePowerReg_C) / ONE_THOUSAND;
+    if (abs(Data->ReactivePower_A) < noPowerCutoff) Data->ReactivePower_A = 0.0;
+    if (abs(Data->ReactivePower_B) < noPowerCutoff) Data->ReactivePower_B = 0.0;
+    if (abs(Data->ReactivePower_C) < noPowerCutoff) Data->ReactivePower_C = 0.0;
+    return micros() - time;
+}
+
+uint32_t ADE9000::ReadFundApparentPowerRegs(ApparentPowerRegs* Data)
+{
+    uint32_t time = micros();
+    Data->ApparentPowerReg_A = int32_t(SPI_Read_32(ADDR_AFVA));
+    Data->ApparentPowerReg_B = int32_t(SPI_Read_32(ADDR_BFVA));
+    Data->ApparentPowerReg_C = int32_t(SPI_Read_32(ADDR_CFVA));
+    Data->ApparentPower_A = (float)(CAL_POWER_CC * Data->ApparentPowerReg_A) / ONE_THOUSAND;
+    Data->ApparentPower_B = (float)(CAL_POWER_CC * Data->ApparentPowerReg_B) / ONE_THOUSAND;
+    Data->ApparentPower_C = (float)(CAL_POWER_CC * Data->ApparentPowerReg_C) / ONE_THOUSAND;
+    if (abs(Data->ApparentPower_A) < noPowerCutoff) Data->ApparentPower_A = 0.0;
+    if (abs(Data->ApparentPower_B) < noPowerCutoff) Data->ApparentPower_B = 0.0;
+    if (abs(Data->ApparentPower_C) < noPowerCutoff) Data->ApparentPower_C = 0.0;
+    return micros() - time;
+}
+
+uint32_t ADE9000::ReadFundVoltageRMSRegs(VoltageRMSRegs* Data)
+{
+    uint32_t time = micros();
+    Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_AVFRMS));
+    Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_BVFRMS));
+    Data->VoltageRMSReg_C = int32_t(SPI_Read_32(ADDR_CVFRMS));
+    Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
+    Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
+    Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
+    if (Data->VoltageRMS_A < noPowerCutoff) Data->VoltageRMS_A = 0.0;
+    if (Data->VoltageRMS_B < noPowerCutoff) Data->VoltageRMS_B = 0.0;
+    if (Data->VoltageRMS_C < noPowerCutoff) Data->VoltageRMS_C = 0.0;
+    return micros() - time;
+}
+
+uint32_t ADE9000::ReadFundCurrentRMSRegs(CurrentRMSRegs* Data)
+{
+    uint32_t time = micros();
+    Data->CurrentRMSReg_A = int32_t(SPI_Read_32(ADDR_AIFRMS));
+    Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIFRMS));
+    Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIFRMS));
+    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_N = 0;
+    if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
+    if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
+    if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
+    return micros() - time;
+}
+
+uint32_t ADE9000::ReadHalfVoltageRMSRegs(VoltageRMSRegs* Data)
+{
+    uint32_t time = micros();
+    Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_AVRMSONE));
+    Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_BVRMSONE));
+    Data->VoltageRMSReg_C = int32_t(SPI_Read_32(ADDR_CVRMSONE));
+    Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
+    Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
+    Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
+    if (Data->VoltageRMS_A < noPowerCutoff) Data->VoltageRMS_A = 0.0;
+    if (Data->VoltageRMS_B < noPowerCutoff) Data->VoltageRMS_B = 0.0;
+    if (Data->VoltageRMS_C < noPowerCutoff) Data->VoltageRMS_C = 0.0;
+    return micros() - time;
+}
+
+uint32_t ADE9000::ReadHalfCurrentRMSRegs(CurrentRMSRegs* Data)
+{
+    uint32_t time = micros();
+    Data->CurrentRMSReg_A = int32_t(SPI_Read_32(ADDR_AIRMSONE));
+    Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIRMSONE));
+    Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIRMSONE));
+    Data->CurrentRMSReg_N = int32_t(SPI_Read_32(ADDR_NIRMSONE));
+    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION / currentMultiplier;
+    if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
+    if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
+    if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
+    if (Data->CurrentRMS_N < noPowerCutoff) Data->CurrentRMS_N = 0.0;
+    return micros() - time;
+}
+
+uint32_t ADE9000::ReadTen12VoltageRMSRegs(VoltageRMSRegs* Data)
+{
+    uint32_t time = micros();
+    Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_AVRMS1012));
+    Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_BVRMS1012));
+    Data->VoltageRMSReg_C = int32_t(SPI_Read_32(ADDR_CVRMS1012));
+    Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
+    Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
+    Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
+    if (Data->VoltageRMS_A < noPowerCutoff) Data->VoltageRMS_A = 0.0;
+    if (Data->VoltageRMS_B < noPowerCutoff) Data->VoltageRMS_B = 0.0;
+    if (Data->VoltageRMS_C < noPowerCutoff) Data->VoltageRMS_C = 0.0;
+    return micros() - time;
+}
+
+uint32_t ADE9000::ReadTen12CurrentRMSRegs(CurrentRMSRegs* Data)
+{
+    uint32_t time = micros();
+    Data->CurrentRMSReg_A = int32_t(SPI_Read_32(ADDR_AIRMS1012));
+    Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIRMS1012));
+    Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIRMS1012));
+    Data->CurrentRMSReg_N = int32_t(SPI_Read_32(ADDR_NIRMS1012));
+    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION / currentMultiplier;
+    if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
+    if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
+    if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
+    if (Data->CurrentRMS_N < noPowerCutoff) Data->CurrentRMS_N = 0.0;
+    return micros() - time;
+}
+
+
 
 uint32_t ADE9000::readPowerFactorRegsnValues(PowerFactorRegs* Data)
 {
@@ -317,6 +493,7 @@ uint32_t ADE9000::readPowerFactorRegsnValues(PowerFactorRegs* Data)
     return micros() - time;
 }
 
+
 uint32_t ADE9000::readPeriodRegsnValues(PeriodRegs* Data)
 {
     uint32_t tempReg;
@@ -336,6 +513,7 @@ uint32_t ADE9000::readPeriodRegsnValues(PeriodRegs* Data)
     Data->FrequencyValue_C = tempValue;
     return micros() - time;
 }
+
 
 uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
 {
@@ -397,145 +575,6 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     Data->AngleValue_IA_IC = constrain(tempValue, 0, 360);
     return micros() - time;
 }
-
-uint32_t ADE9000::readTempRegnValue(TemperatureRegnValue* Data)
-{
-    uint32_t trim;
-    uint16_t gain;
-    uint16_t offset;
-    uint16_t tempReg;
-    float tempValue;
-
-    uint32_t time = micros();
-    SPI_Write_16(ADDR_TEMP_CFG, ADE9000_TEMP_CFG); // Start temperature acquisition cycle with settings in defined in ADE9000_TEMP_CFG
-    delay(2);                                      // delay of 2ms. Increase delay if TEMP_TIME is changed
-
-    trim = SPI_Read_32(ADDR_TEMP_TRIM);
-    gain = (trim & 0xFFFF);                // Extract 16 LSB
-    offset = ((trim >> 16) & 0xFFFF);      // Extract 16 MSB
-    tempReg = SPI_Read_16(ADDR_TEMP_RSLT); // Read Temperature result register
-    tempValue = (float)(offset >> 5) - ((float)tempReg * (float)gain / (float)65536);
-
-    Data->Temperature_Reg = tempReg;
-    Data->Temperature = tempValue;
-    return micros() - time;
-}
-
-
-
-uint32_t ADE9000::ReadFundActivePowerRegs(ActivePowerRegs* Data)
-{
-    uint32_t time = micros();
-    Data->ActivePowerReg_A = int32_t(SPI_Read_32(ADDR_AFWATT));
-    Data->ActivePowerReg_B = int32_t(SPI_Read_32(ADDR_BFWATT));
-    Data->ActivePowerReg_C = int32_t(SPI_Read_32(ADDR_CFWATT));
-    Data->ActivePower_A = (float)(CAL_POWER_CC * Data->ActivePowerReg_A) / ONE_THOUSAND;
-    Data->ActivePower_B = (float)(CAL_POWER_CC * Data->ActivePowerReg_B) / ONE_THOUSAND;
-    Data->ActivePower_C = (float)(CAL_POWER_CC * Data->ActivePowerReg_C) / ONE_THOUSAND;
-    return micros() - time;
-}
-
-uint32_t ADE9000::ReadFundReactivePowerRegs(ReactivePowerRegs* Data)
-{
-    uint32_t time = micros();
-    Data->ReactivePowerReg_A = int32_t(SPI_Read_32(ADDR_AFVAR));
-    Data->ReactivePowerReg_B = int32_t(SPI_Read_32(ADDR_BFVAR));
-    Data->ReactivePowerReg_C = int32_t(SPI_Read_32(ADDR_CFVAR));
-    Data->ReactivePower_A = (float)(CAL_POWER_CC * Data->ReactivePowerReg_A) / ONE_THOUSAND;
-    Data->ReactivePower_B = (float)(CAL_POWER_CC * Data->ReactivePowerReg_B) / ONE_THOUSAND;
-    Data->ReactivePower_C = (float)(CAL_POWER_CC * Data->ReactivePowerReg_C) / ONE_THOUSAND;
-    return micros() - time;
-}
-
-uint32_t ADE9000::ReadFundApparentPowerRegs(ApparentPowerRegs* Data)
-{
-    uint32_t time = micros();
-    Data->ApparentPowerReg_A = int32_t(SPI_Read_32(ADDR_AFVA));
-    Data->ApparentPowerReg_B = int32_t(SPI_Read_32(ADDR_BFVA));
-    Data->ApparentPowerReg_C = int32_t(SPI_Read_32(ADDR_CFVA));
-    Data->ApparentPower_A = (float)(CAL_POWER_CC * Data->ApparentPowerReg_A) / ONE_THOUSAND;
-    Data->ApparentPower_B = (float)(CAL_POWER_CC * Data->ApparentPowerReg_B) / ONE_THOUSAND;
-    Data->ApparentPower_C = (float)(CAL_POWER_CC * Data->ApparentPowerReg_C) / ONE_THOUSAND;
-    return micros() - time;
-}
-
-uint32_t ADE9000::ReadFundVoltageRMSRegs(VoltageRMSRegs* Data)
-{
-    uint32_t time = micros();
-    Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_AVFRMS));
-    Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_BVFRMS));
-    Data->VoltageRMSReg_C = int32_t(SPI_Read_32(ADDR_CVFRMS));
-    Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
-    Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
-    Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
-    return micros() - time;
-}
-
-uint32_t ADE9000::ReadFundCurrentRMSRegs(CurrentRMSRegs* Data)
-{
-    uint32_t time = micros();
-    Data->CurrentRMSReg_A = int32_t(SPI_Read_32(ADDR_AIFRMS));
-    Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIFRMS));
-    Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIFRMS));
-    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / ONE_MILLION;
-    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / ONE_MILLION;
-    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / ONE_MILLION;
-    Data->CurrentRMS_N = 0;
-    return micros() - time;
-}
-
-uint32_t ADE9000::ReadHalfVoltageRMSRegs(VoltageRMSRegs* Data)
-{
-    uint32_t time = micros();
-    Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_AVRMSONE));
-    Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_BVRMSONE));
-    Data->VoltageRMSReg_C = int32_t(SPI_Read_32(ADDR_CVRMSONE));
-    Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
-    Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
-    Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
-    return micros() - time;
-}
-
-uint32_t ADE9000::ReadHalfCurrentRMSRegs(CurrentRMSRegs* Data)
-{
-    uint32_t time = micros();
-    Data->CurrentRMSReg_A = int32_t(SPI_Read_32(ADDR_AIRMSONE));
-    Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIRMSONE));
-    Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIRMSONE));
-    Data->CurrentRMSReg_N = int32_t(SPI_Read_32(ADDR_NIRMSONE));
-    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / ONE_MILLION;
-    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / ONE_MILLION;
-    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / ONE_MILLION;
-    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / ONE_MILLION;
-    return micros() - time;
-}
-
-uint32_t ADE9000::ReadTen12VoltageRMSRegs(VoltageRMSRegs* Data)
-{
-    uint32_t time = micros();
-    Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_AVRMS1012));
-    Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_BVRMS1012));
-    Data->VoltageRMSReg_C = int32_t(SPI_Read_32(ADDR_CVRMS1012));
-    Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
-    Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
-    Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
-    return micros() - time;
-}
-
-uint32_t ADE9000::ReadTen12CurrentRMSRegs(CurrentRMSRegs* Data)
-{
-    uint32_t time = micros();
-    Data->CurrentRMSReg_A = int32_t(SPI_Read_32(ADDR_AIRMS1012));
-    Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIRMS1012));
-    Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIRMS1012));
-    Data->CurrentRMSReg_N = int32_t(SPI_Read_32(ADDR_NIRMS1012));
-    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / ONE_MILLION;
-    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / ONE_MILLION;
-    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / ONE_MILLION;
-    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / ONE_MILLION;
-    return micros() - time;
-}
-
 uint32_t ADE9000::ReadVoltageTHDRegsnValues(VoltageTHDRegs* Data)
 {
     uint32_t tempReg;
@@ -575,6 +614,30 @@ uint32_t ADE9000::ReadCurrentTHDRegsnValues(CurrentTHDRegs* Data)
     Data->CurrentTHDReg_C = tempReg;
     tempValue = (float)tempReg * 100 / (float)134217728; //Calculate THD in %		
     Data->CurrentTHDValue_C = tempValue;
+    return micros() - time;
+}
+
+
+uint32_t ADE9000::readTempRegnValue(TemperatureRegnValue* Data)
+{
+    uint32_t trim;
+    uint16_t gain;
+    uint16_t offset;
+    uint16_t tempReg;
+    float tempValue;
+
+    uint32_t time = micros();
+    SPI_Write_16(ADDR_TEMP_CFG, ADE9000_TEMP_CFG); // Start temperature acquisition cycle with settings in defined in ADE9000_TEMP_CFG
+    delay(2);                                      // delay of 2ms. Increase delay if TEMP_TIME is changed
+
+    trim = SPI_Read_32(ADDR_TEMP_TRIM);
+    gain = (trim & 0xFFFF);                // Extract 16 LSB
+    offset = ((trim >> 16) & 0xFFFF);      // Extract 16 MSB
+    tempReg = SPI_Read_16(ADDR_TEMP_RSLT); // Read Temperature result register
+    tempValue = (float)(offset >> 5) - ((float)tempReg * (float)gain / (float)65536);
+
+    Data->Temperature_Reg = tempReg;
+    Data->Temperature = tempValue;
     return micros() - time;
 }
 
@@ -619,6 +682,7 @@ void ADE9000::ADC_Redirect(adeChannel source, adeChannel destination)
     Serial.printf("ADC_Redirect: origin: 0x%x, destination: 0x%x. Result: 0x%x\n", source, destination, ADC_REDIRECT);
 }
 
+
 void ADE9000::getPGA_gain(PGAGainRegs* Data)
 {
     int16_t pgaGainRegister;
@@ -662,99 +726,6 @@ void ADE9000::getPGA_gain(PGAGainRegs* Data)
     }
 }
 
-void ADE9000::iGain_calibrate(int32_t* igainReg, int32_t* iRmsRegAddress, int arraySize, uint8_t currentPGA_gain)
-{
-    float temp;
-    int32_t actualCodes;
-    int32_t expectedCodes;
-
-    temp = ADE9000_RMS_FULL_SCALE_CODES * CURRENT_TRANSFER_FUNCTION * currentPGA_gain * NOMINAL_INPUT_CURRENT * sqrt(2);
-    expectedCodes = (int32_t)temp; // Round off
-#ifdef DEBUG_MODE
-    Serial.print("Expected IRMS Code: ");
-    Serial.println(expectedCodes, HEX);
-    for (uint8_t i = 0; i < arraySize; i++)
-#endif
-    {
-        actualCodes = SPI_Read_32(iRmsRegAddress[i]);
-        temp = (((float)expectedCodes / (float)actualCodes) - 1) * 134217728; // Calculate the gain.
-        igainReg[i] = (int32_t)temp;                                          // Round off
-#ifdef DEBUG_MODE
-        Serial.print("Channel ");
-        Serial.print(i + 1);
-        Serial.print(" actual IRMS Code: ");
-        Serial.println(actualCodes, HEX);
-        Serial.print("Current Gain Register: ");
-        Serial.println(igainReg[i], HEX);
-#endif
-    }
-}
-
-void ADE9000::vGain_calibrate(int32_t* vgainReg, int32_t* vRmsRegAddress, int arraySize, uint8_t voltagePGA_gain)
-{
-    float temp;
-    int32_t actualCodes;
-    int32_t expectedCodes;
-
-    temp = ADE9000_RMS_FULL_SCALE_CODES * (VOLTAGE_TRANSFER_FUNCTION * voltagePGA_gain * NOMINAL_INPUT_VOLTAGE * sqrt(2));
-    expectedCodes = (int32_t)temp; // Round off
-#ifdef DEBUG_MODE
-    Serial.print("Expected VRMS Code: ");
-    Serial.println(expectedCodes, HEX);
-#endif
-    for (uint8_t i = 0; i < arraySize; i++)
-    {
-        actualCodes = SPI_Read_32(vRmsRegAddress[i]);
-        temp = (((float)expectedCodes / (float)actualCodes) - 1) * 134217728; // Calculate the gain.
-        vgainReg[i] = (int32_t)temp;                                          // Round off
-#ifdef DEBUG_MODE
-        Serial.print("Channel ");
-        Serial.print(i + 1);
-        Serial.print(" actual VRMS Code: ");
-        Serial.println(actualCodes, HEX);
-        Serial.print("Voltage Gain Register: ");
-        Serial.println(vgainReg[i], HEX);
-#endif
-    }
-}
-
-void ADE9000::phase_calibrate(int32_t* phcalReg, int32_t* accActiveEgyReg, int32_t* accReactiveEgyReg, int arraySize)
-{
-    Serial.println("Computing phase calibration registers...");
-    delay((ACCUMULATION_TIME + 1) * 1000); // Delay to ensure the energy registers are accumulated for defined interval
-    float errorAngle;
-    float errorAngleDeg;
-    float omega;
-    double temp;
-    int32_t actualActiveEnergyCode;
-    int32_t actualReactiveEnergyCode;
-    int i;
-    omega = (float)2 * (float)3.14159 * (float)INPUT_FREQUENCY / (float)ADE9000_FDSP;
-
-    for (i = 0; i < arraySize; i++)
-    {
-        actualActiveEnergyCode = accActiveEgyReg[i];
-        actualReactiveEnergyCode = accReactiveEgyReg[i];
-        errorAngle = (double)-1 * atan(((double)actualActiveEnergyCode * (double)sin(CAL_ANGLE_RADIANS(CALIBRATION_ANGLE_DEGREES)) - (double)actualReactiveEnergyCode * (double)cos(CAL_ANGLE_RADIANS(CALIBRATION_ANGLE_DEGREES))) / ((double)actualActiveEnergyCode * (double)cos(CAL_ANGLE_RADIANS(CALIBRATION_ANGLE_DEGREES)) + (double)actualReactiveEnergyCode * (double)sin(CAL_ANGLE_RADIANS(CALIBRATION_ANGLE_DEGREES))));
-        temp = (((double)sin((double)errorAngle - (double)omega) + (double)sin((double)omega)) / ((double)sin(2 * (double)omega - (double)errorAngle))) * 134217728;
-        phcalReg[i] = (int32_t)temp;
-        errorAngleDeg = (float)errorAngle * 180 / 3.14159;
-#ifdef DEBUG_MODE
-        Serial.print("Channel ");
-        Serial.print(i + 1);
-        Serial.print(" actual Active Energy Register: ");
-        Serial.println(actualActiveEnergyCode, HEX);
-        Serial.print("Channel ");
-        Serial.print(i + 1);
-        Serial.print(" actual Reactive Energy Register: ");
-        Serial.println(actualReactiveEnergyCode, HEX);
-        Serial.print("Phase Correction (degrees): ");
-        Serial.println(errorAngleDeg, 5);
-        Serial.print("Phase Register: ");
-        Serial.println(phcalReg[i], HEX);
-#endif
-    }
-}
 
 calibratePhaseResult ADE9000::phaseCalibrate(char phase)
 {
@@ -923,11 +894,22 @@ bool ADE9000::startCalibration(calibrationStep_t step, bool phaseA, bool phaseB,
         if (calC) SPI_Write_32(ADDR_CVGAIN, 0);
         calN = false;
     }
+    else if (calibrationStep == calCurrentOffset) {
+        if (calA) SPI_Write_32(ADDR_AIRMSOS, 0);
+        if (calB) SPI_Write_32(ADDR_BIRMSOS, 0);
+        if (calC) SPI_Write_32(ADDR_CIRMSOS, 0);
+        if (calN) SPI_Write_32(ADDR_NIRMSOS, 0);
+    }
     return true;
 }
 
 int32_t ADE9000::updateCalibration(float realValue)
 {
+    //Borrar promedio si cambia el valor de referencia
+    if (realValue != calibrationAcc.realValue) {
+        calibrationAcc.accA = 0; calibrationAcc.accB = 0; calibrationAcc.accC = 0; calibrationAcc.accN = 0;
+        calibrationAcc.samples = 0;
+    }
     if (calibrationStep == calCurrentGain) {
         if (calA) calibrationAcc.accA += (int32_t)SPI_Read_32(ADDR_AIRMS);
         if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BIRMS);
@@ -939,6 +921,12 @@ int32_t ADE9000::updateCalibration(float realValue)
         if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BVRMS);
         if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CVRMS);
         calibrationAcc.accN = 0;
+    }
+    else if (calibrationStep == calCurrentOffset) {
+        if (calA) calibrationAcc.accA += (int32_t)SPI_Read_32(ADDR_AIRMS);
+        if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BIRMS);
+        if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CIRMS);
+        if (calN) calibrationAcc.accN += (int32_t)SPI_Read_32(ADDR_NIRMS);
     }
     else
         calibrationAcc.samples = -1;
@@ -959,6 +947,7 @@ bool ADE9000::endCalibration(bool save)
     if (calibrationStep == calCurrentGain || calibrationStep == calVoltageGain) {
         char unit = calibrationStep == calCurrentGain ? 'A' : 'V';                    //Tipo de calibracion
         convConst = calibrationStep == calCurrentGain ? (CAL_IRMS_CC) : (CAL_VRMS_CC);                  //Constante de conversion
+        if (calibrationStep == calCurrentGain) calibrationAcc.realValue *= currentMultiplier;
         expectedValue = ((double)calibrationAcc.realValue * (double)ONE_MILLION) / (convConst);         //Valor de conversion esperado
 
         //gain=((AIRMSexpected / AIRMSmeasured) - 1) * 2^27
@@ -991,6 +980,41 @@ bool ADE9000::endCalibration(bool save)
                 if (calA) { SPI_Write_32(ADDR_AVGAIN, (int32_t)regA);  preferences.putInt("AVGAIN", (int32_t)regA); };
                 if (calB) { SPI_Write_32(ADDR_BVGAIN, (int32_t)regB);  preferences.putInt("BVGAIN", (int32_t)regB); };
                 if (calC) { SPI_Write_32(ADDR_CVGAIN, (int32_t)regC);  preferences.putInt("CVGAIN", (int32_t)regC); };
+            }
+        }
+    }
+    else if (calibrationStep == calCurrentOffset) {
+        char unit = calibrationStep == calCurrentOffset ? 'A' : 'V';                    //Tipo de calibracion
+        convConst = calibrationStep == calCurrentOffset ? (CAL_IRMS_CC) : (CAL_VRMS_CC);                  //Constante de conversion
+        if (calibrationStep == calCurrentOffset) calibrationAcc.realValue *= currentMultiplier;
+        expectedValue = ((double)calibrationAcc.realValue * (double)ONE_MILLION) / (convConst);         //Valor de conversion esperado
+        double expected = expectedValue;
+
+        //offset=(AxRMSexpected^2 - AxRMSmeasured^2) / 2^15
+        Serial.printf("Parametros de calculo:\n Valor real: %.3f%c, factor de conversion: %.5fu%c/LSB => Valor ADC: %d\n", calibrationAcc.realValue, unit, convConst, unit, expectedValue);
+        gainA = (double)calibrationAcc.accA / calibrationAcc.samples;   //Promedio
+        gainB = (double)calibrationAcc.accB / calibrationAcc.samples;
+        gainC = (double)calibrationAcc.accC / calibrationAcc.samples;
+        gainN = (double)calibrationAcc.accN / calibrationAcc.samples;
+        regA = (expected * expected - gainA * gainA) / (double)ADE9000_2to15;
+        regB = (expected * expected - gainB * gainB) / (double)ADE9000_2to15;
+        regC = (expected * expected - gainC * gainC) / (double)ADE9000_2to15;
+        regN = (expected * expected - gainN * gainN) / (double)ADE9000_2to15;
+
+        if (unit == 'A') unit = 'I';
+        Serial.printf("Ganancias calculadas en base a %d muestras\n", calibrationAcc.samples);
+        if (calA) Serial.printf("Fase A(R): A%cRMSOS = 0x%x\n", unit, regA);
+        if (calB) Serial.printf("Fase B(S): B%cRMSOS = 0x%x\n", unit, regB);
+        if (calC) Serial.printf("Fase C(T): C%cRMSOS = 0x%x\n", unit, regC);
+        if (calN) Serial.printf("Neutro(N): N%cRMSOS = 0x%x\n", unit, regN);
+
+        if (save) {
+            Serial.println("Guardando ajustes en memoria...");
+            if (calibrationStep == calCurrentOffset) {
+                if (calA) { SPI_Write_32(ADDR_AIRMSOS, (int32_t)regA);  preferences.putInt("AIRMSOS", (int32_t)regA); };
+                if (calB) { SPI_Write_32(ADDR_BIRMSOS, (int32_t)regB);  preferences.putInt("BIRMSOS", (int32_t)regB); };
+                if (calC) { SPI_Write_32(ADDR_CIRMSOS, (int32_t)regC);  preferences.putInt("CIRMSOS", (int32_t)regC); };
+                if (calN) { SPI_Write_32(ADDR_NIRMSOS, (int32_t)regN);  preferences.putInt("NIRMSOS", (int32_t)regN); };
             }
         }
     }
