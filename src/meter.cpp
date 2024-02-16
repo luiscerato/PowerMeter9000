@@ -30,8 +30,7 @@ void MeterInit()
 	ade.ADC_Redirect(adeChannel_VA, adeChannel_VC);
 	ade.ADC_Redirect(adeChannel_VC, adeChannel_VA);
 	ade.setupADE9000();              // Initialize ADE9000 registers according to values in ADE9000API.h
-
-	ade.setCurrentMultiplier(5.0);		//5 vueltas de cable por cada trafo
+		//5 vueltas de cable por cada trafo
 	//ade.setNoCurrentCutoff(0.0005);		//0.5mA es 0A
 }
 

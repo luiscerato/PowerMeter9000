@@ -125,7 +125,39 @@ typedef enum
 	// calCurrentTenOffset,
 	// calVoltageTenOffset,
 	calLastItem
+
 }calibrationStep_t;
+
+inline calibrationStep_t operator++ (calibrationStep_t& step, int32_t) {
+	step = static_cast<calibrationStep_t>(static_cast<int>(step) + 1);
+	if (step < calNone) step = calNone;
+	else if (step >= calLastItem) step = static_cast<calibrationStep_t>(static_cast<int>(calLastItem) - 1);
+	return step;
+}
+
+inline calibrationStep_t operator-- (calibrationStep_t& step, int32_t) {
+	step = static_cast<calibrationStep_t>(static_cast<int>(step) - 1);
+	if (step < calNone) step = calNone;
+	else if (step >= calLastItem) step = static_cast<calibrationStep_t>(static_cast<int>(calLastItem) - 1);
+	return step;
+}
+
+inline const char * calibrationStepString(calibrationStep_t& step)
+{
+	switch (step) {
+	case calNone:
+		return "none";
+	case calCurrentGain:
+		return "Ganancia Corriente";
+	case calVoltageGain:
+		return "Ganancia Voltaje";
+	case calCurrentOffset:
+		return "Offset Corriente";
+	case calVoltageOffset:
+		return "Offset Voltaje";
+	}
+	return "";
+}
 
 
 typedef enum {
@@ -273,72 +305,6 @@ struct PGAGainRegs
 {
 	int8_t VoltagePGA_gain;
 	int8_t CurrentPGA_gain;
-};
-
-struct FundActivePowerRegs
-{
-	int32_t FundActivePowerReg_A;
-	int32_t FundActivePowerReg_B;
-	int32_t FundActivePowerReg_C;
-};
-
-struct FundReactivePowerRegs
-{
-	int32_t FundReactivePowerReg_A;
-	int32_t FundReactivePowerReg_B;
-	int32_t FundReactivePowerReg_C;
-};
-
-struct FundApparentPowerRegs
-{
-	int32_t FundApparentPowerReg_A;
-	int32_t FundApparentPowerReg_B;
-	int32_t FundApparentPowerReg_C;
-};
-
-struct FundVoltageRMSRegs
-{
-	int32_t FundVoltageRMSReg_A;
-	int32_t FundVoltageRMSReg_B;
-	int32_t FundVoltageRMSReg_C;
-};
-
-struct FundCurrentRMSRegs
-{
-	int32_t FundCurrentRMSReg_A;
-	int32_t FundCurrentRMSReg_B;
-	int32_t FundCurrentRMSReg_C;
-	//Fundamental neutral RMS is not calculated
-};
-
-struct HalfVoltageRMSRegs
-{
-	int32_t HalfVoltageRMSReg_A;
-	int32_t HalfVoltageRMSReg_B;
-	int32_t HalfVoltageRMSReg_C;
-};
-
-struct HalfCurrentRMSRegs
-{
-	int32_t HalfCurrentRMSReg_A;
-	int32_t HalfCurrentRMSReg_B;
-	int32_t HalfCurrentRMSReg_C;
-	int32_t HalfCurrentRMSReg_N;
-};
-
-struct Ten12VoltageRMSRegs
-{
-	int32_t Ten12VoltageRMSReg_A;
-	int32_t Ten12VoltageRMSReg_B;
-	int32_t Ten12VoltageRMSReg_C;
-};
-
-struct Ten12CurrentRMSRegs
-{
-	int32_t Ten12CurrentRMSReg_A;
-	int32_t Ten12CurrentRMSReg_B;
-	int32_t Ten12CurrentRMSReg_C;
-	int32_t Ten12CurrentRMSReg_N;
 };
 
 struct VoltageTHDRegs
@@ -695,15 +661,6 @@ public:
 		return ((double)((CAL_POWER_CC) * ((double)ADE9000_WATT_FULL_SCALE_CODES)) / (double)ONE_THOUSAND);
 	};
 
-	void setCurrentMultiplier(float mult) {
-		if (mult < 0.5 || mult > 10.0) return;
-		currentMultiplier = mult;
-	};
-
-	float getCurrentMultiplier() {
-		return currentMultiplier;
-	};
-
 	void setNoVoltageCutoff(float val) {
 		if (val < 0) return;
 		noVoltageCutoff = val;
@@ -733,8 +690,8 @@ public:
 
 private:
 	Preferences preferences;		//Configuracion desde flash
+	void loadCalibration();			//Carga la calibracion guardada en la memoria flash
 
-	float currentMultiplier;		//Multiplicador de corriente. Para dividir la corriente en caso de dar varias vueltas por el trafo de corriente
 	float noVoltageCutoff;			//Cortes por bajo niveles. Si es menor a estos umbrales se toma como 0
 	float noCurrentCutoff;			//Corte por baja corriente
 	float noPowerCutoff;			//Corte por baja potencia

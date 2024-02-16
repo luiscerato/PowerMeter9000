@@ -508,8 +508,10 @@ void Draw_CalibrarFase()
 }
 
 
+
 void Draw_CalibrateCorriente()
 {
+  const float calStart[] = { 1.0, 22.5, 235.0, 0.0, 0.0, 1000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
   const uint32_t c1 = 0, c2 = 10, c3 = 55, c4 = 100;
   const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
   const float steps[] = { 0.0001, 0.001, 0.01, 0.1, 1 };
@@ -524,9 +526,9 @@ void Draw_CalibrateCorriente()
 
   inc = steps[step];
   if (running) {
-    if (micros() - calTime > 19999) {
+    if (micros() - calTime > 33332) {
       calTime = micros();
-      samples = ade.updateCalibration(realValue);
+      samples = ade.updateCalibration(realValue * 5.0);
     }
   }
 
@@ -548,10 +550,10 @@ void Draw_CalibrateCorriente()
       lcd.printStr(c3, l1, "N");
 
       if (type == calCurrentGain || type == calCurrentOffset) {
-        lcd.printStr(c2, l1, ade.format(Meter.phaseR.Irms, 6, "A").c_str());
-        lcd.printStr(c3 + 12, l1, ade.format(Meter.neutral.Irms, 6, "A").c_str());
-        lcd.printStr(c2, l2, ade.format(Meter.phaseS.Irms, 6, "A").c_str());
-        lcd.printStr(c2, l3, ade.format(Meter.phaseT.Irms, 6, "A").c_str());
+        lcd.printStr(c2, l1, ade.format(Meter.phaseR.Irms / 5.0, 6, "A").c_str());
+        lcd.printStr(c3 + 12, l1, ade.format(Meter.neutral.Irms / 5.0, 6, "A").c_str());
+        lcd.printStr(c2, l2, ade.format(Meter.phaseS.Irms / 5.0, 6, "A").c_str());
+        lcd.printStr(c2, l3, ade.format(Meter.phaseT.Irms / 5.0, 6, "A").c_str());
       }
       else if (type == calVoltageGain) {
         lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 6, "V").c_str());
@@ -570,17 +572,10 @@ void Draw_CalibrateCorriente()
       lcd.printStr(1, l3, "empezar calibracion");
 
       static uint32_t blink = 0;
-      if (millis() - blink > 999) {
+      if (millis() - blink > 999)
         blink = millis();
-      }
-      else if (millis() - blink < 500) {
-        if (type == calCurrentGain)
-          lcd.printStr(1, l4, "ganancia corriente");
-        else if (type == calVoltageGain)
-          lcd.printStr(1, l4, "ganancia voltaje");
-        else if (type == calCurrentOffset)
-          lcd.printStr(1, l4, "offset corriente");
-      }
+      else if (millis() - blink < 500)
+          lcd.printStr(1, l4, calibrationStepString(type));
     }
 
     lcd.display(0);
@@ -598,27 +593,21 @@ void Draw_CalibrateCorriente()
     if (running)
       realValue += inc;
     else {
-      type = calCurrentGain;
-      realValue = 41.5;
+      type++;
+      realValue = calStart[static_cast<int>(type)];
     }
   }
   else if (key == Keys::Down) {
     if (running)
       realValue -= inc;
     else {
-      type = calVoltageGain;
-      realValue = 225;
+      type--;
+      realValue = calStart[static_cast<int>(type)];
     }
   }
   else if (key == Keys::Next) {
-    if (running) {
-      step++;
+    if (running)
       if (step > 4) step = 0;
-    }
-    else {
-      type = calCurrentOffset;
-      realValue = 0.0645;
-    }
   }
   else if (key == Keys::Enter) {
     if (!running) {

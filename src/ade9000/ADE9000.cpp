@@ -62,7 +62,6 @@ ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin)
     this->ADC_REDIRECT = 0x001FFFFF;
     this->calibrationStep = calNone;
     calA = calB = calC = calN = false;
-    currentMultiplier = 1.0;
     noVoltageCutoff = noCurrentCutoff = noPowerCutoff = 0.0;
 }
 
@@ -74,7 +73,6 @@ ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin, uint8_t SPIport)
     this->ADC_REDIRECT = 0x001FFFFF;
     this->calibrationStep = calNone;
     calA = calB = calC = calN = false;
-    currentMultiplier = 1.0;
     noVoltageCutoff = noCurrentCutoff = noPowerCutoff = 0.0;
 }
 
@@ -94,27 +92,10 @@ void ADE9000::initADE9000(uint8_t clkPin, uint8_t misoPin, uint8_t mosiPin)
     digitalWrite(_chipSelect_Pin, HIGH);                                // Set Chip select pin high
 }
 
-void ADE9000::setupADE9000(void)
+void ADE9000::loadCalibration()
 {
     preferences.begin("ADE9000", false);
 
-    SPI_Write_16(ADDR_PGA_GAIN, ADE9000_PGA_GAIN1);
-    SPI_Write_32(ADDR_ADC_REDIRECT, ADC_REDIRECT);      //Load adc redirect configuration. Call ADC_redirect before thi function to change channels.
-    SPI_Write_32(ADDR_CONFIG0, ADE9000_CONFIG0);
-    SPI_Write_16(ADDR_CONFIG1, ADE9000_CONFIG1);
-    SPI_Write_16(ADDR_CONFIG2, ADE9000_CONFIG2);
-    SPI_Write_16(ADDR_CONFIG3, ADE9000_CONFIG3);
-    SPI_Write_16(ADDR_ACCMODE, ADE9000_ACCMODE);
-    SPI_Write_16(ADDR_TEMP_CFG, ADE9000_TEMP_CFG);
-    SPI_Write_16(ADDR_ZX_LP_SEL, ADE9000_ZX_LP_SEL);
-    SPI_Write_32(ADDR_MASK0, ADE9000_MASK0);
-    SPI_Write_32(ADDR_MASK1, ADE9000_MASK1);
-    SPI_Write_32(ADDR_EVENT_MASK, ADE9000_EVENT_MASK);
-    SPI_Write_16(ADDR_WFB_CFG, ADE9000_WFB_CFG);
-    SPI_Write_32(ADDR_VLEVEL, ADE9000_VLEVEL);
-    SPI_Write_32(ADDR_DICOEFF, ADE9000_DICOEFF);
-    SPI_Write_16(ADDR_EGY_TIME, ADE9000_EGY_TIME);
-    SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
     SPI_Write_32(ADDR_APHCAL0, 0xFBFC9813);
     SPI_Write_32(ADDR_BPHCAL0, 0xFC1BC118);
     SPI_Write_32(ADDR_CPHCAL0, 0xFBDE7F6F);
@@ -135,12 +116,41 @@ void ADE9000::setupADE9000(void)
     SPI_Write_32(ADDR_BIRMSOS, preferences.getInt("BIRMSOS", 0));
     SPI_Write_32(ADDR_CIRMSOS, preferences.getInt("CIRMSOS", 0));
     SPI_Write_32(ADDR_NIRMSOS, preferences.getInt("NIRMSOS", 0));
-
-    SPI_Write_32(ADDR_CFMODE, ADE9000_CFMODE);
-    SPI_Write_32(ADDR_COMPMODE, ADE9000_COMPMODE);
-    SPI_Write_16(ADDR_RUN, ADE9000_RUN_ON);    //DSP ON
+    //Voltage offset
+    SPI_Write_32(ADDR_AVRMSOS, preferences.getInt("AVRMSOS", 0));
+    SPI_Write_32(ADDR_BVRMSOS, preferences.getInt("BVRMSOS", 0));
+    SPI_Write_32(ADDR_CVRMSOS, preferences.getInt("CVRMSOS", 0));
 
     preferences.end();
+}
+
+
+void ADE9000::setupADE9000(void)
+{
+    SPI_Write_16(ADDR_PGA_GAIN, ADE9000_PGA_GAIN1);
+    SPI_Write_32(ADDR_ADC_REDIRECT, ADC_REDIRECT);      //Load adc redirect configuration. Call ADC_redirect before thi function to change channels.
+    SPI_Write_32(ADDR_CONFIG0, ADE9000_CONFIG0);
+    SPI_Write_16(ADDR_CONFIG1, ADE9000_CONFIG1);
+    SPI_Write_16(ADDR_CONFIG2, ADE9000_CONFIG2);
+    SPI_Write_16(ADDR_CONFIG3, ADE9000_CONFIG3);
+    SPI_Write_16(ADDR_ACCMODE, ADE9000_ACCMODE);
+    SPI_Write_16(ADDR_TEMP_CFG, ADE9000_TEMP_CFG);
+    SPI_Write_16(ADDR_ZX_LP_SEL, ADE9000_ZX_LP_SEL);
+    SPI_Write_32(ADDR_MASK0, ADE9000_MASK0);
+    SPI_Write_32(ADDR_MASK1, ADE9000_MASK1);
+    SPI_Write_32(ADDR_EVENT_MASK, ADE9000_EVENT_MASK);
+    SPI_Write_16(ADDR_WFB_CFG, ADE9000_WFB_CFG);
+    SPI_Write_32(ADDR_VLEVEL, ADE9000_VLEVEL);
+    SPI_Write_32(ADDR_DICOEFF, ADE9000_DICOEFF);
+    SPI_Write_16(ADDR_EGY_TIME, ADE9000_EGY_TIME);
+    SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
+    SPI_Write_32(ADDR_CFMODE, ADE9000_CFMODE);
+    SPI_Write_32(ADDR_COMPMODE, ADE9000_COMPMODE);
+
+    loadCalibration();                          //Load calibration data from flash memory
+
+    SPI_Write_16(ADDR_RUN, ADE9000_RUN_ON);    //DSP ON
+
 
     Serial.printf("ADE9000 rango de entradas:\nVoltaje maximo: % .3fV\nCorriente maxima : % .3fA\nPotencia maxima: %.2fW\n",
         getMaxInputVoltage(), getMaxInputCurrent(), getMaxInputPower());
@@ -317,10 +327,10 @@ uint32_t ADE9000::readCurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIRMS));
     Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIRMS));
     Data->CurrentRMSReg_N = int32_t(SPI_Read_32(ADDR_NIRMS));
-    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION;
+    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION;
+    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION;
+    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION;
     if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
     if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
     if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
@@ -394,9 +404,9 @@ uint32_t ADE9000::ReadFundCurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMSReg_A = int32_t(SPI_Read_32(ADDR_AIFRMS));
     Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIFRMS));
     Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIFRMS));
-    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION;
+    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION;
+    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION;
     Data->CurrentRMS_N = 0;
     if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
     if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
@@ -426,10 +436,10 @@ uint32_t ADE9000::ReadHalfCurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIRMSONE));
     Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIRMSONE));
     Data->CurrentRMSReg_N = int32_t(SPI_Read_32(ADDR_NIRMSONE));
-    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION;
+    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION;
+    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION;
+    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION;
     if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
     if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
     if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
@@ -459,10 +469,10 @@ uint32_t ADE9000::ReadTen12CurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_BIRMS1012));
     Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_CIRMS1012));
     Data->CurrentRMSReg_N = int32_t(SPI_Read_32(ADDR_NIRMS1012));
-    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION / currentMultiplier;
-    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION / currentMultiplier;
+    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / (float)ONE_MILLION;
+    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION;
+    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION;
+    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION;
     if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
     if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
     if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
@@ -900,6 +910,12 @@ bool ADE9000::startCalibration(calibrationStep_t step, bool phaseA, bool phaseB,
         if (calC) SPI_Write_32(ADDR_CIRMSOS, 0);
         if (calN) SPI_Write_32(ADDR_NIRMSOS, 0);
     }
+    else if (calibrationStep == calVoltageOffset) {
+        if (calA) SPI_Write_32(ADDR_AVRMSOS, 0);
+        if (calB) SPI_Write_32(ADDR_BVRMSOS, 0);
+        if (calC) SPI_Write_32(ADDR_CVRMSOS, 0);
+        calN = false;
+    }
     return true;
 }
 
@@ -928,6 +944,12 @@ int32_t ADE9000::updateCalibration(float realValue)
         if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CIRMS);
         if (calN) calibrationAcc.accN += (int32_t)SPI_Read_32(ADDR_NIRMS);
     }
+    else if (calibrationStep == calVoltageOffset) {
+        if (calA) calibrationAcc.accA += (int32_t)SPI_Read_32(ADDR_AVRMS);
+        if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BVRMS);
+        if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CVRMS);
+        calibrationAcc.accN = 0;
+    }
     else
         calibrationAcc.samples = -1;
 
@@ -947,7 +969,6 @@ bool ADE9000::endCalibration(bool save)
     if (calibrationStep == calCurrentGain || calibrationStep == calVoltageGain) {
         char unit = calibrationStep == calCurrentGain ? 'A' : 'V';                    //Tipo de calibracion
         convConst = calibrationStep == calCurrentGain ? (CAL_IRMS_CC) : (CAL_VRMS_CC);                  //Constante de conversion
-        if (calibrationStep == calCurrentGain) calibrationAcc.realValue *= currentMultiplier;
         expectedValue = ((double)calibrationAcc.realValue * (double)ONE_MILLION) / (convConst);         //Valor de conversion esperado
 
         //gain=((AIRMSexpected / AIRMSmeasured) - 1) * 2^27
@@ -983,10 +1004,9 @@ bool ADE9000::endCalibration(bool save)
             }
         }
     }
-    else if (calibrationStep == calCurrentOffset) {
+    else if (calibrationStep == calCurrentOffset || calibrationStep == calVoltageOffset) {
         char unit = calibrationStep == calCurrentOffset ? 'A' : 'V';                    //Tipo de calibracion
         convConst = calibrationStep == calCurrentOffset ? (CAL_IRMS_CC) : (CAL_VRMS_CC);                  //Constante de conversion
-        if (calibrationStep == calCurrentOffset) calibrationAcc.realValue *= currentMultiplier;
         expectedValue = ((double)calibrationAcc.realValue * (double)ONE_MILLION) / (convConst);         //Valor de conversion esperado
         double expected = expectedValue;
 
@@ -1016,6 +1036,11 @@ bool ADE9000::endCalibration(bool save)
                 if (calC) { SPI_Write_32(ADDR_CIRMSOS, (int32_t)regC);  preferences.putInt("CIRMSOS", (int32_t)regC); };
                 if (calN) { SPI_Write_32(ADDR_NIRMSOS, (int32_t)regN);  preferences.putInt("NIRMSOS", (int32_t)regN); };
             }
+            else if (calibrationStep == calVoltageOffset) {
+                if (calA) { SPI_Write_32(ADDR_AVRMSOS, (int32_t)regA);  preferences.putInt("AVRMSOS", (int32_t)regA); };
+                if (calB) { SPI_Write_32(ADDR_BVRMSOS, (int32_t)regB);  preferences.putInt("BVRMSOS", (int32_t)regB); };
+                if (calC) { SPI_Write_32(ADDR_CVRMSOS, (int32_t)regC);  preferences.putInt("CVRMSOS", (int32_t)regC); };
+            }
         }
     }
     calibrationStep = calNone;
@@ -1032,20 +1057,20 @@ bool ADE9000::endCalibration(bool save)
 // 	return step;
 // }
 
-calibrationStep_t operator++(calibrationStep_t& step, int32_t n) {
-    step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) + n);
-    if (step >= calLastItem) step = calNone;
-    return step;
-}
-
-// calibrationStep_t& operator--(calibrationStep_t& step) {
-// 	step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) - 1);
-// 	if (step <= calNone) step = static_cast<calibrationStep_t>(static_cast<int32_t>(calLastItem) - 1);
-// 	return step;
+// calibrationStep_t operator++(calibrationStep_t& step, int32_t n) {
+//     step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) + n);
+//     if (step >= calLastItem) step = calNone;
+//     return step;
 // }
 
-calibrationStep_t operator--(calibrationStep_t& step, int32_t n) {
-    step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) - n);
-    if (step <= calNone) step = static_cast<calibrationStep_t>(static_cast<int32_t>(calLastItem) - 1);
-    return step;
-}
+// // calibrationStep_t& operator--(calibrationStep_t& step) {
+// // 	step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) - 1);
+// // 	if (step <= calNone) step = static_cast<calibrationStep_t>(static_cast<int32_t>(calLastItem) - 1);
+// // 	return step;
+// // }
+
+// calibrationStep_t operator--(calibrationStep_t& step, int32_t n) {
+//     step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) - n);
+//     if (step <= calNone) step = static_cast<calibrationStep_t>(static_cast<int32_t>(calLastItem) - 1);
+//     return step;
+// }
