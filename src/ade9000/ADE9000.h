@@ -81,11 +81,11 @@ extern const uint8_t ACCUMULATION_TIME;
 #define ADE9000_RUN_ON 0x0001 /* DSP ON */
 
 /*Energy Accumulation Settings*/
-//#define ADE9000_EP_CFG 0x0011   /* Enable energy accumulation, accumulate samples at 8ksps */
+#define ADE9000_EP_CFG 0x0011   /* Enable energy accumulation, accumulate samples at 8ksps */
 								/* latch energy accumulation after EGYRDY */
 								/* If accumulation is changed to half line cycle mode, change EGY_TIME */
 
-#define ADE9000_EP_CFG 0x0021   /* Enable energy accumulation, accumulate samples at 8ksps */
+//#define ADE9000_EP_CFG 0x0021   /* Enable energy accumulation, accumulate samples at 8ksps */
 								/* add energy accumulation after EGYRDY */
 								/* reset registers after reading */
 
@@ -111,21 +111,22 @@ typedef enum
 {
 	calNone = 0,
 	calCurrentGain = 1,
-	// calPhaseGain,
+	calPhaseGain,
 	calVoltageGain,
 	calCurrentOffset,
 	calVoltageOffset,
-	// calPowerGain,
-	// calActivePowerOffset,
-	// calReactivePowerOffset,
-	// calFundCurrentOffset,
-	// calFundVoltageOffset,
-	// calCurrentOneOffset,
-	// calVoltageOneOffset,
-	// calCurrentTenOffset,
-	// calVoltageTenOffset,
+	calPowerGain,
+	calActivePowerOffset,
+	calReactivePowerOffset,
+	calFundActivePowerOffset,
+	calFundReactivePowerOffset,
+	calFundCurrentOffset,
+	calFundVoltageOffset,
+	calCurrentOneOffset,
+	calVoltageOneOffset,
+	calCurrentTenOffset,
+	calVoltageTenOffset,
 	calLastItem
-
 }calibrationStep_t;
 
 inline calibrationStep_t operator++ (calibrationStep_t& step, int32_t) {
@@ -142,21 +143,28 @@ inline calibrationStep_t operator-- (calibrationStep_t& step, int32_t) {
 	return step;
 }
 
-inline const char * calibrationStepString(calibrationStep_t& step)
+inline const char* calibrationStepString(calibrationStep_t& step)
 {
 	switch (step) {
-	case calNone:
-		return "none";
-	case calCurrentGain:
-		return "Ganancia Corriente";
-	case calVoltageGain:
-		return "Ganancia Voltaje";
-	case calCurrentOffset:
-		return "Offset Corriente";
-	case calVoltageOffset:
-		return "Offset Voltaje";
+	case calNone: return "none";
+	case calCurrentGain: return "Ganancia Corriente";
+	case calPhaseGain: return "Ganancia fase";
+	case calVoltageGain: return "Ganancia Voltaje";
+	case calCurrentOffset: return "Offset Corriente";
+	case calVoltageOffset: return "Offset Voltaje";
+	case calPowerGain: return "Ganancia potencia";
+	case calActivePowerOffset: return "Offset potencia activa";
+	case calReactivePowerOffset: return "Offset potencia reactiva";
+	case calFundActivePowerOffset: return "Offset potencia act fund";
+	case calFundReactivePowerOffset: return "Offset potencia react fund";
+	case calFundCurrentOffset: return "Offset Corriente fund";
+	case calFundVoltageOffset: return "Offset Voltaje fund";
+	case calCurrentOneOffset: return "Offset Corriente 1 ciclo";
+	case calVoltageOneOffset: return "Offset Voltaje 1 ciclo";
+	case calCurrentTenOffset: return "Offset Corriente 10 ciclo";
+	case calVoltageTenOffset: return "Offset Voltaje 10 ciclo";
 	}
-	return "";
+	return "desconocido";
 }
 
 
@@ -395,6 +403,112 @@ struct TotalEnergyVals
 	struct EnergyPhaseVals PhaseR;
 	struct EnergyPhaseVals PhaseS;
 	struct EnergyPhaseVals PhaseT;
+};
+
+
+class calibrationInfo {
+	friend class ADE9000;
+
+public:
+	calibrationStep_t function;		//Funcion de calibración
+	const char* unit;				//Unidad
+	double conversionFactor;		//Factor de conversion entre valor RAW del ADC y la unidad de medición
+	double multiplier;				//Factor de escala para las conversiones
+	double realValue;				//Valor real que se está midiendo
+	int32_t samples;				//Cantidad de muestras promediadas
+	bool calA, calB, calC, calN;	//Fases que se van a calibrar
+	struct {
+		double A;					//Valor leido después de la conversion
+		double B;
+		double C;
+		double N;
+	} values;
+	struct {
+		int32_t A;					//Valores leidos de los registros 
+		int32_t B;
+		int32_t C;
+		int32_t N;
+	} regs;
+	struct {						//Acumuladores para promedio
+		int64_t A;
+		int64_t B;
+		int64_t C;
+		int64_t N;
+	} acc;
+
+	bool inline isCalibratingVoltage() {
+		return function == calVoltageGain || function == calVoltageOffset || function == calFundVoltageOffset || function == calVoltageOneOffset || function == calVoltageTenOffset;
+	}
+
+	bool inline isCalibratingCurrent() {
+		return function == calCurrentGain || function == calCurrentOffset || function == calFundCurrentOffset || function == calCurrentOneOffset || function == calCurrentTenOffset;
+	}
+
+	bool inline isCalibratingPower() {
+		return function == calPowerGain || function == calActivePowerOffset || function == calReactivePowerOffset || function == calFundActivePowerOffset || function == calFundReactivePowerOffset;
+	}
+
+	bool inline isCalibratingPhase() {
+		return function == calPhaseGain;
+	}
+
+protected:
+	double calcPhaseError(double watt, double var, double angle) {
+		double sinAngle = sin(radians(angle));
+		double cosAngle = cos(radians(angle));
+
+		double errorAngle = (watt * sinAngle - var * cosAngle) / (watt * cosAngle + var * sinAngle);
+		errorAngle = -degrees(atan(errorAngle));	//Calcular desfasaje
+
+		Serial.printf("Valor real:%.3f°, medido: %.3f°\n", angle, errorAngle);
+		return errorAngle;
+	};
+
+	int32_t calcPhaseErrorReg(double angle, double errorAngle) {
+		const double omega = (float)2 * (float)3.14159 * (float)INPUT_FREQUENCY / (float)ADE9000_FDSP;
+		int32_t factor = ((sin(radians(errorAngle) - omega) + sin(omega)) / (sin(2 * omega - radians(errorAngle)))) * 134217728; //2^27
+		Serial.printf("Valor real : % .3f°, medido : % .3f°->Value : 0x % x\n", angle, errorAngle, factor);
+		return factor;
+	};
+
+	void loadRegs(int32_t a, int32_t b, int32_t c, int32_t n) {
+		regs.A = a;
+		regs.B = b;
+		regs.C = c;
+		regs.N = n;
+	};
+
+	int32_t getExpectedRegisterValue() {
+		if (isCalibratingPhase()) return 1.0;
+		return realValue * multiplier / conversionFactor;
+	};
+
+	void calculateValues() {
+		if (isCalibratingPhase()) return;
+		values.A = regs.A * conversionFactor / multiplier;
+		values.B = regs.B * conversionFactor / multiplier;
+		values.C = regs.C * conversionFactor / multiplier;
+		values.N = regs.N * conversionFactor / multiplier;
+	};
+
+	void calculatePromAcc() {
+		acc.A = acc.A / samples;
+		acc.B = acc.B / samples;
+		acc.C = acc.C / samples;
+		acc.N = acc.N / samples;
+	};
+
+	void accumulateRegs() {
+		if (calA) acc.A += (int64_t)regs.A;
+		if (calB) acc.B += (int64_t)regs.B;
+		if (calC) acc.C += (int64_t)regs.C;
+		if (calN) acc.N += (int64_t)regs.N;
+	};
+
+	void clearAccumulators() {
+		acc.A = acc.B = acc.C = acc.N = 0;
+	}
+
 };
 
 typedef struct {
@@ -643,7 +757,7 @@ public:
 
 
 
-	int32_t updateCalibration(float realValue);
+	int32_t updateCalibration(float realValue, calibrationInfo* info);
 
 
 	bool endCalibration(bool save);
@@ -700,16 +814,7 @@ private:
 	uint8_t _chipSelect_Pin;
 	uint32_t ADC_REDIRECT = 0x001FFFFF;
 
-	calibrationStep_t calibrationStep = calNone;
-	bool calA, calB, calC, calN;
-	struct {
-		int64_t accA;
-		int64_t accB;
-		int64_t accC;
-		int64_t accN;
-		int32_t samples;
-		float realValue;
-	} calibrationAcc;
+	calibrationInfo calInfo;
 
 	SPIClass port;
 };

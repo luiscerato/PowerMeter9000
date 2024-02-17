@@ -60,8 +60,8 @@ ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin)
     this->_SPI_speed = SPI_speed;
     this->_chipSelect_Pin = chipSelect_Pin;
     this->ADC_REDIRECT = 0x001FFFFF;
-    this->calibrationStep = calNone;
-    calA = calB = calC = calN = false;
+    calInfo.function = calNone;
+    calInfo.calA = calInfo.calB = calInfo.calC = calInfo.calN = false;
     noVoltageCutoff = noCurrentCutoff = noPowerCutoff = 0.0;
 }
 
@@ -71,8 +71,8 @@ ADE9000::ADE9000(uint32_t SPI_speed, uint8_t chipSelect_Pin, uint8_t SPIport)
     this->_SPI_speed = SPI_speed;
     this->_chipSelect_Pin = chipSelect_Pin;
     this->ADC_REDIRECT = 0x001FFFFF;
-    this->calibrationStep = calNone;
-    calA = calB = calC = calN = false;
+    calInfo.function = calNone;
+    calInfo.calA = calInfo.calB = calInfo.calC = calInfo.calN = false;
     noVoltageCutoff = noCurrentCutoff = noPowerCutoff = 0.0;
 }
 
@@ -121,7 +121,39 @@ void ADE9000::loadCalibration()
     SPI_Write_32(ADDR_BVRMSOS, preferences.getInt("BVRMSOS", 0));
     SPI_Write_32(ADDR_CVRMSOS, preferences.getInt("CVRMSOS", 0));
 
+    //Offset Fundamental
+    SPI_Write_32(ADDR_AIFRMSOS, preferences.getInt("AIFRMSOS", 0));
+    SPI_Write_32(ADDR_BIFRMSOS, preferences.getInt("BIFRMSOS", 0));
+    SPI_Write_32(ADDR_CIFRMSOS, preferences.getInt("CIFRMSOS", 0));
+
+    SPI_Write_32(ADDR_AVFRMSOS, preferences.getInt("AVFRMSOS", 0));
+    SPI_Write_32(ADDR_BVFRMSOS, preferences.getInt("BVFRMSOS", 0));
+    SPI_Write_32(ADDR_CVFRMSOS, preferences.getInt("CVFRMSOS", 0));
+
+    //Offsets one cicle
+    SPI_Write_32(ADDR_AIRMSONEOS, preferences.getInt("AIRMSONEOS", 0));
+    SPI_Write_32(ADDR_BIRMSONEOS, preferences.getInt("BIRMSONEOS", 0));
+    SPI_Write_32(ADDR_CIRMSONEOS, preferences.getInt("CIRMSONEOS", 0));
+    SPI_Write_32(ADDR_NIRMSONEOS, preferences.getInt("NIRMSONEOS", 0));
+
+    SPI_Write_32(ADDR_AVRMSONEOS, preferences.getInt("AVRMSONEOS", 0));
+    SPI_Write_32(ADDR_BVRMSONEOS, preferences.getInt("BVRMSONEOS", 0));
+    SPI_Write_32(ADDR_CVRMSONEOS, preferences.getInt("CVRMSONEOS", 0));
+
+    //Offsets 1012 cicles
+    SPI_Write_32(ADDR_AIRMS1012OS, preferences.getInt("AIRMS1012OS", 0));
+    SPI_Write_32(ADDR_BIRMS1012OS, preferences.getInt("BIRMS1012OS", 0));
+    SPI_Write_32(ADDR_CIRMS1012OS, preferences.getInt("CIRMS1012OS", 0));
+    SPI_Write_32(ADDR_NIRMS1012OS, preferences.getInt("NIRMS1012OS", 0));
+
+    SPI_Write_32(ADDR_AVRMS1012OS, preferences.getInt("AVRMS1012OS", 0));
+    SPI_Write_32(ADDR_BVRMS1012OS, preferences.getInt("BVRMS1012OS", 0));
+    SPI_Write_32(ADDR_CVRMS1012OS, preferences.getInt("CVRMS1012OS", 0));
+
     preferences.end();
+
+    SPI_Write_16(ADDR_EGY_TIME, ADE9000_EGY_TIME);
+    SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
 }
 
 
@@ -142,8 +174,6 @@ void ADE9000::setupADE9000(void)
     SPI_Write_16(ADDR_WFB_CFG, ADE9000_WFB_CFG);
     SPI_Write_32(ADDR_VLEVEL, ADE9000_VLEVEL);
     SPI_Write_32(ADDR_DICOEFF, ADE9000_DICOEFF);
-    SPI_Write_16(ADDR_EGY_TIME, ADE9000_EGY_TIME);
-    SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
     SPI_Write_32(ADDR_CFMODE, ADE9000_CFMODE);
     SPI_Write_32(ADDR_COMPMODE, ADE9000_COMPMODE);
 
@@ -844,6 +874,8 @@ void ADE9000::updateEnergyRegisterFromInterrupt(int32_t* accumulatedActiveEnergy
 
 bool ADE9000::updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fundEnergy)
 {
+    if (calInfo.function != calNone) return false;      //No se pueden leer los registros de energía si se está calibrando
+
     uint32_t temp;
     if (energy == nullptr) return false;
 
@@ -851,111 +883,239 @@ bool ADE9000::updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fun
     temp &= EGY_INTERRUPT_MASK0;
     if (temp == EGY_INTERRUPT_MASK0) {
         SPI_Write_32(ADDR_STATUS0, 0xFFFFFFFF);
-        energy->PhaseR.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AWATTHR_HI)) / ONE_MILLION;
-        energy->PhaseS.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BWATTHR_HI)) / ONE_MILLION;
-        energy->PhaseT.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CWATTHR_HI)) / ONE_MILLION;
+        energy->PhaseR.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AWATTHR_HI)) / ONE_MILLION;
+        energy->PhaseS.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BWATTHR_HI)) / ONE_MILLION;
+        energy->PhaseT.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CWATTHR_HI)) / ONE_MILLION;
 
-        energy->PhaseR.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AVARHR_HI)) / ONE_MILLION;
-        energy->PhaseS.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BVARHR_HI)) / ONE_MILLION;
-        energy->PhaseT.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CVARHR_HI)) / ONE_MILLION;
+        energy->PhaseR.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AVARHR_HI)) / ONE_MILLION;
+        energy->PhaseS.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BVARHR_HI)) / ONE_MILLION;
+        energy->PhaseT.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CVARHR_HI)) / ONE_MILLION;
 
-        energy->PhaseR.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AVAHR_HI)) / ONE_MILLION;
-        energy->PhaseS.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BVAHR_HI)) / ONE_MILLION;
-        energy->PhaseT.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CVAHR_HI)) / ONE_MILLION;
+        energy->PhaseR.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AVAHR_HI)) / ONE_MILLION;
+        energy->PhaseS.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BVAHR_HI)) / ONE_MILLION;
+        energy->PhaseT.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CVAHR_HI)) / ONE_MILLION;
 
         if (fundEnergy != nullptr) {    //Actualizar contadores de energía fundamental si se puede
-            fundEnergy->PhaseR.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AFWATTHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseS.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BFWATTHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseT.Watt_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CFWATTHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseR.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AFWATTHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseS.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BFWATTHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseT.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CFWATTHR_HI)) / ONE_MILLION;
 
-            fundEnergy->PhaseR.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AFVARHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseS.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BFVARHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseT.VAR_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CFVARHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseR.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AFVARHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseS.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BFVARHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseT.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CFVARHR_HI)) / ONE_MILLION;
 
-            fundEnergy->PhaseR.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_AFVAHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseS.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_BFVAHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseT.VA_H += (double)(CAL_ENERGY_CC * SPI_Read_32(ADDR_CFVAHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseR.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AFVAHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseS.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BFVAHR_HI)) / ONE_MILLION;
+            fundEnergy->PhaseT.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CFVAHR_HI)) / ONE_MILLION;
         }
         return true;    //exit function
     }
     return false;
 }
 
-bool ADE9000::startCalibration(calibrationStep_t step, bool phaseA, bool phaseB, bool phaseC, bool neutral)
+bool ADE9000::startCalibration(calibrationStep_t function, bool phaseA, bool phaseB, bool phaseC, bool neutral)
 {
-    if (calibrationStep != calNone) return false;
-    if (step <= calNone || step >= calLastItem) return false;
+    Serial.printf("Iniciando calibracion: %s!\n", calibrationStepString(function));
+    if (calInfo.function != calNone) return false;
+    if (function <= calNone || function >= calLastItem) return false;
 
-    Serial.println("Iniciando calibracion!");
-    calA = phaseA; calB = phaseB; calC = phaseC; calN = neutral;
-    calibrationAcc.accA = 0; calibrationAcc.accB = 0; calibrationAcc.accC = 0; calibrationAcc.accN = 0;
-    calibrationAcc.samples = 0;
+    calInfo.function = function;
+    if (!calInfo.isCalibratingCurrent()) neutral = false;
+    calInfo.calA = phaseA; calInfo.calB = phaseB; calInfo.calC = phaseC; calInfo.calN = neutral;
+    calInfo.clearAccumulators();
+    calInfo.samples = 0;
+    Serial.printf("Preparando para calibrar %s%s%s%s\n", phaseA ? "Fase A " : "", phaseB ? "Fase B " : "", phaseA ? "Fase C " : "", phaseB ? "Neutro" : "");
 
-    calibrationStep = step;
-    if (calibrationStep == calCurrentGain) {
-        if (calA) SPI_Write_32(ADDR_AIGAIN, 0);
-        if (calB) SPI_Write_32(ADDR_BIGAIN, 0);
-        if (calC) SPI_Write_32(ADDR_CIGAIN, 0);
-        if (calN) SPI_Write_32(ADDR_NIGAIN, 0);
+    if (calInfo.isCalibratingCurrent()) {
+        calInfo.multiplier = ONE_MILLION;
+        calInfo.conversionFactor = CAL_IRMS_CC;
+        calInfo.unit = "A";
     }
-    else if (calibrationStep == calVoltageGain) {
-        if (calA) SPI_Write_32(ADDR_AVGAIN, 0);
-        if (calB) SPI_Write_32(ADDR_BVGAIN, 0);
-        if (calC) SPI_Write_32(ADDR_CVGAIN, 0);
-        calN = false;
+    else if (calInfo.isCalibratingVoltage()) {
+        calInfo.multiplier = ONE_MILLION;
+        calInfo.conversionFactor = CAL_VRMS_CC;
+        calInfo.unit = "V";
     }
-    else if (calibrationStep == calCurrentOffset) {
-        if (calA) SPI_Write_32(ADDR_AIRMSOS, 0);
-        if (calB) SPI_Write_32(ADDR_BIRMSOS, 0);
-        if (calC) SPI_Write_32(ADDR_CIRMSOS, 0);
-        if (calN) SPI_Write_32(ADDR_NIRMSOS, 0);
+    else if (calInfo.isCalibratingPower()) {
+        calInfo.multiplier = ONE_THOUSAND;
+        calInfo.conversionFactor = CAL_POWER_CC;
+        calInfo.unit = "W";
     }
-    else if (calibrationStep == calVoltageOffset) {
-        if (calA) SPI_Write_32(ADDR_AVRMSOS, 0);
-        if (calB) SPI_Write_32(ADDR_BVRMSOS, 0);
-        if (calC) SPI_Write_32(ADDR_CVRMSOS, 0);
-        calN = false;
+    else if (calInfo.isCalibratingPhase()) {
+        calInfo.multiplier = ONE_THOUSAND;
+        calInfo.conversionFactor = CAL_POWER_CC;
+        calInfo.unit = "W";
+    }
+
+    Serial.printf("Factores de calibracion: %.6fu%s/LSB. Multiplicador: %.0f\n", calInfo.conversionFactor, calInfo.unit, calInfo.multiplier);
+
+    if (calInfo.function == calCurrentGain) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AIGAIN, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BIGAIN, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CIGAIN, 0);
+        if (calInfo.calN) SPI_Write_32(ADDR_NIGAIN, 0);
+    }
+    else if (calInfo.function == calPhaseGain) {
+        // SPI_Write_16(ADDR_RUN, 0);    //DSP ON
+
+        if (calInfo.calA) { SPI_Write_32(ADDR_APHCAL0, 0); };
+        if (calInfo.calB) { SPI_Write_32(ADDR_BPHCAL0, 0); };
+        if (calInfo.calC) { SPI_Write_32(ADDR_CPHCAL0, 0); };
+        if (calInfo.calN) { SPI_Write_32(ADDR_NPHCAL, 0); };
+
+        // SPI_Write_32(ADDR_EP_CFG, 0x0011); /* Enable energy accumulation, accumulate samples at 8ksps, latch energy accumulation after EGYRDY and don't reset registers*/
+        // SPI_Write_32(ADDR_EGY_TIME, 7999); /* Accumulate 8000 samples */
+        // SPI_Write_16(ADDR_RUN, ADE9000_RUN_ON);    //DSP ON
+    }
+    else if (calInfo.function == calVoltageGain) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AVGAIN, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BVGAIN, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CVGAIN, 0);
+    }
+    else if (calInfo.function == calCurrentOffset) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AIRMSOS, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BIRMSOS, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CIRMSOS, 0);
+        if (calInfo.calN) SPI_Write_32(ADDR_NIRMSOS, 0);
+    }
+    else if (calInfo.function == calVoltageOffset) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AVRMSOS, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BVRMSOS, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CVRMSOS, 0);
+    }
+    else if (calInfo.function == calPowerGain) {
+    }
+    else if (calInfo.function == calActivePowerOffset) {
+    }
+    else if (calInfo.function == calReactivePowerOffset) {
+    }
+    else if (calInfo.function == calFundActivePowerOffset) {
+    }
+    else if (calInfo.function == calFundReactivePowerOffset) {
+    }
+    else if (calInfo.function == calFundCurrentOffset) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AIFRMSOS, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BIFRMSOS, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CIFRMSOS, 0);
+    }
+    else if (calInfo.function == calFundVoltageOffset) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AVFRMSOS, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BVFRMSOS, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CVFRMSOS, 0);
+    }
+    else if (calInfo.function == calCurrentOneOffset) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AIRMSONEOS, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BIRMSONEOS, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CIRMSONEOS, 0);
+        if (calInfo.calN) SPI_Write_32(ADDR_NIRMSONEOS, 0);
+    }
+    else if (calInfo.function == calVoltageOneOffset) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AVRMSONEOS, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BVRMSONEOS, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CVRMSONEOS, 0);
+    }
+    else if (calInfo.function == calCurrentTenOffset) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AIRMS1012OS, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BIRMS1012OS, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CIRMS1012OS, 0);
+        if (calInfo.calN) SPI_Write_32(ADDR_NIRMS1012OS, 0);
+    }
+    else if (calInfo.function == calVoltageTenOffset) {
+        if (calInfo.calA) SPI_Write_32(ADDR_AVRMS1012OS, 0);
+        if (calInfo.calB) SPI_Write_32(ADDR_BVRMS1012OS, 0);
+        if (calInfo.calC) SPI_Write_32(ADDR_CVRMS1012OS, 0);
     }
     return true;
 }
 
-int32_t ADE9000::updateCalibration(float realValue)
+int32_t ADE9000::updateCalibration(float realValue, calibrationInfo* info)
 {
     //Borrar promedio si cambia el valor de referencia
-    if (realValue != calibrationAcc.realValue) {
-        calibrationAcc.accA = 0; calibrationAcc.accB = 0; calibrationAcc.accC = 0; calibrationAcc.accN = 0;
-        calibrationAcc.samples = 0;
+    if (realValue != calInfo.realValue) {
+        calInfo.clearAccumulators();
+        calInfo.samples = 0;
     }
-    if (calibrationStep == calCurrentGain) {
-        if (calA) calibrationAcc.accA += (int32_t)SPI_Read_32(ADDR_AIRMS);
-        if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BIRMS);
-        if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CIRMS);
-        if (calN) calibrationAcc.accN += (int32_t)SPI_Read_32(ADDR_NIRMS);
+    calInfo.realValue = realValue;
+
+    //Offsets y ganancia de corrientes
+    if (calInfo.function == calCurrentGain || calInfo.function == calCurrentOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AIRMS), SPI_Read_32(ADDR_BIRMS), SPI_Read_32(ADDR_CIRMS), SPI_Read_32(ADDR_NIRMS));
     }
-    else if (calibrationStep == calVoltageGain) {
-        if (calA) calibrationAcc.accA += (int32_t)SPI_Read_32(ADDR_AVRMS);
-        if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BVRMS);
-        if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CVRMS);
-        calibrationAcc.accN = 0;
+    else if (calInfo.function == calFundCurrentOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AIFRMS), SPI_Read_32(ADDR_BIFRMS), SPI_Read_32(ADDR_CIFRMS), 0);
     }
-    else if (calibrationStep == calCurrentOffset) {
-        if (calA) calibrationAcc.accA += (int32_t)SPI_Read_32(ADDR_AIRMS);
-        if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BIRMS);
-        if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CIRMS);
-        if (calN) calibrationAcc.accN += (int32_t)SPI_Read_32(ADDR_NIRMS);
+    else if (calInfo.function == calCurrentOneOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AIRMSONE), SPI_Read_32(ADDR_BIRMSONE), SPI_Read_32(ADDR_CIRMSONE), SPI_Read_32(ADDR_NIRMSONE));
     }
-    else if (calibrationStep == calVoltageOffset) {
-        if (calA) calibrationAcc.accA += (int32_t)SPI_Read_32(ADDR_AVRMS);
-        if (calB) calibrationAcc.accB += (int32_t)SPI_Read_32(ADDR_BVRMS);
-        if (calC) calibrationAcc.accC += (int32_t)SPI_Read_32(ADDR_CVRMS);
-        calibrationAcc.accN = 0;
+    else if (calInfo.function == calCurrentTenOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AIRMS1012), SPI_Read_32(ADDR_BIRMS1012), SPI_Read_32(ADDR_CIRMS1012), SPI_Read_32(ADDR_NIRMS1012));
+    }
+
+    //Offsets y ganancia de voltajes
+    else if (calInfo.function == calVoltageGain || calInfo.function == calVoltageOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AVRMS), SPI_Read_32(ADDR_BVRMS), SPI_Read_32(ADDR_CVRMS), 0);
+    }
+    else if (calInfo.function == calFundVoltageOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AVFRMS), SPI_Read_32(ADDR_BVFRMS), SPI_Read_32(ADDR_CVFRMS), 0);
+    }
+    else if (calInfo.function == calVoltageOneOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AVRMSONE), SPI_Read_32(ADDR_BVRMSONE), SPI_Read_32(ADDR_CVRMSONE), 0);
+    }
+    else if (calInfo.function == calVoltageTenOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AVRMS1012), SPI_Read_32(ADDR_BVRMS1012), SPI_Read_32(ADDR_CVRMS1012), 0);
+    }
+
+    //Calibracion de fases
+    else if (calInfo.function == calPhaseGain) {
+        uint32_t temp = SPI_Read_32(ADDR_STATUS0);  //Esperar a que se termine de acumular energía
+        if (temp & EGY_INTERRUPT_MASK0) {
+            int32_t wa, wb, wc, ra, rb, rc;
+            SPI_Write_32(ADDR_STATUS0, EGY_INTERRUPT_MASK0);
+            wa = (int32_t)SPI_Read_32(ADDR_AWATTHR_HI);
+            wb = (int32_t)SPI_Read_32(ADDR_BWATTHR_HI);
+            wc = (int32_t)SPI_Read_32(ADDR_CWATTHR_HI);
+            ra = (int32_t)SPI_Read_32(ADDR_AVARHR_HI);
+            rb = (int32_t)SPI_Read_32(ADDR_BVARHR_HI);
+            rc = (int32_t)SPI_Read_32(ADDR_CVARHR_HI);
+
+            calInfo.values.A = calInfo.calcPhaseError(wa, ra, realValue);
+            calInfo.values.B = calInfo.calcPhaseError(wb, rb, realValue);
+            calInfo.values.C = calInfo.calcPhaseError(wc, rc, realValue);
+            calInfo.values.N = 0.0;
+
+            wa = calInfo.calcPhaseErrorReg(realValue, calInfo.values.A);
+            wb = calInfo.calcPhaseErrorReg(realValue, calInfo.values.B);
+            wc = calInfo.calcPhaseErrorReg(realValue, calInfo.values.C);
+
+            calInfo.loadRegs(wa, wb, wc, 0);
+            calInfo.samples++;
+        }
+        // else
+        //     Serial.print('.');
+    }
+    //Offsets y ganancia de potencias
+    else if (calInfo.function == calPowerGain || calInfo.function == calActivePowerOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AWATT), SPI_Read_32(ADDR_BWATT), SPI_Read_32(ADDR_CWATT), 0);
+    }
+    else if (calInfo.function == calReactivePowerOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AVAR), SPI_Read_32(ADDR_BVAR), SPI_Read_32(ADDR_CVAR), 0);
+    }
+    else if (calInfo.function == calFundActivePowerOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AFWATT), SPI_Read_32(ADDR_BFWATT), SPI_Read_32(ADDR_CFWATT), 0);
+    }
+    else if (calInfo.function == calFundReactivePowerOffset) {
+        calInfo.loadRegs(SPI_Read_32(ADDR_AFVAR), SPI_Read_32(ADDR_BFVAR), SPI_Read_32(ADDR_CFVAR), 0);
     }
     else
-        calibrationAcc.samples = -1;
+        calInfo.samples = -1;
 
-    calibrationAcc.realValue = realValue;
-    calibrationAcc.samples++;
-    return calibrationAcc.samples;
+    if (calInfo.function != calPhaseGain) {
+        calInfo.calculateValues();
+        calInfo.accumulateRegs();
+        calInfo.samples++;
+    }
+    if (info) *info = calInfo;
+    return calInfo.samples;
 }
 
 bool ADE9000::endCalibration(bool save)
@@ -963,114 +1123,138 @@ bool ADE9000::endCalibration(bool save)
     bool result = false;
 
     preferences.begin("ADE9000", false);
-    double gainA, gainB, gainC, gainN, convConst;
-    int32_t regA, regB, regC, regN, expectedValue;
+    int64_t expectedValue = calInfo.getExpectedRegisterValue();    //Valor de conversion esperado
+    calInfo.calculatePromAcc(); //Calcular promedio de valores acumulados
 
-    if (calibrationStep == calCurrentGain || calibrationStep == calVoltageGain) {
-        char unit = calibrationStep == calCurrentGain ? 'A' : 'V';                    //Tipo de calibracion
-        convConst = calibrationStep == calCurrentGain ? (CAL_IRMS_CC) : (CAL_VRMS_CC);                  //Constante de conversion
-        expectedValue = ((double)calibrationAcc.realValue * (double)ONE_MILLION) / (convConst);         //Valor de conversion esperado
-
+    if (calInfo.function == calCurrentGain || calInfo.function == calVoltageGain) {
         //gain=((AIRMSexpected / AIRMSmeasured) - 1) * 2^27
-        Serial.printf("Parametros de calculo:\n Valor real: %.3f%c, factor de conversion: %.5fu%c/LSB => Valor ADC: %d\n", calibrationAcc.realValue, unit, convConst, unit, expectedValue);
-        gainA = expectedValue / ((double)calibrationAcc.accA / calibrationAcc.samples);
-        gainB = expectedValue / ((double)calibrationAcc.accB / calibrationAcc.samples);
-        gainC = expectedValue / ((double)calibrationAcc.accC / calibrationAcc.samples);
-        gainN = expectedValue / ((double)calibrationAcc.accN / calibrationAcc.samples);
-        regA = (gainA - 1.0) * ADE9000_2to27;
-        regB = (gainB - 1.0) * ADE9000_2to27;
-        regC = (gainC - 1.0) * ADE9000_2to27;
-        regN = (gainN - 1.0) * ADE9000_2to27;
+        Serial.printf("Parametros de calculo:\n Valor real: %.4f%s, factor de conversion: %.6fu%s/LSB => Valor ADC: %lld\n", calInfo.realValue, calInfo.unit,
+            calInfo.conversionFactor, calInfo.unit, expectedValue);
 
+        Serial.printf("Promedio acumuladores:\nA= %.4f -> 0x%x\nB= %.4f -> 0x%x\nC= %.4f -> 0x%x\nN= %.4f -> 0x%x\n",
+            calInfo.values.A, calInfo.acc.A, calInfo.values.B, calInfo.acc.B, calInfo.values.C, calInfo.acc.C, calInfo.values.N, calInfo.acc.N);
+        double gainA, gainB, gainC, gainN;
+        gainA = expectedValue / ((double)calInfo.acc.A);
+        gainB = expectedValue / ((double)calInfo.acc.B);
+        gainC = expectedValue / ((double)calInfo.acc.C);
+        gainN = expectedValue / ((double)calInfo.acc.N);
+        calInfo.regs.A = (gainA - 1.0) * ADE9000_2to27;
+        calInfo.regs.B = (gainB - 1.0) * ADE9000_2to27;
+        calInfo.regs.C = (gainC - 1.0) * ADE9000_2to27;
+        calInfo.regs.N = (gainN - 1.0) * ADE9000_2to27;
+
+        char unit = calInfo.unit[0];
         if (unit == 'A') unit = 'I';
-        Serial.printf("Ganancias calculadas en base a %d muestras\n", calibrationAcc.samples);
-        if (calA) Serial.printf("Fase A(R): gain = %0.5f A%cGAIN = 0x%x\n", gainA, unit, regA);
-        if (calB) Serial.printf("Fase B(S): gain = %0.5f B%cGAIN = 0x%x\n", gainB, unit, regB);
-        if (calC) Serial.printf("Fase C(T): gain = %0.5f C%cGAIN = 0x%x\n", gainC, unit, regC);
-        if (calN) Serial.printf("Neutro(N): gain = %0.5f N%cGAIN = 0x%x\n", gainN, unit, regN);
+        Serial.printf("Ganancias calculadas en base a %d muestras\n", calInfo.samples);
+        if (calInfo.calA) Serial.printf("Fase A(R): gain = %0.5f A%cGAIN = 0x%x\n", gainA, unit, calInfo.regs.A);
+        if (calInfo.calB) Serial.printf("Fase B(S): gain = %0.5f B%cGAIN = 0x%x\n", gainB, unit, calInfo.regs.B);
+        if (calInfo.calC) Serial.printf("Fase C(T): gain = %0.5f C%cGAIN = 0x%x\n", gainC, unit, calInfo.regs.C);
+        if (calInfo.calN) Serial.printf("Neutro(N): gain = %0.5f N%cGAIN = 0x%x\n", gainN, unit, calInfo.regs.N);
 
         if (save) {
             Serial.println("Guardando ajustes en memoria...");
-            if (calibrationStep == calCurrentGain) {
-                if (calA) { SPI_Write_32(ADDR_AIGAIN, (int32_t)regA);  preferences.putInt("AIGAIN", (int32_t)regA); };
-                if (calB) { SPI_Write_32(ADDR_BIGAIN, (int32_t)regB);  preferences.putInt("BIGAIN", (int32_t)regB); };
-                if (calC) { SPI_Write_32(ADDR_CIGAIN, (int32_t)regC);  preferences.putInt("CIGAIN", (int32_t)regC); };
-                if (calN) { SPI_Write_32(ADDR_NIGAIN, (int32_t)regN);  preferences.putInt("NIGAIN", (int32_t)regN); };
+            if (calInfo.function == calCurrentGain) {
+                if (calInfo.calA) { SPI_Write_32(ADDR_AIGAIN, (int32_t)calInfo.regs.A);  preferences.putInt("AIGAIN", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BIGAIN, (int32_t)calInfo.regs.B);  preferences.putInt("BIGAIN", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CIGAIN, (int32_t)calInfo.regs.C);  preferences.putInt("CIGAIN", (int32_t)calInfo.regs.C); };
+                if (calInfo.calN) { SPI_Write_32(ADDR_NIGAIN, (int32_t)calInfo.regs.N);  preferences.putInt("NIGAIN", (int32_t)calInfo.regs.N); };
             }
             else {
-                if (calA) { SPI_Write_32(ADDR_AVGAIN, (int32_t)regA);  preferences.putInt("AVGAIN", (int32_t)regA); };
-                if (calB) { SPI_Write_32(ADDR_BVGAIN, (int32_t)regB);  preferences.putInt("BVGAIN", (int32_t)regB); };
-                if (calC) { SPI_Write_32(ADDR_CVGAIN, (int32_t)regC);  preferences.putInt("CVGAIN", (int32_t)regC); };
+                if (calInfo.calA) { SPI_Write_32(ADDR_AVGAIN, (int32_t)calInfo.regs.A);  preferences.putInt("AVGAIN", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BVGAIN, (int32_t)calInfo.regs.B);  preferences.putInt("BVGAIN", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CVGAIN, (int32_t)calInfo.regs.C);  preferences.putInt("CVGAIN", (int32_t)calInfo.regs.C); };
             }
         }
     }
-    else if (calibrationStep == calCurrentOffset || calibrationStep == calVoltageOffset) {
-        char unit = calibrationStep == calCurrentOffset ? 'A' : 'V';                    //Tipo de calibracion
-        convConst = calibrationStep == calCurrentOffset ? (CAL_IRMS_CC) : (CAL_VRMS_CC);                  //Constante de conversion
-        expectedValue = ((double)calibrationAcc.realValue * (double)ONE_MILLION) / (convConst);         //Valor de conversion esperado
-        double expected = expectedValue;
-
+    else if (calInfo.isCalibratingVoltage() || calInfo.isCalibratingCurrent()) {
+        char regName[16] = { 0,0,0,0,0,0,0,0,0,0,0 };
         //offset=(AxRMSexpected^2 - AxRMSmeasured^2) / 2^15
-        Serial.printf("Parametros de calculo:\n Valor real: %.3f%c, factor de conversion: %.5fu%c/LSB => Valor ADC: %d\n", calibrationAcc.realValue, unit, convConst, unit, expectedValue);
-        gainA = (double)calibrationAcc.accA / calibrationAcc.samples;   //Promedio
-        gainB = (double)calibrationAcc.accB / calibrationAcc.samples;
-        gainC = (double)calibrationAcc.accC / calibrationAcc.samples;
-        gainN = (double)calibrationAcc.accN / calibrationAcc.samples;
-        regA = (expected * expected - gainA * gainA) / (double)ADE9000_2to15;
-        regB = (expected * expected - gainB * gainB) / (double)ADE9000_2to15;
-        regC = (expected * expected - gainC * gainC) / (double)ADE9000_2to15;
-        regN = (expected * expected - gainN * gainN) / (double)ADE9000_2to15;
+        Serial.printf("Parametros de calculo:\n Valor real: %.4f%s, factor de conversion: %.6fu%s/LSB => Valor ADC: %lld\n", calInfo.realValue, calInfo.unit,
+            calInfo.conversionFactor, calInfo.unit, expectedValue);
+        Serial.printf("Promedio acumuladores:\nA= %.4f -> 0x%x\nB= %.4f -> 0x%x\nC= %.4f -> 0x%x\nN= %.4f -> 0x%x\n",
+            calInfo.values.A, calInfo.acc.A, calInfo.values.B, calInfo.acc.B, calInfo.values.C, calInfo.acc.C, calInfo.values.N, calInfo.acc.N);
+        calInfo.regs.A = (double)(expectedValue * expectedValue - calInfo.acc.A * calInfo.acc.A) / (double)ADE9000_2to15;
+        calInfo.regs.B = (double)(expectedValue * expectedValue - calInfo.acc.B * calInfo.acc.B) / (double)ADE9000_2to15;
+        calInfo.regs.C = (double)(expectedValue * expectedValue - calInfo.acc.C * calInfo.acc.C) / (double)ADE9000_2to15;
+        calInfo.regs.N = (double)(expectedValue * expectedValue - calInfo.acc.N * calInfo.acc.N) / (double)ADE9000_2to15;
 
-        if (unit == 'A') unit = 'I';
-        Serial.printf("Ganancias calculadas en base a %d muestras\n", calibrationAcc.samples);
-        if (calA) Serial.printf("Fase A(R): A%cRMSOS = 0x%x\n", unit, regA);
-        if (calB) Serial.printf("Fase B(S): B%cRMSOS = 0x%x\n", unit, regB);
-        if (calC) Serial.printf("Fase C(T): C%cRMSOS = 0x%x\n", unit, regC);
-        if (calN) Serial.printf("Neutro(N): N%cRMSOS = 0x%x\n", unit, regN);
+        //Crear el nombre del registro correspondiente
+        regName[0] = calInfo.unit[0] == 'A' ? 'I' : 'V';
+        if (calInfo.function == calFundVoltageOffset || calInfo.function == calFundCurrentOffset) strcat(regName, "F");   //Fundamental
+        strcat(regName, "RMS");
+        if (calInfo.function == calVoltageOneOffset || calInfo.function == calVoltageOneOffset) strcat(regName, "ONE"); //One
+        if (calInfo.function == calVoltageTenOffset || calInfo.function == calVoltageTenOffset) strcat(regName, "1012");; //1012
+        strcat(regName, "OS");
+
+        Serial.printf("Offsets calculados en base a %d muestras\n", calInfo.samples);
+        if (calInfo.calA) Serial.printf("Fase A(R): A%s = 0x%x\n", regName, calInfo.regs.A);
+        if (calInfo.calB) Serial.printf("Fase B(S): B%s = 0x%x\n", regName, calInfo.regs.B);
+        if (calInfo.calC) Serial.printf("Fase C(T): C%s = 0x%x\n", regName, calInfo.regs.C);
+        if (calInfo.calN) Serial.printf("Neutro(N): N%s = 0x%x\n", regName, calInfo.regs.N);
 
         if (save) {
             Serial.println("Guardando ajustes en memoria...");
-            if (calibrationStep == calCurrentOffset) {
-                if (calA) { SPI_Write_32(ADDR_AIRMSOS, (int32_t)regA);  preferences.putInt("AIRMSOS", (int32_t)regA); };
-                if (calB) { SPI_Write_32(ADDR_BIRMSOS, (int32_t)regB);  preferences.putInt("BIRMSOS", (int32_t)regB); };
-                if (calC) { SPI_Write_32(ADDR_CIRMSOS, (int32_t)regC);  preferences.putInt("CIRMSOS", (int32_t)regC); };
-                if (calN) { SPI_Write_32(ADDR_NIRMSOS, (int32_t)regN);  preferences.putInt("NIRMSOS", (int32_t)regN); };
+            if (calInfo.function == calCurrentOffset) {
+                if (calInfo.calA) { SPI_Write_32(ADDR_AIRMSOS, (int32_t)calInfo.regs.A);  preferences.putInt("AIRMSOS", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BIRMSOS, (int32_t)calInfo.regs.B);  preferences.putInt("BIRMSOS", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CIRMSOS, (int32_t)calInfo.regs.C);  preferences.putInt("CIRMSOS", (int32_t)calInfo.regs.C); };
+                if (calInfo.calN) { SPI_Write_32(ADDR_NIRMSOS, (int32_t)calInfo.regs.N);  preferences.putInt("NIRMSOS", (int32_t)calInfo.regs.N); };
             }
-            else if (calibrationStep == calVoltageOffset) {
-                if (calA) { SPI_Write_32(ADDR_AVRMSOS, (int32_t)regA);  preferences.putInt("AVRMSOS", (int32_t)regA); };
-                if (calB) { SPI_Write_32(ADDR_BVRMSOS, (int32_t)regB);  preferences.putInt("BVRMSOS", (int32_t)regB); };
-                if (calC) { SPI_Write_32(ADDR_CVRMSOS, (int32_t)regC);  preferences.putInt("CVRMSOS", (int32_t)regC); };
+            else if (calInfo.function == calVoltageOffset) {
+                if (calInfo.calA) { SPI_Write_32(ADDR_AVRMSOS, (int32_t)calInfo.regs.A);  preferences.putInt("AVRMSOS", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BVRMSOS, (int32_t)calInfo.regs.B);  preferences.putInt("BVRMSOS", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CVRMSOS, (int32_t)calInfo.regs.C);  preferences.putInt("CVRMSOS", (int32_t)calInfo.regs.C); };
+            }
+            else if (calInfo.function == calFundCurrentOffset) {
+                if (calInfo.calA) { SPI_Write_32(ADDR_AIFRMSOS, (int32_t)calInfo.regs.A);  preferences.putInt("AIFRMSOS", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BIFRMSOS, (int32_t)calInfo.regs.B);  preferences.putInt("BIFRMSOS", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CIFRMSOS, (int32_t)calInfo.regs.C);  preferences.putInt("CIFRMSOS", (int32_t)calInfo.regs.C); };
+            }
+            else if (calInfo.function == calFundVoltageOffset) {
+                if (calInfo.calA) { SPI_Write_32(ADDR_AVFRMSOS, (int32_t)calInfo.regs.A);  preferences.putInt("AVFRMSOS", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BVFRMSOS, (int32_t)calInfo.regs.B);  preferences.putInt("BVFRMSOS", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CVFRMSOS, (int32_t)calInfo.regs.C);  preferences.putInt("CVFRMSOS", (int32_t)calInfo.regs.C); };
+            }
+            else if (calInfo.function == calCurrentOneOffset) {
+                if (calInfo.calA) { SPI_Write_32(ADDR_AIRMSONEOS, (int32_t)calInfo.regs.A);  preferences.putInt("AIRMSONEOS", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BIRMSONEOS, (int32_t)calInfo.regs.B);  preferences.putInt("BIRMSONEOS", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CIRMSONEOS, (int32_t)calInfo.regs.C);  preferences.putInt("CIRMSONEOS", (int32_t)calInfo.regs.C); };
+                if (calInfo.calN) { SPI_Write_32(ADDR_NIRMSONEOS, (int32_t)calInfo.regs.N);  preferences.putInt("NIRMSONEOS", (int32_t)calInfo.regs.N); };
+            }
+            else if (calInfo.function == calVoltageOneOffset) {
+                if (calInfo.calA) { SPI_Write_32(ADDR_AVRMSONEOS, (int32_t)calInfo.regs.A);  preferences.putInt("AVRMSONEOS", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BVRMSONEOS, (int32_t)calInfo.regs.B);  preferences.putInt("BVRMSONEOS", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CVRMSONEOS, (int32_t)calInfo.regs.C);  preferences.putInt("CVRMSONEOS", (int32_t)calInfo.regs.C); };
+            }
+            else if (calInfo.function == calCurrentTenOffset) {
+                if (calInfo.calA) { SPI_Write_32(ADDR_AIRMS1012OS, (int32_t)calInfo.regs.A);  preferences.putInt("AIRMS1012OS", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BIRMS1012OS, (int32_t)calInfo.regs.B);  preferences.putInt("BIRMS1012OS", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CIRMS1012OS, (int32_t)calInfo.regs.C);  preferences.putInt("CIRMS1012OS", (int32_t)calInfo.regs.C); };
+                if (calInfo.calN) { SPI_Write_32(ADDR_NIRMS1012OS, (int32_t)calInfo.regs.N);  preferences.putInt("NIRMS1012OS", (int32_t)calInfo.regs.N); };
+            }
+            else if (calInfo.function == calVoltageTenOffset) {
+                if (calInfo.calA) { SPI_Write_32(ADDR_AVRMS1012OS, (int32_t)calInfo.regs.A);  preferences.putInt("AVRMS1012OS", (int32_t)calInfo.regs.A); };
+                if (calInfo.calB) { SPI_Write_32(ADDR_BVRMS1012OS, (int32_t)calInfo.regs.B);  preferences.putInt("BVRMS1012OS", (int32_t)calInfo.regs.B); };
+                if (calInfo.calC) { SPI_Write_32(ADDR_CVRMS1012OS, (int32_t)calInfo.regs.C);  preferences.putInt("CVRMS1012OS", (int32_t)calInfo.regs.C); };
             }
         }
     }
-    calibrationStep = calNone;
+    else if (calInfo.isCalibratingPhase()) {
+        Serial.printf("Valores calculados en base a %d muestras\n", calInfo.samples);
+        if (calInfo.calA) Serial.printf("Fase A(R): %.3f° APHCAL0 = 0x%x\n", calInfo.values.A, calInfo.regs.A);
+        if (calInfo.calB) Serial.printf("Fase B(S): %.3f° BPHCAL0 = 0x%x\n", calInfo.values.B, calInfo.regs.B);
+        if (calInfo.calC) Serial.printf("Fase C(T): %.3f° CPHCAL0 = 0x%x\n", calInfo.values.C, calInfo.regs.C);
+        if (calInfo.calN) Serial.printf("Neutro(N): %.3f° NPHCAL0 = 0x%x\n", calInfo.values.N, calInfo.regs.N);
+
+        if (calInfo.calA) { SPI_Write_32(ADDR_APHCAL0, (int32_t)calInfo.regs.A);  preferences.putInt("APHCAL0", (int32_t)calInfo.regs.A); };
+        if (calInfo.calB) { SPI_Write_32(ADDR_BPHCAL0, (int32_t)calInfo.regs.B);  preferences.putInt("BPHCAL0", (int32_t)calInfo.regs.B); };
+        if (calInfo.calC) { SPI_Write_32(ADDR_CPHCAL0, (int32_t)calInfo.regs.C);  preferences.putInt("CPHCAL0", (int32_t)calInfo.regs.C); };
+        if (calInfo.calN) { SPI_Write_32(ADDR_NPHCAL, (int32_t)calInfo.regs.N);  preferences.putInt("NPHCAL", (int32_t)calInfo.regs.N); };
+    }
+    calInfo.function = calNone;
     preferences.end();
+
+    if (!save) loadCalibration();
     return result;
 }
 
-
-
-
-// calibrationStep_t& operator++(calibrationStep_t& step) {
-// 	step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) + 1);
-// 	if (step >= calLastItem) step = calNone;
-// 	return step;
-// }
-
-// calibrationStep_t operator++(calibrationStep_t& step, int32_t n) {
-//     step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) + n);
-//     if (step >= calLastItem) step = calNone;
-//     return step;
-// }
-
-// // calibrationStep_t& operator--(calibrationStep_t& step) {
-// // 	step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) - 1);
-// // 	if (step <= calNone) step = static_cast<calibrationStep_t>(static_cast<int32_t>(calLastItem) - 1);
-// // 	return step;
-// // }
-
-// calibrationStep_t operator--(calibrationStep_t& step, int32_t n) {
-//     step = static_cast<calibrationStep_t>(static_cast<int32_t>(step) - n);
-//     if (step <= calNone) step = static_cast<calibrationStep_t>(static_cast<int32_t>(calLastItem) - 1);
-//     return step;
-// }

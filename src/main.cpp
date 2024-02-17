@@ -511,16 +511,17 @@ void Draw_CalibrarFase()
 
 void Draw_CalibrateCorriente()
 {
-  const float calStart[] = { 1.0, 22.5, 235.0, 0.0, 0.0, 1000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+  const float calStart[] = { 1.0, 22.5, 0.0, 235.0, 0.0, 0.0, 1000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
   const uint32_t c1 = 0, c2 = 10, c3 = 55, c4 = 100;
   const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
   const float steps[] = { 0.0001, 0.001, 0.01, 0.1, 1 };
   static bool running = false;
   static uint32_t calTime = micros(), step = 0;
   static int32_t  samples = 0;
-  static float realValue = 20.0, inc;
+  static float realValue = 20.0, inc, multiplier = 1.0;
   static calibrationStep_t type = calCurrentGain;
   char str[64];
+  static class calibrationInfo info;
 
 
 
@@ -528,7 +529,7 @@ void Draw_CalibrateCorriente()
   if (running) {
     if (micros() - calTime > 33332) {
       calTime = micros();
-      samples = ade.updateCalibration(realValue * 5.0);
+      samples = ade.updateCalibration(realValue * multiplier, &info);
     }
   }
 
@@ -547,18 +548,46 @@ void Draw_CalibrateCorriente()
       lcd.printStr(c1, l1, "R");
       lcd.printStr(c1, l2, "S");
       lcd.printStr(c1, l3, "T");
-      lcd.printStr(c3, l1, "N");
 
-      if (type == calCurrentGain || type == calCurrentOffset) {
-        lcd.printStr(c2, l1, ade.format(Meter.phaseR.Irms / 5.0, 6, "A").c_str());
-        lcd.printStr(c3 + 12, l1, ade.format(Meter.neutral.Irms / 5.0, 6, "A").c_str());
-        lcd.printStr(c2, l2, ade.format(Meter.phaseS.Irms / 5.0, 6, "A").c_str());
-        lcd.printStr(c2, l3, ade.format(Meter.phaseT.Irms / 5.0, 6, "A").c_str());
-      }
-      else if (type == calVoltageGain) {
-        lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 6, "V").c_str());
-        lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 6, "V").c_str());
-        lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 6, "V").c_str());
+      switch (type) {
+      case calCurrentGain:
+      case calCurrentOffset:
+      case calFundCurrentOffset:
+      case calCurrentOneOffset:
+      case calCurrentTenOffset:
+        multiplier = 5.0;
+        lcd.printStr(c3, l1, "N");
+        lcd.printStr(c2, l1, ade.format(info.values.A / multiplier, 6, "A").c_str());
+        lcd.printStr(c3 + 12, l1, ade.format(info.values.N / multiplier, 6, "A").c_str());
+        lcd.printStr(c2, l2, ade.format(info.values.B / multiplier, 6, "A").c_str());
+        lcd.printStr(c2, l3, ade.format(info.values.C / multiplier, 6, "A").c_str());
+        break;
+
+      case calVoltageGain:
+      case calVoltageOffset:
+      case calFundVoltageOffset:
+      case calVoltageOneOffset:
+      case calVoltageTenOffset:
+        multiplier = 1;
+        lcd.printStr(c2, l1, ade.format(info.values.A, 6, "V").c_str());
+        lcd.printStr(c2, l2, ade.format(info.values.B, 6, "V").c_str());
+        lcd.printStr(c2, l3, ade.format(info.values.C, 6, "V").c_str());
+        break;
+
+      case calPowerGain:
+      case calActivePowerOffset:
+      case calReactivePowerOffset:
+      case calFundActivePowerOffset:
+      case calFundReactivePowerOffset:
+        lcd.printStr(c2, l1, "Aun no implementado");
+        break;
+
+      case calPhaseGain:
+        multiplier = 1;
+        lcd.printStr(c2, l1, ade.format(info.values.A, 6, "g", formatNoPrefix).c_str());
+        lcd.printStr(c2, l2, ade.format(info.values.B, 6, "g", formatNoPrefix).c_str());
+        lcd.printStr(c2, l3, ade.format(info.values.C, 6, "g", formatNoPrefix).c_str());
+        break;
       }
 
       lcd.printStr(c4, l3, ade.format(samples, 3, "s", formatNoPrefix).c_str());
@@ -575,7 +604,7 @@ void Draw_CalibrateCorriente()
       if (millis() - blink > 999)
         blink = millis();
       else if (millis() - blink < 500)
-          lcd.printStr(1, l4, calibrationStepString(type));
+        lcd.printStr(1, l4, calibrationStepString(type));
     }
 
     lcd.display(0);
@@ -606,8 +635,10 @@ void Draw_CalibrateCorriente()
     }
   }
   else if (key == Keys::Next) {
-    if (running)
+    if (running) {
+      step++;
       if (step > 4) step = 0;
+    }
   }
   else if (key == Keys::Enter) {
     if (!running) {
