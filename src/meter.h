@@ -24,6 +24,7 @@ struct phaseValues
 		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = 0.0;
 		Name[0] = 0;
 	};
+
 	phaseValues(const char* name) {
 		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = 0.0;
 		strncpy(Name, name, 7);
@@ -42,12 +43,25 @@ struct meterValues
 		float VAR;
 		float VA;
 	} power;
-	
+
 	struct {
 		double Watt_H;
 		double VAR_H;
 		double VA_H;
 	} energy;
+	struct {
+		float Irms;			//Voltaje RMS promedio de todas las fases
+		float Vrms;			//Corriente RMS promedio de todas las fases
+		float FastVrms;		//Voltaje RMS rápida promedio de todas las fases
+		float FastIrms;		//Corriente RMS rápida promedio de todas las fases
+		float Watt;			//Potencia Activa promedio de todas las fases
+		float VAR;			//Potencia Reactiva promedio de todas las fases
+		float VA;			//Potencia Aparente promedio de todas las fases
+		float PowerFactor;	//Factor de potencia promedio de todas las fases
+		float Vthd;			//Distorción de voltaje promedio de todas las fases
+		float Ithd; 		//Distorción de corriente promedio de todas las fases
+		float Freq;			//Frecuencia de fase promedio de todas las fases
+	} average;
 
 	meterValues() : phaseR("FASE R"), phaseS("FASE S"), phaseT("FASE T"), neutral("NEUTRO") {
 		power.Watt = power.VAR = power.VA = 0;

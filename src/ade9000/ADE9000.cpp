@@ -344,9 +344,9 @@ uint32_t ADE9000::readVoltageRMSRegs(VoltageRMSRegs* Data)
     Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
     Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
     Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
-    if (Data->VoltageRMS_A < noPowerCutoff) Data->VoltageRMS_A = 0.0;
-    if (Data->VoltageRMS_B < noPowerCutoff) Data->VoltageRMS_B = 0.0;
-    if (Data->VoltageRMS_C < noPowerCutoff) Data->VoltageRMS_C = 0.0;
+    if (Data->VoltageRMS_A < noVoltageCutoff) Data->VoltageRMS_A = 0.0;
+    if (Data->VoltageRMS_B < noVoltageCutoff) Data->VoltageRMS_B = 0.0;
+    if (Data->VoltageRMS_C < noVoltageCutoff) Data->VoltageRMS_C = 0.0;
     return micros() - time;
 }
 
@@ -361,10 +361,10 @@ uint32_t ADE9000::readCurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION;
     Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION;
     Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION;
-    if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
-    if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
-    if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
-    if (Data->CurrentRMS_N < noPowerCutoff) Data->CurrentRMS_N = 0.0;
+    if (Data->CurrentRMS_A < noCurrentCutoff) Data->CurrentRMS_A = 0.0;
+    if (Data->CurrentRMS_B < noCurrentCutoff) Data->CurrentRMS_B = 0.0;
+    if (Data->CurrentRMS_C < noCurrentCutoff) Data->CurrentRMS_C = 0.0;
+    if (Data->CurrentRMS_N < noCurrentCutoff) Data->CurrentRMS_N = 0.0;
     return micros() - time;
 }
 
@@ -422,9 +422,9 @@ uint32_t ADE9000::ReadFundVoltageRMSRegs(VoltageRMSRegs* Data)
     Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
     Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
     Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
-    if (Data->VoltageRMS_A < noPowerCutoff) Data->VoltageRMS_A = 0.0;
-    if (Data->VoltageRMS_B < noPowerCutoff) Data->VoltageRMS_B = 0.0;
-    if (Data->VoltageRMS_C < noPowerCutoff) Data->VoltageRMS_C = 0.0;
+    if (Data->VoltageRMS_A < noVoltageCutoff) Data->VoltageRMS_A = 0.0;
+    if (Data->VoltageRMS_B < noVoltageCutoff) Data->VoltageRMS_B = 0.0;
+    if (Data->VoltageRMS_C < noVoltageCutoff) Data->VoltageRMS_C = 0.0;
     return micros() - time;
 }
 
@@ -438,9 +438,9 @@ uint32_t ADE9000::ReadFundCurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION;
     Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION;
     Data->CurrentRMS_N = 0;
-    if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
-    if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
-    if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
+    if (Data->CurrentRMS_A < noCurrentCutoff) Data->CurrentRMS_A = 0.0;
+    if (Data->CurrentRMS_B < noCurrentCutoff) Data->CurrentRMS_B = 0.0;
+    if (Data->CurrentRMS_C < noCurrentCutoff) Data->CurrentRMS_C = 0.0;
     return micros() - time;
 }
 
@@ -453,9 +453,9 @@ uint32_t ADE9000::ReadHalfVoltageRMSRegs(VoltageRMSRegs* Data)
     Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
     Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
     Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
-    if (Data->VoltageRMS_A < noPowerCutoff) Data->VoltageRMS_A = 0.0;
-    if (Data->VoltageRMS_B < noPowerCutoff) Data->VoltageRMS_B = 0.0;
-    if (Data->VoltageRMS_C < noPowerCutoff) Data->VoltageRMS_C = 0.0;
+    if (Data->VoltageRMS_A < noVoltageCutoff) Data->VoltageRMS_A = 0.0;
+    if (Data->VoltageRMS_B < noVoltageCutoff) Data->VoltageRMS_B = 0.0;
+    if (Data->VoltageRMS_C < noVoltageCutoff) Data->VoltageRMS_C = 0.0;
     return micros() - time;
 }
 
@@ -470,10 +470,10 @@ uint32_t ADE9000::ReadHalfCurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION;
     Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION;
     Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION;
-    if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
-    if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
-    if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
-    if (Data->CurrentRMS_N < noPowerCutoff) Data->CurrentRMS_N = 0.0;
+    if (Data->CurrentRMS_A < noCurrentCutoff) Data->CurrentRMS_A = 0.0;
+    if (Data->CurrentRMS_B < noCurrentCutoff) Data->CurrentRMS_B = 0.0;
+    if (Data->CurrentRMS_C < noCurrentCutoff) Data->CurrentRMS_C = 0.0;
+    if (Data->CurrentRMS_N < noCurrentCutoff) Data->CurrentRMS_N = 0.0;
     return micros() - time;
 }
 
@@ -486,9 +486,9 @@ uint32_t ADE9000::ReadTen12VoltageRMSRegs(VoltageRMSRegs* Data)
     Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION;
     Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION;
     Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION;
-    if (Data->VoltageRMS_A < noPowerCutoff) Data->VoltageRMS_A = 0.0;
-    if (Data->VoltageRMS_B < noPowerCutoff) Data->VoltageRMS_B = 0.0;
-    if (Data->VoltageRMS_C < noPowerCutoff) Data->VoltageRMS_C = 0.0;
+    if (Data->VoltageRMS_A < noVoltageCutoff) Data->VoltageRMS_A = 0.0;
+    if (Data->VoltageRMS_B < noVoltageCutoff) Data->VoltageRMS_B = 0.0;
+    if (Data->VoltageRMS_C < noVoltageCutoff) Data->VoltageRMS_C = 0.0;
     return micros() - time;
 }
 
@@ -503,10 +503,10 @@ uint32_t ADE9000::ReadTen12CurrentRMSRegs(CurrentRMSRegs* Data)
     Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / (float)ONE_MILLION;
     Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / (float)ONE_MILLION;
     Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / (float)ONE_MILLION;
-    if (Data->CurrentRMS_A < noPowerCutoff) Data->CurrentRMS_A = 0.0;
-    if (Data->CurrentRMS_B < noPowerCutoff) Data->CurrentRMS_B = 0.0;
-    if (Data->CurrentRMS_C < noPowerCutoff) Data->CurrentRMS_C = 0.0;
-    if (Data->CurrentRMS_N < noPowerCutoff) Data->CurrentRMS_N = 0.0;
+    if (Data->CurrentRMS_A < noCurrentCutoff) Data->CurrentRMS_A = 0.0;
+    if (Data->CurrentRMS_B < noCurrentCutoff) Data->CurrentRMS_B = 0.0;
+    if (Data->CurrentRMS_C < noCurrentCutoff) Data->CurrentRMS_C = 0.0;
+    if (Data->CurrentRMS_N < noCurrentCutoff) Data->CurrentRMS_N = 0.0;
     return micros() - time;
 }
 
@@ -576,43 +576,44 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VB)); // Read ANGLE register
     Data->AngleReg_VA_VB = tempReg;
     tempValue = tempReg * mulConstant; // Calculate Angle in degrees
-    Data->AngleValue_VA_VB = constrain(tempValue, 0, 360);
+    Data->AngleValue_VA_VB = constrain(tempValue, -3600, 3600);
+
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_VC));
     Data->AngleReg_VB_VC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_VB_VC = constrain(tempValue, 0, 360);
+    Data->AngleValue_VB_VC = constrain(tempValue, -3600, 3600);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VC));
     Data->AngleReg_VA_VC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_VA_VC = constrain(tempValue, 0, 360);
+    Data->AngleValue_VA_VC = constrain(tempValue, -3600, 3600);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_IA));
     Data->AngleReg_VA_IA = tempReg;
     tempValue = tempReg * mulConstant;
     if (tempValue > 180) tempValue = tempValue - 360;
-    Data->AngleValue_VA_IA = constrain(tempValue, 0, 360);
+    Data->AngleValue_VA_IA = constrain(tempValue, -3600, 3600);
 
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_IB));
     Data->AngleReg_VB_IB = tempReg;
     tempValue = tempReg * mulConstant;
     if (tempValue > 180) tempValue = tempValue - 360;
-    Data->AngleValue_VB_IB = constrain(tempValue, 0, 360);
+    Data->AngleValue_VB_IB = constrain(tempValue, -3600, 3600);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VC_IC));
     Data->AngleReg_VC_IC = tempReg;
     tempValue = tempReg * mulConstant;
     if (tempValue > 180) tempValue = tempValue - 360;
-    Data->AngleValue_VC_IC = constrain(tempValue, 0, 360);
+    Data->AngleValue_VC_IC = constrain(tempValue, -3600, 3600);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IB));
     Data->AngleReg_IA_IB = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IB = constrain(tempValue, 0, 360);
+    Data->AngleValue_IA_IB = constrain(tempValue, -3600, 3600);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IB_IC));
     Data->AngleReg_IB_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IB_IC = constrain(tempValue, 0, 360);
+    Data->AngleValue_IB_IC = constrain(tempValue, -3600, 3600);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IC));
     Data->AngleReg_IA_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IC = constrain(tempValue, 0, 360);
+    Data->AngleValue_IA_IC = constrain(tempValue, -3600, 3600);
     return micros() - time;
 }
 uint32_t ADE9000::ReadVoltageTHDRegsnValues(VoltageTHDRegs* Data)

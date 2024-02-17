@@ -587,6 +587,7 @@ void Draw_CalibrateCorriente()
         lcd.printStr(c2, l1, ade.format(info.values.A, 6, "g", formatNoPrefix).c_str());
         lcd.printStr(c2, l2, ade.format(info.values.B, 6, "g", formatNoPrefix).c_str());
         lcd.printStr(c2, l3, ade.format(info.values.C, 6, "g", formatNoPrefix).c_str());
+        lcd.printStr(c3 + 12, l1, ade.format(Meter.average.Irms / 5.0, 5, "A").c_str());
         break;
       }
 
