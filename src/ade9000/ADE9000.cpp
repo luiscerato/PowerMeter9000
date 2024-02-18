@@ -92,14 +92,51 @@ void ADE9000::initADE9000(uint8_t clkPin, uint8_t misoPin, uint8_t mosiPin)
     digitalWrite(_chipSelect_Pin, HIGH);                                // Set Chip select pin high
 }
 
+
+void ADE9000::setupADE9000(void)
+{
+    // SPI_Write_16(ADDR_PGA_GAIN, ADE9000_PGA_GAIN1);
+    SPI_Write_16(ADDR_PGA_GAIN, 0x0055);
+    SPI_Write_32(ADDR_ADC_REDIRECT, ADC_REDIRECT);      //Load adc redirect configuration. Call ADC_redirect before thi function to change channels.
+    SPI_Write_32(ADDR_CONFIG0, ADE9000_CONFIG0);
+    SPI_Write_16(ADDR_CONFIG1, ADE9000_CONFIG1);
+    SPI_Write_16(ADDR_CONFIG2, ADE9000_CONFIG2);
+    SPI_Write_16(ADDR_CONFIG3, ADE9000_CONFIG3);
+    SPI_Write_16(ADDR_ACCMODE, ADE9000_ACCMODE);
+    SPI_Write_16(ADDR_TEMP_CFG, ADE9000_TEMP_CFG);
+    SPI_Write_16(ADDR_ZX_LP_SEL, ADE9000_ZX_LP_SEL);
+    SPI_Write_32(ADDR_MASK0, ADE9000_MASK0);
+    SPI_Write_32(ADDR_MASK1, ADE9000_MASK1);
+    SPI_Write_32(ADDR_EVENT_MASK, ADE9000_EVENT_MASK);
+    SPI_Write_16(ADDR_WFB_CFG, ADE9000_WFB_CFG);
+    SPI_Write_32(ADDR_VLEVEL, ADE9000_VLEVEL);
+    SPI_Write_32(ADDR_DICOEFF, ADE9000_DICOEFF);
+    SPI_Write_32(ADDR_CFMODE, ADE9000_CFMODE);
+    SPI_Write_32(ADDR_COMPMODE, ADE9000_COMPMODE);
+
+    loadCalibration();                          //Load calibration data from flash memory
+
+    SPI_Write_16(ADDR_RUN, ADE9000_RUN_ON);    //DSP ON
+
+
+    Serial.printf("ADE9000 rango de entradas:\nVoltaje maximo: % .3fV\nCorriente maxima : % .3fA\nPotencia maxima: %.2fW\n",
+        getMaxInputVoltage(), getMaxInputCurrent(), getMaxInputPower());
+}
+
+
 void ADE9000::loadCalibration()
 {
     preferences.begin("ADE9000", false);
 
-    SPI_Write_32(ADDR_APHCAL0, 0xFBFC9813);
-    SPI_Write_32(ADDR_BPHCAL0, 0xFC1BC118);
-    SPI_Write_32(ADDR_CPHCAL0, 0xFBDE7F6F);
-    SPI_Write_32(ADDR_NPHCAL, 0xFBFCF2DE);
+    // SPI_Write_32(ADDR_APHCAL0, 0xFBFC9813);
+    // SPI_Write_32(ADDR_BPHCAL0, 0xFC1BC118);
+    // SPI_Write_32(ADDR_CPHCAL0, 0xFBDE7F6F);
+    // SPI_Write_32(ADDR_NPHCAL, 0xFBFCF2DE);
+
+    SPI_Write_32(ADDR_APHCAL0, preferences.getInt("APHCAL0", 0));
+    SPI_Write_32(ADDR_BPHCAL0, preferences.getInt("BPHCAL0", 0));
+    SPI_Write_32(ADDR_CPHCAL0, preferences.getInt("CPHCAL0", 0));
+    SPI_Write_32(ADDR_NPHCAL, preferences.getInt("NPHCAL", 0));
 
     //Cargar current gain
     SPI_Write_32(ADDR_AIGAIN, preferences.getInt("AIGAIN", 0));
@@ -154,36 +191,6 @@ void ADE9000::loadCalibration()
 
     SPI_Write_16(ADDR_EGY_TIME, ADE9000_EGY_TIME);
     SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
-}
-
-
-void ADE9000::setupADE9000(void)
-{
-    SPI_Write_16(ADDR_PGA_GAIN, ADE9000_PGA_GAIN1);
-    SPI_Write_32(ADDR_ADC_REDIRECT, ADC_REDIRECT);      //Load adc redirect configuration. Call ADC_redirect before thi function to change channels.
-    SPI_Write_32(ADDR_CONFIG0, ADE9000_CONFIG0);
-    SPI_Write_16(ADDR_CONFIG1, ADE9000_CONFIG1);
-    SPI_Write_16(ADDR_CONFIG2, ADE9000_CONFIG2);
-    SPI_Write_16(ADDR_CONFIG3, ADE9000_CONFIG3);
-    SPI_Write_16(ADDR_ACCMODE, ADE9000_ACCMODE);
-    SPI_Write_16(ADDR_TEMP_CFG, ADE9000_TEMP_CFG);
-    SPI_Write_16(ADDR_ZX_LP_SEL, ADE9000_ZX_LP_SEL);
-    SPI_Write_32(ADDR_MASK0, ADE9000_MASK0);
-    SPI_Write_32(ADDR_MASK1, ADE9000_MASK1);
-    SPI_Write_32(ADDR_EVENT_MASK, ADE9000_EVENT_MASK);
-    SPI_Write_16(ADDR_WFB_CFG, ADE9000_WFB_CFG);
-    SPI_Write_32(ADDR_VLEVEL, ADE9000_VLEVEL);
-    SPI_Write_32(ADDR_DICOEFF, ADE9000_DICOEFF);
-    SPI_Write_32(ADDR_CFMODE, ADE9000_CFMODE);
-    SPI_Write_32(ADDR_COMPMODE, ADE9000_COMPMODE);
-
-    loadCalibration();                          //Load calibration data from flash memory
-
-    SPI_Write_16(ADDR_RUN, ADE9000_RUN_ON);    //DSP ON
-
-
-    Serial.printf("ADE9000 rango de entradas:\nVoltaje maximo: % .3fV\nCorriente maxima : % .3fA\nPotencia maxima: %.2fW\n",
-        getMaxInputVoltage(), getMaxInputCurrent(), getMaxInputPower());
 }
 
 void ADE9000::resetADE9000(uint8_t ADE9000_RESET_PIN)

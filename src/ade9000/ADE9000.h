@@ -54,12 +54,24 @@ extern const uint8_t ACCUMULATION_TIME;
 #define formatRemoveSpaces	0x40000		//No agrega espacios para completar el ancho indicado
 
 /****************************************************************************************************************
+ Current PGA gain. Uncomment the needed one
+****************************************************************************************************************/
+// #define ADE9000_CURRENT_PGA_GAIN 0x1	//PGA gain of x1
+#define ADE9000_CURRENT_PGA_GAIN 0x2	//PGA gain of x2
+// #define ADE9000_CURRENT_PGA_GAIN 0x4	//PGA gain of x4
+
+//PGA GAIN settings value. 
+#define ADE9000_CURRENT_PGA ((ADE9000_CURRENT_PGA_GAIN<6)|(ADE9000_CURRENT_PGA_GAIN<4)|(ADE9000_CURRENT_PGA_GAIN<2) | ADE9000_CURRENT_PGA_GAIN)
+/****************************************************************************************************************
  Definitions
 ****************************************************************************************************************/
 /*Configuration registers*/
 #define ADE9000_PGA_GAIN1 0x0000 /* PGA1@0x0000. Gain of all channels=1 */
 #define ADE9000_PGA_GAIN2 0x1555 /* PGA2@0x1555. Gain of all channels=2 */
 #define ADE9000_PGA_GAIN4 0x3FFF /* PGA4@0x3FFF. Gain of all channels=4 */
+
+
+#define ADE9000_PGA_GAIN ADE9000_CURRENT_PGA /* PGA1@0x0000. Gain of all channels=1 */
 
 #define ADE9000_CONFIG0 0x00000000    /* Integrator disabled */
 #define ADE9000_CONFIG1 0x0002        /* CF3/ZX pin outputs Zero crossing */
@@ -148,7 +160,7 @@ inline const char* calibrationStepString(calibrationStep_t& step)
 	switch (step) {
 	case calNone: return "none";
 	case calCurrentGain: return "Ganancia Corriente";
-	case calPhaseGain: return "Ganancia fase";
+	case calPhaseGain: return "Ajuste de fase";
 	case calVoltageGain: return "Ganancia Voltaje";
 	case calCurrentOffset: return "Offset Corriente";
 	case calVoltageOffset: return "Offset Voltaje";
@@ -194,7 +206,7 @@ It is the voltage at the ADC input pins per input Voltage(V)(Volts/Volts)
 E.g. The defaul atteunation factor on board is 801.
 Voltage transfer function = 1/801= 0.001248 ~=0.00125
 ****************************************************************************************************************/
-#define CURRENT_TRANSFER_FUNCTION 1.0 / TURNS_RATIO_TRANSFORMER *BURDEN_RESISTOR //The RMS voltage at the ADC input pins per input RMS current  (V/A).(2500:1-->0.00408 with default burden resistors)
+#define CURRENT_TRANSFER_FUNCTION 1.0 / TURNS_RATIO_TRANSFORMER * BURDEN_RESISTOR * ADE9000_CURRENT_PGA_GAIN //The RMS voltage at the ADC input pins per input RMS current  (V/A).(2500:1-->0.00408 with default burden resistors)
 #define VOLTAGE_TRANSFER_FUNCTION 1.0 / ATTEUNATION_FACTOR                       //The RMS voltage at the ADC input pins per input RMS voltage (V/V)
 
 /****************************************************************************************************************

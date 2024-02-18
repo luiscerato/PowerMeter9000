@@ -30,16 +30,35 @@ void MeterInit()
 	ade.ADC_Redirect(adeChannel_VA, adeChannel_VC);
 	ade.ADC_Redirect(adeChannel_VC, adeChannel_VA);
 	ade.setupADE9000();              // Initialize ADE9000 registers according to values in ADE9000API.h
-		//5 vueltas de cable por cada trafo
+	//5 vueltas de cable por cada trafo
 	ade.setNoPowerCutoff(0.5);		//0.5mA es 0A
 }
 
 void MeterLoop()
 {
-	static uint32_t rms = 0, avg = 0, power = 0, thd = 0, angles = 0, energy_time = 0;
+	static uint32_t fast = 0, rms = 0, power = 0, thd = 0, angles = 0, energy_time = 0;
 
-	if (millis() - rms > 39) {	//Actualizar lecturas rms rápidas 
+	if (millis() - rms > 199) {
 		rms = millis();
+
+		VoltageRMSRegs volts; CurrentRMSRegs curr;
+		ade.readVoltageRMSRegs(&volts);
+		ade.readCurrentRMSRegs(&curr);
+
+		Meter.phaseR.Vrms = volts.VoltageRMS_A;
+		Meter.phaseS.Vrms = volts.VoltageRMS_B;
+		Meter.phaseT.Vrms = volts.VoltageRMS_C;
+		Meter.phaseR.Irms = curr.CurrentRMS_A;
+		Meter.phaseS.Irms = curr.CurrentRMS_B;
+		Meter.phaseT.Irms = curr.CurrentRMS_C;
+		Meter.neutral.Irms = curr.CurrentRMS_N;
+
+		Meter.average.Vrms = (Meter.phaseR.Vrms + Meter.phaseS.Vrms + Meter.phaseT.Vrms) / 3.0;
+		Meter.average.Irms = (Meter.phaseR.Irms + Meter.phaseS.Irms + Meter.phaseT.Irms) / 3.0;
+	}
+
+	if (millis() - fast > 39) {	//Actualizar lecturas rms rápidas 
+		fast = millis();
 
 		VoltageRMSRegs volts; CurrentRMSRegs curr;
 
@@ -56,25 +75,6 @@ void MeterLoop()
 
 		Meter.average.FastVrms = (Meter.phaseR.FastVrms + Meter.phaseS.FastVrms + Meter.phaseT.FastVrms) / 3.0;
 		Meter.average.FastIrms = (Meter.phaseR.FastIrms + Meter.phaseS.FastIrms + Meter.phaseT.FastIrms) / 3.0;
-	}
-
-	if (millis() - avg > 199) {
-		avg = millis();
-
-		VoltageRMSRegs volts; CurrentRMSRegs curr;
-		ade.readVoltageRMSRegs(&volts);
-		ade.readCurrentRMSRegs(&curr);
-
-		Meter.phaseR.Vrms = volts.VoltageRMS_A;
-		Meter.phaseS.Vrms = volts.VoltageRMS_B;
-		Meter.phaseT.Vrms = volts.VoltageRMS_C;
-		Meter.phaseR.Irms = curr.CurrentRMS_A;
-		Meter.phaseS.Irms = curr.CurrentRMS_B;
-		Meter.phaseT.Irms = curr.CurrentRMS_C;
-		Meter.neutral.Irms = curr.CurrentRMS_N;
-		
-		Meter.average.Vrms = (Meter.phaseR.Vrms + Meter.phaseS.Vrms + Meter.phaseT.Vrms) / 3.0;
-		Meter.average.Irms = (Meter.phaseR.Irms + Meter.phaseS.Irms + Meter.phaseT.Irms) / 3.0;
 	}
 
 	if (millis() - power > 499) {
