@@ -80,7 +80,7 @@ extern const uint8_t ACCUMULATION_TIME;
 #define ADE9000_ACCMODE 0x0000        /* 50Hz operation, 3P4W Wye configuration, signed accumulation Clear bit 8 i.e. ACCMODE=0x00xx for 50Hz operation ACCMODE=0x0x9x for 3Wire delta when phase B is used as reference */
 #define ADE9000_TEMP_CFG 0x000C       /* Temperature sensor enabled */
 #define ADE9000_ZX_LP_SEL 0x001E      /* Line period and zero crossing obtained from combined signals VA,VB and VC */
-#define ADE9000_MASK0 0x00000001      /* Enable EGYRDY interrupt */ 
+#define ADE9000_MASK0 0x00020001      /* Enable EGYRDY interrupt, PAGE_FULL=1 Set this bit to enable an interrupt when a page enabled in the WFB_PG_IRQEN register is filled.*/
 #define ADE9000_MASK1 0x00000000      /* MASK1 interrupts disabled*/
 #define ADE9000_EVENT_MASK 0x00000000 /* Events disabled */
 #define ADE9000_VLEVEL 0x0022EA28     /* Assuming Vnom=1/2 of full scale. Refer Technical reference manual for detailed calculations.*/
@@ -607,7 +607,7 @@ public:
 		   Read_Element_Length is the number of data sets to read. If the starting address is 0x800, the maximum sets to read are 512.
 	Output: Resampled data returned in structure
 	*/
-	void SPI_Burst_Read_Resampled_Wfb(uint16_t Address, uint16_t Read_Element_Length, ResampledWfbData* ResampledData);
+	void SPI_Burst_Read_FixedDT_Buffer(uint16_t Address, uint16_t regCount, int32_t* buffer);
 
 	/*----- ADE9000 Calculated Parameter Read Functions -----*/
 
@@ -813,6 +813,14 @@ public:
 	float getNoPowerCutoff() {
 		return noPowerCutoff;
 	};
+
+	uint32_t readStatus0() {
+		return SPI_Read_32(ADDR_STATUS0);
+	};
+
+	void clearStatusBit0(uint32_t mask) {
+		SPI_Write_32(ADDR_STATUS0, mask);
+	}
 
 private:
 	Preferences preferences;		//Configuracion desde flash

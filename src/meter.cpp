@@ -1,6 +1,8 @@
 #include "meter.h"
 #include "ade9000/ADE9000RegMap.h"
 #include "pins.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 
 ADE9000 ade(15000000, pinAdeSS, VSPI);
@@ -18,6 +20,12 @@ const uint8_t ACCUMULATION_TIME = 1;/* Accumulation time in seconds when EGY_TIM
 meterValues Meter;
 struct TotalEnergyVals MeterEnergy;
 
+TaskHandle_t meterHandle = NULL;
+void MeterTask(void* arg);
+void readWaveBuffer();
+
+int32_t readBuffer[1024];		//Buffer temporal para leer los datos del wavebuffer (8ch*128 samples)
+
 void MeterInit()
 {
 	Serial.println("Iniciando ADE9000!");
@@ -32,6 +40,44 @@ void MeterInit()
 	ade.setupADE9000();              // Initialize ADE9000 registers according to values in ADE9000API.h
 	//5 vueltas de cable por cada trafo
 	ade.setNoPowerCutoff(0.5);		//0.5mA es 0A
+
+	xTaskCreatePinnedToCore(MeterTask, "meterTask", 8192, NULL, 10, &meterHandle, APP_CPU_NUM);
+}
+
+void MeterTask(void* arg)
+{
+	uint32_t lastTime = 0;
+	while (1) {
+		if (digitalRead(pinAdeInt0) == 0) {		//Leer que causó la interrupcion
+			uint32_t t = micros() - lastTime;
+			lastTime = micros();
+
+			uint32_t status0 = ade.readStatus0();
+			Serial.printf("Status 0= 0x%X. time: %uus\n", status0, t);
+			if (status0 & 0x20000) {
+				ade.clearStatusBit0(0x20000);
+				readWaveBuffer();
+			}
+		}
+		MeterLoop();
+		vTaskDelay(2 / portTICK_RATE_MS);
+	}
+}
+
+void readWaveBuffer()
+{
+	uint32_t time = micros();
+	int32_t lastPage = ade.SPI_Read_16(ADDR_WFB_TRG_STAT);
+	lastPage >>= 12;
+
+	if (lastPage >= 14 || lastPage < 3)		//Se terminó de escribir la página 15. leer de la 8 a la 15
+		lastPage = 8;
+	else
+		lastPage = 0;
+	//ade.SPI_Burst_Read_FixedDT_Buffer(lastPage * 128, 32, readBuffer);
+	time = micros() - time;
+
+	Serial.printf("Leyendo pagina %d... time: %uus\n", lastPage, time);
 }
 
 void MeterLoop()
@@ -104,7 +150,6 @@ void MeterLoop()
 		Meter.power.Watt = Meter.phaseR.Watt + Meter.phaseS.Watt + Meter.phaseT.Watt;
 		Meter.power.VAR = Meter.phaseR.VAR + Meter.phaseS.VAR + Meter.phaseT.VAR;
 		Meter.power.VA = Meter.phaseR.VA + Meter.phaseS.VA + Meter.phaseT.VA;
-
 
 		Meter.average.Watt = (Meter.phaseR.Watt + Meter.phaseS.Watt + Meter.phaseT.Watt) / 3.0;
 		Meter.average.VAR = (Meter.phaseR.VAR + Meter.phaseS.VAR + Meter.phaseT.VAR) / 3.0;

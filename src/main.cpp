@@ -153,7 +153,7 @@ void loop(void)
 {
   Keyboard.scan();
 
-  MeterLoop();
+  //MeterLoop();
 
   UI();
   // ledcWriteNote(4, NOTE_A, 4);
