@@ -290,14 +290,17 @@ void ADE9000::SPI_Burst_Read_FixedDT_Buffer(uint16_t Address, uint16_t regCount,
     uint16_t temp;
     uint16_t i;
 
+    if ((Address + regCount) > 0xFFF) return;
+
     port.beginTransaction(SPISettings(_SPI_speed, MSBFIRST, SPI_MODE0)); //Setup SPI parameters
     digitalWrite(_chipSelect_Pin, LOW);
 
-    SPI.transfer16(((Address << 4) & 0xFFF0) + 8);  //Send the starting address
+    // port.transfer16(((Address << 4) & 0xFFF0) + 8);  //Send the starting address
+    port.transfer16(((0x800 + Address) << 4) +8);  //Send the starting address
 
     //burst read the data upto Read_Length 
     for (i = 0;i < regCount;i++) {
-        *buffer++ = SPI.transfer32(0);
+        *buffer++ = port.transfer32(0);
     }
     digitalWrite(_chipSelect_Pin, HIGH);
     port.endTransaction();

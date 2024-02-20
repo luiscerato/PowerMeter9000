@@ -47,6 +47,8 @@ void MeterInit()
 void MeterTask(void* arg)
 {
 	uint32_t lastTime = 0;
+	while (millis() < 250);	//Esperar que todo esté listo
+
 	while (1) {
 		if (digitalRead(pinAdeInt0) == 0) {		//Leer que causó la interrupcion
 			uint32_t t = micros() - lastTime;
@@ -57,6 +59,11 @@ void MeterTask(void* arg)
 			if (status0 & 0x20000) {
 				ade.clearStatusBit0(0x20000);
 				readWaveBuffer();
+
+				for (int32_t x = 0; x < 128; x++) {
+					Serial.printf("%d     %d\n", readBuffer[x*7], readBuffer[x*7+1]);
+					
+				}
 			}
 		}
 		MeterLoop();
@@ -74,10 +81,11 @@ void readWaveBuffer()
 		lastPage = 8;
 	else
 		lastPage = 0;
-	//ade.SPI_Burst_Read_FixedDT_Buffer(lastPage * 128, 32, readBuffer);
+	ade.SPI_Burst_Read_FixedDT_Buffer(lastPage * 128, 1024, readBuffer);
 	time = micros() - time;
 
 	Serial.printf("Leyendo pagina %d... time: %uus\n", lastPage, time);
+
 }
 
 void MeterLoop()

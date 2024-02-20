@@ -138,11 +138,11 @@ void setup(void)
   battery_charging.setInput_Current_Limit(false);
   battery_charging.setChargeEnable(true);
 
-  MeterInit();
-
   Serial.println("Set up finished");
 
   testFormat();
+
+  MeterInit();
 }
 
 
@@ -421,7 +421,7 @@ void Draw_Angulos()
     Draw_Title("ANGULOS");
 
     AngleRegs angles;
-    ade.readAngleRegsnValues(&angles);
+    // ade.readAngleRegsnValues(&angles);
 
     lcd.setFont(Small5x7PLBold);
     snprintf(str, sizeof(str), "R: %3.2f S:%3.2f T:%3.2f", angles.AngleValue_VA_IA, angles.AngleValue_VB_IB, angles.AngleValue_VC_IC);
@@ -462,9 +462,9 @@ void Draw_CalibrarFase()
   if (millis() - update > 999) {
     update = millis();
 
-    r = ade.phaseCalibrate('R');
-    s = ade.phaseCalibrate('S');
-    t = ade.phaseCalibrate('T');
+    // r = ade.phaseCalibrate('R');
+    // s = ade.phaseCalibrate('S');
+    // t = ade.phaseCalibrate('T');
     n.angle = (r.angle + s.angle + t.angle) / 3;
     n.factor = ((int64_t)r.factor + (int64_t)s.factor + (int64_t)t.factor) / 3LL;
 
