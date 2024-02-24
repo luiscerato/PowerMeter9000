@@ -1,38 +1,32 @@
 #include "Arduino.h"
 #include "ESPAsyncWebServer.h"
 #include "SPIFFS.h"
+#include "webserver.h"
 
 
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
 // Create a WebSocket object
-AsyncWebSocket ws("/ws");
+AsyncWebSocket scopeWS("/ws");
 AsyncWebSocket remoteScreen("/screen");
 
+WSeventFunctionCallback meterEvents = nullptr, screenEvents = nullptr;
 
-
-void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len) {
-	switch (type) {
-	case WS_EVT_CONNECT:
-		Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
-		break;
-	case WS_EVT_DISCONNECT:
-		Serial.printf("WebSocket client #%u disconnected\n", client->id());
-		break;
-	case WS_EVT_DATA:
-		//handleWebSocketMessage(arg, data, len);
-		break;
-	case WS_EVT_PONG:
-	case WS_EVT_ERROR:
-		break;
-	}
+void webServerSetMeterEvents(WSeventFunctionCallback func)
+{
+	if (func != nullptr)
+		meterEvents = func;
 }
 
+AsyncWebSocket* webServerGetMeterWS()
+{
+	return &scopeWS;
+}
 
 void Init_WebServer()
 {
-	ws.onEvent(onEvent);
-	server.addHandler(&ws);
+	scopeWS.onEvent(meterEvents);
+	server.addHandler(&scopeWS);
 	server.addHandler(&remoteScreen);
 
 	// Web Server Root URL
@@ -47,11 +41,11 @@ void Init_WebServer()
 	DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT");
 	DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
 
-	// server.onNotFound([](AsyncWebServerRequest* request) {
-	//   request->send(404, "text/plain", "Page Not Found");
+	server.onNotFound([](AsyncWebServerRequest* request) {
+		request->send(404, "text/plain", "Page Not Found");
 
-	//   Serial.printf("File not found\n");
-	//   });
+		Serial.printf("File not found\n");
+		});
 
 	//Start server
 	server.begin();

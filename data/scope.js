@@ -14,13 +14,13 @@ Scope.Data = {
     window: 320,
     waves: [
         //Datos presentes en el gráfico
-        {id: "ir", unit: "A", visible: true, name: "Corriente R", gain: 0.0732, data: [], max: 1, min: -1, color: "#804000"},
-        {id: "vr", unit: "V", visible: true, name: "Voltaje R", gain: 0.244, data: [], max: 1, min: -1, color: "#ff9933"},
-        {id: "is", unit: "A", visible: true, name: "Corriente S", gain: 0.0732, data: [], max: 1, min: -1, color: "#000000"},
-        {id: "vs", unit: "V", visible: true, name: "Voltaje S", gain: 0.244, data: [], max: 1, min: -1, color: "#999999"},
-        {id: "it", unit: "A", visible: true, name: "Corriente T", gain: 0.0732, data: [], max: 1, min: -1, color: "#cc0000"},
-        {id: "vt", unit: "V", visible: true, name: "Voltaje T", gain: 0.244, data: [], max: 1, min: -1, color: "#ff8080"},
-        {id: "in", unit: "A", visible: true, name: "Corriente Neutro", gain: 0.0732, data: [], max: 1, min: -1, color: "#0000cc"},
+        {id: "ir", unit: "A", visible: true, name: "Corriente R", gain: 1.0, data: [], max: 1, min: -1, color: "#804000"},
+        {id: "vr", unit: "V", visible: true, name: "Voltaje R", gain: 1.0, data: [], max: 1, min: -1, color: "#ff9933"},
+        {id: "is", unit: "A", visible: true, name: "Corriente S", gain: 1.0, data: [], max: 1, min: -1, color: "#000000"},
+        {id: "vs", unit: "V", visible: true, name: "Voltaje S", gain: 1.0, data: [], max: 1, min: -1, color: "#999999"},
+        {id: "it", unit: "A", visible: true, name: "Corriente T", gain: 1.0, data: [], max: 1, min: -1, color: "#cc0000"},
+        {id: "vt", unit: "V", visible: true, name: "Voltaje T", gain: 1.0, data: [], max: 1, min: -1, color: "#ff8080"},
+        {id: "in", unit: "A", visible: true, name: "Corriente Neutro", gain: 1.0, data: [], max: 1, min: -1, color: "#0000cc"},
     ],
 };
 
@@ -136,12 +136,27 @@ Scope.setOptions = function (options) {
     if (options.hasOwnProperty("corrDiv")) {
         let div = limitarValor(options.corrDiv, 0, scaleCorriente.length - 1);
         if (isNaN(div)) console.warn(`corrDiv no tiene un valor correcto, debe ser Number() ${div}`);
-        else Scope.Data.Scale.Current = scaleCorriente[div];
+        else {
+            Scope.Data.Scale.Current = scaleCorriente[div];
+            let scale = (scaleCorriente[div] * 10) / 4096;
+            Scope.websocket.send("scaleCurrent=" + scale);
+            Scope.Data.waves[0].gain = scale;
+            Scope.Data.waves[2].gain = scale;
+            Scope.Data.waves[4].gain = scale;
+            Scope.Data.waves[6].gain = scale;
+        }
     }
     if (options.hasOwnProperty("voltDiv")) {
         let div = limitarValor(options.voltDiv, 0, scaleVoltaje.length - 1);
         if (isNaN(div)) console.warn(`voltDiv no tiene un valor correcto, debe ser Number() ${div}`);
-        else Scope.Data.Scale.Voltage = scaleVoltaje[div];
+        else {
+            Scope.Data.Scale.Voltage = scaleVoltaje[div];
+            let scale = (scaleVoltaje[div] * 10) / 4096;
+            Scope.websocket.send("scaleVoltage=" + scale);
+            Scope.Data.waves[1].gain = scale;
+            Scope.Data.waves[3].gain = scale;
+            Scope.Data.waves[5].gain = scale;
+        }
     }
     if (options.hasOwnProperty("timeDiv")) {
         let div = limitarValor(options.timeDiv, 0, scaleTiempo.length - 1);

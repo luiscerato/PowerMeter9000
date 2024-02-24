@@ -3,6 +3,7 @@
 #include "pins.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "webserver.h"
 
 
 ADE9000 ade(15000000, pinAdeSS, VSPI);
@@ -21,10 +22,12 @@ meterValues Meter;
 struct TotalEnergyVals MeterEnergy;
 
 TaskHandle_t meterHandle = NULL;
-void MeterTask(void* arg);
-void readWaveBuffer();
 
-int32_t readBuffer[1024];		//Buffer temporal para leer los datos del wavebuffer (8ch*128 samples)
+WFBFixedDataRate_t readBuffer[WFB_SAMPLES_PER_CHANNEL / 2];		//Buffer temporal para leer los datos del wavebuffer (7ch*128 samples)
+uint8_t outputSamples[8064];	//Buffer para 96ms de datos de 12 bits. 96ms ->768 samples por canal. 768*7*(12/8) => 8064 bytes
+
+scopeInfo_t scopeInfo;
+
 
 void MeterInit()
 {
@@ -41,13 +44,24 @@ void MeterInit()
 	//5 vueltas de cable por cada trafo
 	ade.setNoPowerCutoff(0.5);		//0.5mA es 0A
 
+	scopeInfo.currentScale = 1.0;
+	scopeInfo.voltageScale = 1.0;
+	scopeInfo.sampleFreq = 8000;
+	webServerSetMeterEvents(scopeWSevents);
+
 	xTaskCreatePinnedToCore(MeterTask, "meterTask", 8192, NULL, 10, &meterHandle, APP_CPU_NUM);
+}
+
+void MeterInitScope()
+{
+
 }
 
 void MeterTask(void* arg)
 {
-	uint32_t lastTime = 0;
+	uint32_t lastTime = 0, part = 0, timeRead, timeScale, timeCompress, timeSend;
 	while (millis() < 250);	//Esperar que todo esté listo
+
 
 	while (1) {
 		if (digitalRead(pinAdeInt0) == 0) {		//Leer que causó la interrupcion
@@ -55,15 +69,38 @@ void MeterTask(void* arg)
 			lastTime = micros();
 
 			uint32_t status0 = ade.readStatus0();
-			Serial.printf("Status 0= 0x%X. time: %uus\n", status0, t);
+			// Serial.printf("Status 0= 0x%X. time: %uus\n", status0, t);
 			if (status0 & 0x20000) {
 				ade.clearStatusBit0(0x20000);
-				readWaveBuffer();
 
-				for (int32_t x = 0; x < 128; x++) {
-					Serial.printf("%d     %d\n", readBuffer[x*7], readBuffer[x*7+1]);
-					
+				timeRead = micros();
+				readWaveBuffer();
+				timeRead = micros() - timeRead;
+
+				timeScale = micros();
+				scaleBuffer(readBuffer, WFB_SAMPLES_PER_CHANNEL / 2, scopeInfo.voltageScale, scopeInfo.currentScale);
+				timeScale = micros() - timeScale;
+
+				timeCompress = micros();
+				compressWaveBuffer12(readBuffer[0].buffer, outputSamples, part++);
+				timeCompress = micros() - timeCompress;
+
+				if (part == 6) {	//Buffer de 96ms comprimido listo para enviar
+					part = 0;
+
+					timeSend = micros();
+					size_t size = sizeof(outputSamples);
+					webServerGetMeterWS()->binaryAll(outputSamples, size);
+
+					timeSend = micros() - timeSend;
+
+					// Serial.printf("Tiempo de lectura: %uus, tiempo escalado: %uus, tiempo de compresion: %uus, tiempo de envio: %uus, free heap: %u bytes\n",
+					// 	timeRead, timeScale, timeCompress, timeSend, ESP.getFreeHeap());
 				}
+				// for (int32_t x = 0; x < 128; x++) {
+				// 	Serial.printf("%d     %d\n", readBuffer[x*7], readBuffer[x*7+1]);
+
+				// }
 			}
 		}
 		MeterLoop();
@@ -81,12 +118,117 @@ void readWaveBuffer()
 		lastPage = 8;
 	else
 		lastPage = 0;
-	ade.SPI_Burst_Read_FixedDT_Buffer(lastPage * 128, 1024, readBuffer);
+	ade.SPI_Burst_Read_FixedDT_Buffer(lastPage * 128, WFB_SAMPLES_PER_CHANNEL / 2, readBuffer);
 	time = micros() - time;
 
-	Serial.printf("Leyendo pagina %d... time: %uus\n", lastPage, time);
+	// Serial.printf("Leyendo pagina %d... time: %uus\n", lastPage, time);
 
 }
+
+/*
+	Escalar el buffer de entrada para ajustar un bit al valor indicado en voltage o current
+*/
+void scaleBuffer(WFBFixedDataRate_t* samplesBuffer, int32_t samplesCount, float voltage, float current)
+{
+	if (samplesCount < 0 || samplesCount >= WFB_SAMPLES_PER_CHANNEL) return;
+	if (voltage == 0.0 || current == 0.0) return;
+
+	current = 1.0 / (CAL_I_PCF * current) * 65536;
+	voltage = 1.0 / (CAL_V_PCF * voltage) * 65536;
+
+	for (uint32_t i = 0; i < samplesCount; i++) {
+		samplesBuffer[i].IA *= current;
+		samplesBuffer[i].IB *= current;
+		samplesBuffer[i].IC *= current;
+		samplesBuffer[i].IN *= current;
+		samplesBuffer[i].VA *= voltage;
+		samplesBuffer[i].VB *= voltage;
+		samplesBuffer[i].VC *= voltage;
+	}
+}
+
+void compressWaveBuffer12(int32_t* waveBufferRaw, uint8_t* waveBuffer, uint16_t part)
+{
+	uint32_t time = micros();
+	int32_t* raw = waveBufferRaw;
+	uint8_t* buf = &waveBuffer[part * 1344];  //2688 es la cantidad de bytes resultantes de comprimir el buffer de 1024 words 
+	// uint8_t* buf = &waveBuffer[part * 2688];  //2688 es la cantidad de bytes resultantes de comprimir el buffer de 2048 words 
+
+
+	int32_t val1, val2, k = 0, bytes = 0;
+	for (int32_t i = 0; i < 896; i++) {	//896 muestras en el buffer 128*7=896
+		/*
+			Como se comprime y se guardan 12 bits, se deben juntar de a 2 muestras y guardar 3 bytes
+			Siempre se guarda después de leer la segunda muestra
+		*/
+		if (!(k++ & 1)) {
+			val1 = (*raw++) >> 16;  //Comprimir a 12 bits
+			if (val1 > 2047) val1 = 2047;
+			else if (val1 < -2048) val1 = -2048;
+		}
+		else {  //Solo guardar cada 2 words leidas
+			val2 = (*raw++) >> 16;  //Comprimir a 12 bits
+			if (val2 > 2047) val2 = 2047;
+			else if (val2 < -2048) val2 = -2048;
+
+			uint8_t a, b, c;
+
+			*buf++ = a = val1 & 0xFF;
+			*buf++ = b = uint8_t((val1 & 0x0F00) >> 8) | uint8_t((val2 & 0x000F) << 4);
+			*buf++ = c = (val2 & 0xFF0) >> 4;
+			bytes += 3;
+		}
+	}
+
+	time = micros() - time;
+	// Serial.printf("Tiempo de compresion: %u us, k: %d, bytes: %d\n", time, k, bytes);
+}
+
+
+void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len)
+{
+	if (type == WS_EVT_CONNECT) {
+		Serial.printf("ws[%s][%u] connect\n", server->url(), client->id());
+		client->ping();
+		server->textAll("");
+	}
+	else if (type == WS_EVT_DISCONNECT) {
+		Serial.printf("ws[%s][%u] disconnect\n", server->url(), client->id());
+	}
+	else if (type == WS_EVT_ERROR) {
+		Serial.printf("ws[%s][%u] error(%u): %s\n", server->url(), client->id(), *((uint16_t*)arg), (char*)data);
+	}
+	else if (type == WS_EVT_PONG) {
+		Serial.printf("ws[%s][%u] pong[%u]: %s\n", server->url(), client->id(), len, (len) ? (char*)data : "");
+	}
+	else if (type == WS_EVT_DATA) {
+		AwsFrameInfo* info = (AwsFrameInfo*)arg;
+		String msg = "";
+		if (info->final && info->index == 0 && info->len == len) {
+			Serial.printf("ws[%s][%u] %s-message[%llu]: ", server->url(), client->id(), (info->opcode == WS_TEXT) ? "text" : "binary", info->len);
+
+			if (info->opcode == WS_TEXT) {
+				for (size_t i = 0; i < info->len; i++) {
+					msg += (char)data[i];
+				}
+			}
+			Serial.printf("%s\n", msg.c_str());
+			//Buscar informacion en el mensaje
+			float value;
+
+			if (sscanf((const char*)data, "scaleVoltage=%f", &value) == 1) {
+				if (value > 0.0 && value < 100.0) scopeInfo.voltageScale = value;
+				Serial.printf("Cambiando escala de voltaje a %.3f V/bit\n", value);
+			}
+			else if (sscanf((const char*)data, "scaleCurrent=%f", &value) == 1) {
+				if (value > 0.0 && value < 100.0) scopeInfo.currentScale = value;
+				Serial.printf("Cambiando escala de corriente a %.3f A/bit\n", value);
+			}
+		}
+	}
+}
+
+
 
 void MeterLoop()
 {

@@ -106,9 +106,11 @@ extern const uint8_t ACCUMULATION_TIME;
 /*Waveform buffer Settings*/
 #define ADE9000_WFB_CFG 0x1000     /* Neutral current samples enabled, Resampled data enabled */
 								   /* Burst all channels */
+
 #define WFB_ELEMENT_ARRAY_SIZE 512 /*size of buffer to read. 512 Max.Each element IA,VA...IN has max 512 points */
 								   /*[Size of waveform buffer/number of sample sets = 2048/4 = 512] */
 								   /*(Refer ADE9000 technical reference manual for more details) */
+#define WFB_SAMPLES_PER_CHANNEL (2048/8) /*Number of samples to read from buffer for each channel */
 
 /*Full scale Codes referred from Datasheet.Respective digital codes are produced when ADC inputs are at full scale. Donot Change. */
 #define ADE9000_RMS_FULL_SCALE_CODES 52702092
@@ -206,7 +208,7 @@ It is the voltage at the ADC input pins per input Voltage(V)(Volts/Volts)
 E.g. The defaul atteunation factor on board is 801.
 Voltage transfer function = 1/801= 0.001248 ~=0.00125
 ****************************************************************************************************************/
-#define CURRENT_TRANSFER_FUNCTION 1.0 / TURNS_RATIO_TRANSFORMER * BURDEN_RESISTOR * ADE9000_CURRENT_PGA_GAIN //The RMS voltage at the ADC input pins per input RMS current  (V/A).(2500:1-->0.00408 with default burden resistors)
+#define CURRENT_TRANSFER_FUNCTION 1.0 / TURNS_RATIO_TRANSFORMER * BURDEN_RESISTOR * (double)ADE9000_CURRENT_PGA_GAIN //The RMS voltage at the ADC input pins per input RMS current  (V/A).(2500:1-->0.00408 with default burden resistors)
 #define VOLTAGE_TRANSFER_FUNCTION 1.0 / ATTEUNATION_FACTOR                       //The RMS voltage at the ADC input pins per input RMS voltage (V/V)
 
 /****************************************************************************************************************
@@ -246,22 +248,27 @@ e.g Channel A Vrms = (AVRMS(register)*CAL_VRMS_CC/10^6) Channel A Active Power =
 #define CAL_VRMS_CC (double)ONE_MILLION / (VOLTAGE_TRANSFER_FUNCTION * ADE9000_RMS_FULL_SCALE_CODES * SQRT_TO_2)                                                       // Conversion constants (uV/code)
 #define CAL_POWER_CC (double)ONE_THOUSAND / (VOLTAGE_TRANSFER_FUNCTION * CURRENT_TRANSFER_FUNCTION * ADE9000_WATT_FULL_SCALE_CODES * 2)                                // Conversion constants (mW/code) Applicable for Active, reactive and apparent power
 #define CAL_ENERGY_CC (double)ONE_MILLION / (VOLTAGE_TRANSFER_FUNCTION * CURRENT_TRANSFER_FUNCTION * ADE9000_WATT_FULL_SCALE_CODES * 2 * 8000 * 3600 * (1.0 / 8192.0)) // Conversion constants (uWhr/xTHR_HI code)Applicable for Active, reactive and apparent energy
+#define CAL_I_PCF (double)(CURRENT_TRANSFER_FUNCTION * ADE9000_PCF_FULL_SCALE_CODES)                       // Conversion constants (A/code) for sample buffer with current PCF data
+#define CAL_V_PCF (double)(VOLTAGE_TRANSFER_FUNCTION * ADE9000_PCF_FULL_SCALE_CODES)                       // Conversion constants (V/code) for sample buffer with voltage PCF data
 
 /****************************************************************************************************************
  Structures and Global Variables
 ****************************************************************************************************************/
 
 /* Arrays of resampled waveform structure for saved data codes */
-struct ResampledWfbData
+typedef union
 {
-	int16_t VA_Resampled[WFB_ELEMENT_ARRAY_SIZE];
-	int16_t IA_Resampled[WFB_ELEMENT_ARRAY_SIZE];
-	int16_t VB_Resampled[WFB_ELEMENT_ARRAY_SIZE];
-	int16_t IB_Resampled[WFB_ELEMENT_ARRAY_SIZE];
-	int16_t VC_Resampled[WFB_ELEMENT_ARRAY_SIZE];
-	int16_t IC_Resampled[WFB_ELEMENT_ARRAY_SIZE];
-	int16_t IN_Resampled[WFB_ELEMENT_ARRAY_SIZE];
-};
+	int32_t buffer[7];
+	struct {
+		int32_t IA;
+		int32_t VA;
+		int32_t IB;
+		int32_t VB;
+		int32_t IC;
+		int32_t VC;
+		int32_t IN;
+	};
+} WFBFixedDataRate_t;
 
 /* Active Power structure for saved data codes */
 struct ActivePowerRegs
@@ -607,7 +614,7 @@ public:
 		   Read_Element_Length is the number of data sets to read. If the starting address is 0x800, the maximum sets to read are 512.
 	Output: Resampled data returned in structure
 	*/
-	void SPI_Burst_Read_FixedDT_Buffer(uint16_t Address, uint16_t regCount, int32_t* buffer);
+	void SPI_Burst_Read_FixedDT_Buffer(uint16_t bufferPos, uint16_t samplesCount, WFBFixedDataRate_t* samplesBuffer);
 
 	/*----- ADE9000 Calculated Parameter Read Functions -----*/
 

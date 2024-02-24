@@ -108,7 +108,6 @@ void ADE9000::setupADE9000(void)
     SPI_Write_32(ADDR_MASK0, ADE9000_MASK0);
     SPI_Write_32(ADDR_MASK1, ADE9000_MASK1);
     SPI_Write_32(ADDR_EVENT_MASK, ADE9000_EVENT_MASK);
-    SPI_Write_16(ADDR_WFB_CFG, ADE9000_WFB_CFG);
     SPI_Write_32(ADDR_VLEVEL, ADE9000_VLEVEL);
     SPI_Write_32(ADDR_DICOEFF, ADE9000_DICOEFF);
     SPI_Write_32(ADDR_CFMODE, ADE9000_CFMODE);
@@ -119,8 +118,8 @@ void ADE9000::setupADE9000(void)
     SPI_Write_16(ADDR_WFB_PG_IRQEN, 0x8080);    //Interruption on full page 7 y 15
 
     //Cargar ajustes del waveform
-    SPI_Write_16(ADDR_WFB_CFG, 0x12F0);         //WF_IN_EN=1: IN waveform samples are read out of waveform buffer through the SPI.
-    //WF_SRC=10: Sinc4 + IIR LPF output at 8 kSPS.
+    SPI_Write_16(ADDR_WFB_CFG, 0x13F0);         //WF_IN_EN=1: IN waveform samples are read out of waveform buffer through the SPI.
+    //WF_SRC=11: Current and voltage channel waveform samples, processed by the DSP(xI_PCF, xV_PCF) at 8 kSPS.
     //WF_MODE=11: Continuous fill—save event address of enabled trigger events.
     //WF_CAP_SEL=1: Fixed data rate data.
     //WF_CAP_EN=1: The waveform capture is started, according to the type of capture in WF_CAP_SEL and the WF_SRC bits when this bit goes from a 0 to a 1.
@@ -285,22 +284,29 @@ uint32_t ADE9000::SPI_Read_32(uint16_t Address)
 }
 
 
-void ADE9000::SPI_Burst_Read_FixedDT_Buffer(uint16_t Address, uint16_t regCount, int32_t *buffer)
+void ADE9000::SPI_Burst_Read_FixedDT_Buffer(uint16_t bufferPos, uint16_t samplesCount, WFBFixedDataRate_t* samplesBuffer)
 {
     uint16_t temp;
     uint16_t i;
 
-    if ((Address + regCount) > 0xFFF) return;
+    if ((bufferPos + samplesCount) > 0xFFF) return;
 
     port.beginTransaction(SPISettings(_SPI_speed, MSBFIRST, SPI_MODE0)); //Setup SPI parameters
     digitalWrite(_chipSelect_Pin, LOW);
 
     // port.transfer16(((Address << 4) & 0xFFF0) + 8);  //Send the starting address
-    port.transfer16(((0x800 + Address) << 4) +8);  //Send the starting address
+    port.transfer16(((0x800 + bufferPos) << 4) + 8);  //Send the starting address
 
     //burst read the data upto Read_Length 
-    for (i = 0;i < regCount;i++) {
-        *buffer++ = port.transfer32(0);
+    for (i = 0;i < samplesCount;i++) {
+        samplesBuffer->IA = port.transfer32(0);
+        samplesBuffer->VA = port.transfer32(0);
+        samplesBuffer->IB = port.transfer32(0);
+        samplesBuffer->VB = port.transfer32(0);
+        samplesBuffer->IC = port.transfer32(0);
+        samplesBuffer->VC = port.transfer32(0);
+        samplesBuffer->IN = port.transfer32(0);
+        samplesBuffer++;
     }
     digitalWrite(_chipSelect_Pin, HIGH);
     port.endTransaction();

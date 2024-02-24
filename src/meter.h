@@ -1,4 +1,5 @@
 #include "ade9000/ADE9000.h"
+#include "AsyncWebSocket.h"
 
 struct phaseValues
 {
@@ -68,12 +69,33 @@ struct meterValues
 	};
 };
 
+typedef struct {
+	float voltageScale;
+	float currentScale;
+	int32_t sampleFreq;
+
+	String toString() {
+		return String();
+	};
+} scopeInfo_t;
+
 
 void MeterInit();
 
+void MeterInitScope();
+
 void MeterLoop();
 
+void MeterTask(void* arg);
 
+void readWaveBuffer();
+
+void scaleBuffer(WFBFixedDataRate_t* samplesBuffer, int32_t samplesCount, float voltage, float current);
+
+void compressWaveBuffer12(int32_t* waveBufferRaw, uint8_t* waveBuffer, uint16_t part);
+
+
+void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len);
 
 extern ADE9000 ade;
 

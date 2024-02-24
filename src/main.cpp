@@ -10,6 +10,8 @@
 #include "meter.h"
 #include "esp_sntp.h"
 #include "keyboard.h"
+#include "webserver.h"
+#include "SPIFFS.h"
 
 
 TactSwitch BtnEnter, BtnUp, BtnDown, BtnEsc, BtnNext; // Interfase de 5 botones
@@ -75,6 +77,9 @@ void initWiFi() {
   WiFi.onEvent([](arduino_event_t* event) {
     Serial.println("Conectado a Wifi");
     configTime(-3600 * 3, 0, "ar.pool.ntp.org");
+
+    Init_WebServer();
+
     }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
 
   sntp_set_time_sync_notification_cb([](struct timeval* tv) {
@@ -128,6 +133,13 @@ void setup(void)
 
   strip.begin();
   strip.setAllLedsColor(0);
+
+
+  Serial.print("Iniciando sistema de archivos... ");
+  if (!SPIFFS.begin(true)) {
+    Serial.println("An error has occurred while mounting SPIFFS");
+  }
+  Serial.println("SPIFFS mounted successfully");
 
   initWiFi();
 
@@ -786,43 +798,3 @@ void fillWaveBuffer()
 
 }
 
-void compressWaveBuffer12(uint16_t part)
-{
-  uint32_t time = micros();
-  int32_t* raw = waveBufferRaw;
-  uint8_t* buf = &waveBuffer[part * 2688];  //2688 es la cantidad de bytes resultantes de comprimir el buffer de 2048 words 
-
-
-  int32_t val1, val2, k = 0, bytes = 0;
-  for (int32_t i = 0; i < 2048; i++) {
-    if ((i & 0x7) == 7) {  //Ignorar la muestra 7 ya que es un valor de relleno
-      raw++;
-      continue;
-    };
-
-    /*
-        Como se comprime y se guardan 12 bits, se deben juntar de a 2 muestras y guardar 3 bytes
-        Siempre se guarda después de leer la segunda muestra
-    */
-    if (!(k++ & 1)) {
-      val1 = (*raw++) >> 16;  //Comprimir a 12 bits
-      if (val1 > 2047) val1 = 2047;
-      else if (val1 < -2048) val1 = -2048;
-    }
-    else {  //Solo guardar cada 2 words leidas
-      val2 = (*raw++) >> 16;  //Comprimir a 12 bits
-      if (val2 > 2047) val2 = 2047;
-      else if (val2 < -2048) val2 = -2048;
-
-      uint8_t a, b, c;
-
-      *buf++ = a = val1 & 0xFF;
-      *buf++ = b = uint8_t((val1 & 0x0F00) >> 8) | uint8_t((val2 & 0x000F) << 4);
-      *buf++ = c = (val2 & 0xFF0) >> 4;
-      bytes += 3;
-    }
-  }
-
-  time = micros() - time;
-  // Serial.printf("Tiempo de compresion: %u us, k: %d, bytes: %d\n", time, k, bytes);
-}
