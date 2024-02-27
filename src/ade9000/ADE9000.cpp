@@ -828,7 +828,7 @@ void ADE9000::pGain_calibrate(int32_t* pgainReg, int32_t* accActiveEgyReg, int a
     int32_t actualActiveEnergyCode;
     int i;
     float temp;
-    temp = ((float)ADE9000_FDSP * (float)NOMINAL_INPUT_VOLTAGE * (float)NOMINAL_INPUT_CURRENT * (float)CALIBRATION_ACC_TIME * (float)CURRENT_TRANSFER_FUNCTION * (float)currentPGA_gain * (float)VOLTAGE_TRANSFER_FUNCTION * (float)voltagePGA_gain * (float)ADE9000_WATT_FULL_SCALE_CODES * 2 * (float)(pGaincalPF)) / (float)(8192);
+    temp = ((float)ADE9000_FDSP * (float)NOMINAL_INPUT_VOLTAGE * (float)NOMINAL_INPUT_CURRENT * (float)CURRENT_TRANSFER_FUNCTION * (float)currentPGA_gain * (float)VOLTAGE_TRANSFER_FUNCTION * (float)voltagePGA_gain * (float)ADE9000_WATT_FULL_SCALE_CODES * 2 * (float)(pGaincalPF)) / (float)(8192);
     expectedActiveEnergyCode = (int32_t)temp;
 #ifdef DEBUG_MODE
     Serial.print("Expected Active Energy Code: ");
@@ -849,49 +849,6 @@ void ADE9000::pGain_calibrate(int32_t* pgainReg, int32_t* accActiveEgyReg, int a
         Serial.print("Power Gain Register: ");
         Serial.println(pgainReg[i], HEX);
 #endif
-    }
-}
-
-void ADE9000::updateEnergyRegisterFromInterrupt(int32_t* accumulatedActiveEnergy_registers, int32_t* accumulatedReactiveEnergy_registers, int32_t* accumulatedApparentEnergy_registers)
-{
-    const int32_t xWATTHRHI_registers_address[EGY_REG_SIZE] = { ADDR_AWATTHR_HI, ADDR_BWATTHR_HI, ADDR_CWATTHR_HI };
-    const int32_t xVARHRHI_registers_address[EGY_REG_SIZE] = { ADDR_AVARHR_HI, ADDR_BVARHR_HI, ADDR_CVARHR_HI };
-    const int32_t xVAHRHI_registers_address[EGY_REG_SIZE] = { ADDR_AVAHR_HI, ADDR_BVAHR_HI, ADDR_CVAHR_HI };
-
-    static int8_t count = 0;
-    static int32_t intermediateActiveEgy_Reg[EGY_REG_SIZE] = { 0 };
-    static int32_t intermediateReactiveEgy_Reg[EGY_REG_SIZE] = { 0 };
-    static int32_t intermediateApparentEgy_Reg[EGY_REG_SIZE] = { 0 };
-
-    uint32_t temp;
-    temp = SPI_Read_32(ADDR_STATUS0);
-    temp &= EGY_INTERRUPT_MASK0;
-    if (temp == EGY_INTERRUPT_MASK0)
-    {
-        SPI_Write_32(ADDR_STATUS0, 0xFFFFFFFF);
-        for (int8_t i = 0; i < EGY_REG_SIZE; i++)
-        {
-            intermediateActiveEgy_Reg[i] += SPI_Read_32(xWATTHRHI_registers_address[i]);  // Accumulate the registers
-            intermediateReactiveEgy_Reg[i] += SPI_Read_32(xVARHRHI_registers_address[i]); // Accumulate the registers
-            intermediateApparentEgy_Reg[i] += SPI_Read_32(xVAHRHI_registers_address[i]);  // Accumulate the registers
-        }
-
-        if (count == (ACCUMULATION_TIME - 1)) //if the accumulation time is reached, update the final values to registers
-        {
-            for (uint8_t i = 0; i < EGY_REG_SIZE; i++)
-            {
-                accumulatedActiveEnergy_registers[i] = intermediateActiveEgy_Reg[i];
-                accumulatedReactiveEnergy_registers[i] = intermediateReactiveEgy_Reg[i];
-                accumulatedApparentEnergy_registers[i] = intermediateApparentEgy_Reg[i];
-                intermediateActiveEgy_Reg[i] = 0;   // Reset the intermediate registers
-                intermediateReactiveEgy_Reg[i] = 0; // Reset the intermediate registers
-                intermediateApparentEgy_Reg[i] = 0; // Reset the intermediate registers
-            }
-            count = 0; //Reset counter
-            return;    //exit function
-        }
-        count++;
-        return;
     }
 }
 

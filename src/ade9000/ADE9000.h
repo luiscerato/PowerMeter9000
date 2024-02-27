@@ -27,31 +27,69 @@
 #endif
 
 extern const uint8_t NOMINAL_INPUT_VOLTAGE;
+extern const float NOMINAL_INPUT_CURRENT;				/* Current nominal RMS for Input in Amperes */
+extern const uint8_t INPUT_FREQUENCY; 					/* Frequency in Hertz */
+extern const uint8_t CALIBRATION_ANGLE_DEGREES; 		/* Used for funtion transform current in Ohm */
+extern const float BURDEN_RESISTOR;						/* Current nominal RMS for Input in Amperes */
+extern const uint16_t TURNS_RATIO_TRANSFORMER;			/* Used for funtion transform current */
+extern const float ATTEUNATION_FACTOR;					/* The defaul atteunation factor on board used funtion transform in Ohm/Ohm ((R1 + R2)/ R2) */
+extern const uint8_t ACCUMULATION_TIME;					/* Accumulation time in seconds when EGY_TIME=7999, accumulation mode= sample based */
 
-/* Current nominal RMS for Input in Amperes */
-extern const float NOMINAL_INPUT_CURRENT;
 
-/* Frequency in Hertz */
-extern const uint8_t INPUT_FREQUENCY;
+/*Transfer function*/
+/****************************************************************************************************************
+									Current Transfer Function
+*****************************************************************************************************************
+It is the voltage at the ADC input pins per input current(A) (Volts/Amp)
+E.g: For a current output current transformer with Turns Ratio of 2500:1. Burden resistor on board = 5.1*2=10.2 Ohm.
+Current transfer function= 1/2500*Total Burden = 1/2500*10.2= 0.00408
+****************************************************************************************************************/
+/****************************************************************************************************************
+									Voltage Transfer Function
+*****************************************************************************************************************
+It is the voltage at the ADC input pins per input Voltage(V)(Volts/Volts)
+E.g. The defaul atteunation factor on board is 801.
+Voltage transfer function = 1/801= 0.001248 ~=0.00125
+****************************************************************************************************************/
+#define CURRENT_TRANSFER_FUNCTION 1.0 / TURNS_RATIO_TRANSFORMER * BURDEN_RESISTOR * (double)ADE9000_CURRENT_PGA_GAIN //The RMS voltage at the ADC input pins per input RMS current  (V/A).(2500:1-->0.00408 with default burden resistors)
+#define VOLTAGE_TRANSFER_FUNCTION 1.0 / ATTEUNATION_FACTOR                       //The RMS voltage at the ADC input pins per input RMS voltage (V/V)
 
-/* Used for funtion transform current in Ohm */
-extern const uint8_t CALIBRATION_ANGLE_DEGREES;
+/****************************************************************************************************************
+									Constants: Do not change
+*****************************************************************************************************************/
+#define CAL_ANGLE_RADIANS(x) (x * 3.14159 / 180)
+#define ONE_MILLION 1000000UL
+#define ONE_THOUSAND 1000
+#define SQRT_TO_2 1.41421
 
-/* Current nominal RMS for Input in Amperes */
-extern const float BURDEN_RESISTOR;
+/*Full scale Codes referred from Datasheet.Respective digital codes are produced when ADC inputs are at full scale. Donot Change. */
+#define ADE9000_RMS_FULL_SCALE_CODES 52702092
+#define ADE9000_WATT_FULL_SCALE_CODES 20694066
+#define ADE9000_RESAMPLED_FULL_SCALE_CODES 18196
+#define ADE9000_PCF_FULL_SCALE_CODES 74532013
+#define ADE9000_2to27	134217728
+#define ADE9000_2to15	32768
+/****************************************************************************************************************
+									Conversion Constants
+*****************************************************************************************************************
+If calibration is done with the the calibration sketch, the following conversion constants apply:
+If CURRENT_TRANSFER_FUNCTION or VOLTAGE_TRANSFER_FUNCTION are changed, update the conversion constants
 
-/* Used for funtion transform current */
-extern const uint16_t TURNS_RATIO_TRANSFORMER;
+CAL_IRMS_CC in uA/code 				= 10^6/(CURRENT_TRANSFER_FUNCTION*ADE9000_RMS_FULL_SCALE_CODES*SQRT(2))
+CAL_VRMS_CC in uV/code 				= 10^6/(VOLTAGE_TRANSFER_FUNCTION*ADE9000_RMS_FULL_SCALE_CODES*SQRT(2))
+CAL_POWER_CC in mW/code 			= 10^3/(CURRENT_TRANSFER_FUNCTION*VOLTAGE_TRANSFER_FUNCTION*ADE9000_WATT_FULL_SCALE_CODES*2)
+CAL_ENERGY_CC in uWhr/xTHR_HI code 	= 10^6/(CURRENT_TRANSFER_FUNCTION*VOLTAGE_TRANSFER_FUNCTION*ADE9000_WATT_FULL_SCALE_CODES*2*8000*3600*2^-13)
 
-/* The defaul atteunation factor on board used funtion transform in Ohm/Ohm ((R1 + R2)/ R2) */
-extern const float ATTEUNATION_FACTOR;
+If conversion constants are set correctly, the register codes are converted to physical parameters as:
+e.g Channel A Vrms = (AVRMS(register)*CAL_VRMS_CC/10^6) Channel A Active Power = (AWATT(register)*CAL_POWER_CC/10^3)
+*****************************************************************************************************************/
+#define CAL_IRMS_CC (double)ONE_MILLION / (CURRENT_TRANSFER_FUNCTION * ADE9000_RMS_FULL_SCALE_CODES * SQRT_TO_2)                                                       // Conversion constants (uA/code)
+#define CAL_VRMS_CC (double)ONE_MILLION / (VOLTAGE_TRANSFER_FUNCTION * ADE9000_RMS_FULL_SCALE_CODES * SQRT_TO_2)                                                       // Conversion constants (uV/code)
+#define CAL_POWER_CC (double)ONE_THOUSAND / (VOLTAGE_TRANSFER_FUNCTION * CURRENT_TRANSFER_FUNCTION * ADE9000_WATT_FULL_SCALE_CODES * 2)                                // Conversion constants (mW/code) Applicable for Active, reactive and apparent power
+#define CAL_ENERGY_CC (double)ONE_MILLION / (VOLTAGE_TRANSFER_FUNCTION * CURRENT_TRANSFER_FUNCTION * ADE9000_WATT_FULL_SCALE_CODES * 2 * 8000 * 3600 * (1.0 / 8192.0)) // Conversion constants (uWhr/xTHR_HI code)Applicable for Active, reactive and apparent energy
+#define CAL_I_PCF (double)(CURRENT_TRANSFER_FUNCTION * ADE9000_PCF_FULL_SCALE_CODES)                       // Conversion constants (A/code) for sample buffer with current PCF data
+#define CAL_V_PCF (double)(VOLTAGE_TRANSFER_FUNCTION * ADE9000_PCF_FULL_SCALE_CODES)                       // Conversion constants (V/code) for sample buffer with voltage PCF data
 
-/* Accumulation time in seconds when EGY_TIME=7999, accumulation mode= sample based */
-extern const uint8_t ACCUMULATION_TIME;
-
-#define formatNoPrefix		0x10000		//No cambia la escala del valor
-#define formatAddZeros		0x20000		//Agrega 0 de relleno a la izquierda
-#define formatRemoveSpaces	0x40000		//No agrega espacios para completar el ancho indicado
 
 /****************************************************************************************************************
  Current PGA gain. Uncomment the needed one
@@ -103,6 +141,9 @@ extern const uint8_t ACCUMULATION_TIME;
 
 #define ADE9000_EGY_TIME 0x1F3F /* Accumulate 8000 samples */
 
+#define EGY_INTERRUPT_MASK0 0x00000001 //Enable EGYRDY interrupt
+
+
 /*Waveform buffer Settings*/
 #define ADE9000_WFB_CFG 0x1000     /* Neutral current samples enabled, Resampled data enabled */
 								   /* Burst all channels */
@@ -111,14 +152,6 @@ extern const uint8_t ACCUMULATION_TIME;
 								   /*[Size of waveform buffer/number of sample sets = 2048/4 = 512] */
 								   /*(Refer ADE9000 technical reference manual for more details) */
 #define WFB_SAMPLES_PER_CHANNEL (2048/8) /*Number of samples to read from buffer for each channel */
-
-/*Full scale Codes referred from Datasheet.Respective digital codes are produced when ADC inputs are at full scale. Donot Change. */
-#define ADE9000_RMS_FULL_SCALE_CODES 52702092
-#define ADE9000_WATT_FULL_SCALE_CODES 20694066
-#define ADE9000_RESAMPLED_FULL_SCALE_CODES 18196
-#define ADE9000_PCF_FULL_SCALE_CODES 74532013
-#define ADE9000_2to27	134217728
-#define ADE9000_2to15	32768
 
 /* State for calibration*/
 typedef enum
@@ -181,7 +214,6 @@ inline const char* calibrationStepString(calibrationStep_t& step)
 	return "desconocido";
 }
 
-
 typedef enum {
 	adeChannel_IA = 0,
 	adeChannel_IB = 1,
@@ -193,63 +225,11 @@ typedef enum {
 	adeChannel_Default = 7,
 } adeChannel;
 
-/*Transfer function*/
-/****************************************************************************************************************
-									Current Transfer Function
-*****************************************************************************************************************
-It is the voltage at the ADC input pins per input current(A) (Volts/Amp)
-E.g: For a current output current transformer with Turns Ratio of 2500:1. Burden resistor on board = 5.1*2=10.2 Ohm.
-Current transfer function= 1/2500*Total Burden = 1/2500*10.2= 0.00408
-****************************************************************************************************************/
-/****************************************************************************************************************
-									Voltage Transfer Function
-*****************************************************************************************************************
-It is the voltage at the ADC input pins per input Voltage(V)(Volts/Volts)
-E.g. The defaul atteunation factor on board is 801.
-Voltage transfer function = 1/801= 0.001248 ~=0.00125
-****************************************************************************************************************/
-#define CURRENT_TRANSFER_FUNCTION 1.0 / TURNS_RATIO_TRANSFORMER * BURDEN_RESISTOR * (double)ADE9000_CURRENT_PGA_GAIN //The RMS voltage at the ADC input pins per input RMS current  (V/A).(2500:1-->0.00408 with default burden resistors)
-#define VOLTAGE_TRANSFER_FUNCTION 1.0 / ATTEUNATION_FACTOR                       //The RMS voltage at the ADC input pins per input RMS voltage (V/V)
 
-/****************************************************************************************************************
-									Constants: Do not change
-*****************************************************************************************************************/
-#define CALIBRATION_EGY_CFG 0xF011     //Latch after EGYRDY. Sample based accumulation. Read with reset disabled. Accumulation enabled
-#define EGYACCTIME 0x1F3F              //Accumulate for a total of 8000 (EGY_TIME+1) samples.
-#define CALIBRATION_ACC_TIME 1         //if EGYACCTIME= 0x1F3F, Accumulation time is 1sec. Change this if EGYACCTIME is changed.
-#define EGY_INTERRUPT_MASK0 0x00000001 //Enable EGYRDY interrupt
 
-#define IGAIN_CAL_REG_SIZE 4
-#define VGAIN_CAL_REG_SIZE 3
-#define PHCAL_CAL_REG_SIZE 3
-#define PGAIN_CAL_REG_SIZE 3
-#define EGY_REG_SIZE 3
-
-#define CAL_ANGLE_RADIANS(x) (x * 3.14159 / 180)
-#define ONE_MILLION 1000000UL
-#define ONE_THOUSAND 1000
-#define SQRT_TO_2 1.41421
-
-/****************************************************************************************************************
-									Conversion Constants
-*****************************************************************************************************************
-If calibration is done with the the calibration sketch, the following conversion constants apply:
-If CURRENT_TRANSFER_FUNCTION or VOLTAGE_TRANSFER_FUNCTION are changed, update the conversion constants
-
-CAL_IRMS_CC in uA/code 				= 10^6/(CURRENT_TRANSFER_FUNCTION*ADE9000_RMS_FULL_SCALE_CODES*SQRT(2))
-CAL_VRMS_CC in uV/code 				= 10^6/(VOLTAGE_TRANSFER_FUNCTION*ADE9000_RMS_FULL_SCALE_CODES*SQRT(2))
-CAL_POWER_CC in mW/code 			= 10^3/(CURRENT_TRANSFER_FUNCTION*VOLTAGE_TRANSFER_FUNCTION*ADE9000_WATT_FULL_SCALE_CODES*2)
-CAL_ENERGY_CC in uWhr/xTHR_HI code 	= 10^6/(CURRENT_TRANSFER_FUNCTION*VOLTAGE_TRANSFER_FUNCTION*ADE9000_WATT_FULL_SCALE_CODES*2*8000*3600*2^-13)
-
-If conversion constants are set correctly, the register codes are converted to physical parameters as:
-e.g Channel A Vrms = (AVRMS(register)*CAL_VRMS_CC/10^6) Channel A Active Power = (AWATT(register)*CAL_POWER_CC/10^3)
-*****************************************************************************************************************/
-#define CAL_IRMS_CC (double)ONE_MILLION / (CURRENT_TRANSFER_FUNCTION * ADE9000_RMS_FULL_SCALE_CODES * SQRT_TO_2)                                                       // Conversion constants (uA/code)
-#define CAL_VRMS_CC (double)ONE_MILLION / (VOLTAGE_TRANSFER_FUNCTION * ADE9000_RMS_FULL_SCALE_CODES * SQRT_TO_2)                                                       // Conversion constants (uV/code)
-#define CAL_POWER_CC (double)ONE_THOUSAND / (VOLTAGE_TRANSFER_FUNCTION * CURRENT_TRANSFER_FUNCTION * ADE9000_WATT_FULL_SCALE_CODES * 2)                                // Conversion constants (mW/code) Applicable for Active, reactive and apparent power
-#define CAL_ENERGY_CC (double)ONE_MILLION / (VOLTAGE_TRANSFER_FUNCTION * CURRENT_TRANSFER_FUNCTION * ADE9000_WATT_FULL_SCALE_CODES * 2 * 8000 * 3600 * (1.0 / 8192.0)) // Conversion constants (uWhr/xTHR_HI code)Applicable for Active, reactive and apparent energy
-#define CAL_I_PCF (double)(CURRENT_TRANSFER_FUNCTION * ADE9000_PCF_FULL_SCALE_CODES)                       // Conversion constants (A/code) for sample buffer with current PCF data
-#define CAL_V_PCF (double)(VOLTAGE_TRANSFER_FUNCTION * ADE9000_PCF_FULL_SCALE_CODES)                       // Conversion constants (V/code) for sample buffer with voltage PCF data
+#define formatNoPrefix		0x10000		//No cambia la escala del valor
+#define formatAddZeros		0x20000		//Agrega 0 de relleno a la izquierda
+#define formatRemoveSpaces	0x40000		//No agrega espacios para completar el ancho indicado
 
 /****************************************************************************************************************
  Structures and Global Variables
@@ -754,13 +734,6 @@ public:
 	Output:-
 	*/
 	void pGain_calibrate(int32_t*, int32_t*, int, uint8_t, uint8_t, float);
-
-	/*
-	Update energy register by interrupt
-	Input: Array size 3 to save each channels (A, B, C), the register for active, reactive and apparence energy
-	Output:-
-	*/
-	void updateEnergyRegisterFromInterrupt(int32_t*, int32_t*, int32_t*);
 
 
 	/*
