@@ -1160,6 +1160,12 @@ typedef union {
     // Bit 3: Phase N
     unsigned RESERVED : 12;          // Bits [4:15] RESERVED: Reserved
   };
+  struct {
+    unsigned OIPHASEA : 1;          //OIPHASEA: Indicates that phase A is above OILVL.
+    unsigned OIPHASEB : 1;          //OIPHASEA: Indicates that phase B is above OILVL.
+    unsigned OIPHASEC : 1;          //OIPHASEA: Indicates that phase C is above OILVL.
+    unsigned OIPHASEN : 1;          //OIPHASEA: Indicates that phase N is above OILVL.
+  };
   uint16_t raw;
 } ADE_OISTATUS_t;
 

@@ -794,13 +794,71 @@ public:
 		return noPowerCutoff;
 	};
 
-	uint32_t readStatus0() {
-		return SPI_Read_32(ADDR_STATUS0);
+	void setupInterruption0(uint32_t flags) {
+		SPI_Write_32(ADDR_MASK0, flags);
+	};
+
+	void setupInterruption0(ADE_MASK0_t flags) {
+		SPI_Write_32(ADDR_MASK0, flags.raw);
+	};
+
+
+	void setupInterruption1(uint32_t flags) {
+		SPI_Write_32(ADDR_MASK1, flags);
+	};
+
+	void setupInterruption1(ADE_MASK1_t flags) {
+		SPI_Write_32(ADDR_MASK1, flags.raw);
+	};
+
+
+	ADE_STATUS0_t readStatus0() {
+		ADE_STATUS0_t res;
+		res.raw = SPI_Read_32(ADDR_STATUS0);
+		return res;
+	};
+
+	ADE_STATUS1_t readStatus1() {
+		ADE_STATUS1_t res;
+		res.raw = SPI_Read_32(ADDR_STATUS1);
+		return res;
+	};
+
+	ADE_EVENT_STATUS_t readEventStatus() {
+		ADE_EVENT_STATUS_t res;
+		res.raw = SPI_Read_32(ADDR_EVENT_STATUS);
+		return res;
 	};
 
 	void clearStatusBit0(uint32_t mask) {
 		SPI_Write_32(ADDR_STATUS0, mask);
 	}
+
+	void clearStatusBit1(uint32_t mask) {
+		SPI_Write_32(ADDR_STATUS1, mask);
+	}
+
+	void enableOverCurrentDetection(float level, uint32_t channels = 0xF);
+
+	ADE_OISTATUS_t checkOverCurrentStatus();
+
+	void readOverCurrentLevels(struct CurrentRMSRegs* Data);
+
+
+
+	void enableDipDetection(float level, uint32_t cycles = 10);
+
+	uint32_t checkDipStatus();
+
+	void readDipEventLevels(struct VoltageRMSRegs* Data);
+
+
+
+	void enableSwellDetection(float level, uint32_t cycles = 10);
+
+	uint32_t checkSweelStatus();
+
+	void readSwellEventLevels(struct VoltageRMSRegs* Data);
 
 private:
 	Preferences preferences;		//Configuracion desde flash

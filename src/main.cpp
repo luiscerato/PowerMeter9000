@@ -152,7 +152,7 @@ void setup(void)
 
   Serial.println("Set up finished");
 
-  testFormat();
+  // testFormat();
 
   MeterInit();
 }

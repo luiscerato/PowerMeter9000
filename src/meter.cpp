@@ -50,6 +50,13 @@ void MeterInit()
 	webServerSetMeterEvents(scopeWSevents);
 
 	xTaskCreatePinnedToCore(MeterTask, "meterTask", 8192, NULL, 10, &meterHandle, APP_CPU_NUM);
+
+	// ade.setupInterruption1(ADE_MASK1_BITS_OI);
+	// ade.setupInterruption1(ADE_MASK1_BITS_DIPA | ADE_MASK1_BITS_DIPB | ADE_MASK1_BITS_DIPC);
+
+	ade.enableDipDetection(230.0, 5);
+	ade.enableSwellDetection(238.0, 10);
+	ade.enableOverCurrentDetection(5.0);
 }
 
 void MeterInitScope()
@@ -60,6 +67,9 @@ void MeterInitScope()
 void MeterTask(void* arg)
 {
 	uint32_t lastTime = 0, part = 0, timeRead, timeScale, timeCompress, timeSend;
+	ADE_EVENT_STATUS_t lastEvent, event;
+	ADE_OISTATUS_t lastOI, oi;
+
 	while (millis() < 250);	//Esperar que todo esté listo
 
 
@@ -68,10 +78,10 @@ void MeterTask(void* arg)
 			uint32_t t = micros() - lastTime;
 			lastTime = micros();
 
-			uint32_t status0 = ade.readStatus0();
+			ADE_STATUS0_t status0 = ade.readStatus0();
 			// Serial.printf("Status 0= 0x%X. time: %uus\n", status0, t);
-			if (status0 & 0x20000) {
-				ade.clearStatusBit0(0x20000);
+			if (status0.PAGE_FULL) {
+				ade.clearStatusBit0(ADE_STATUS0_BITS_PAGE_FULL);
 
 				timeRead = micros();
 				readWaveBuffer();
@@ -103,6 +113,75 @@ void MeterTask(void* arg)
 				// }
 			}
 		}
+
+		if (digitalRead(pinAdeInt1) == 0) {		//Leer que causó la interrupcion
+			ADE_STATUS1_t status1 = ade.readStatus1();
+			if (status1.raw) ade.clearStatusBit1(status1.raw);
+		}
+
+		struct VoltageRMSRegs volts;
+		struct CurrentRMSRegs curr;
+		event = ade.readEventStatus();
+		if (event.DIPA || event.DIPB || event.DIPC) ade.readDipEventLevels(&volts);
+		if (event.DIPA && !lastEvent.DIPA)
+			Serial.printf("Entering DIP event on phase A! -> %.2fV\n", volts.VoltageRMS_A);
+		else if (!event.DIPA && lastEvent.DIPA)
+			Serial.printf("Exiting DIP event on phase A!\n");
+
+		if (event.DIPB && !lastEvent.DIPB)
+			Serial.printf("Entering DIP event on phase B! -> %.2fV\n", volts.VoltageRMS_B);
+		else if (!event.DIPB && lastEvent.DIPB)
+			Serial.printf("Exiting DIP event on phase B!\n");
+
+		if (event.DIPC && !lastEvent.DIPC)
+			Serial.printf("Entering DIP event on phase C! -> %.2fV\n", volts.VoltageRMS_C);
+		else if (!event.DIPC && lastEvent.DIPC)
+			Serial.printf("Exiting DIP event on phase C!\n");
+
+
+
+		if (event.SWELLA || event.SWELLB || event.SWELLC) ade.readSwellEventLevels(&volts);
+		if (event.SWELLA && !lastEvent.SWELLA)
+			Serial.printf("Entering SWELL event on phase A! -> %.2fV\n", volts.VoltageRMS_A);
+		else if (!event.SWELLA && lastEvent.SWELLA)
+			Serial.printf("Exiting SWELL event on phase A!\n");
+
+		if (event.SWELLB && !lastEvent.SWELLB)
+			Serial.printf("Entering SWELL event on phase B! -> %.2fV\n", volts.VoltageRMS_B);
+		else if (!event.SWELLB && lastEvent.SWELLB)
+			Serial.printf("Exiting SWELL event on phase B!\n");
+
+		if (event.SWELLC && !lastEvent.SWELLC)
+			Serial.printf("Entering SWELL event on phase C! -> %.2fV\n", volts.VoltageRMS_C);
+		else if (!event.SWELLC && lastEvent.SWELLC)
+			Serial.printf("Exiting SWELL event on phase C!\n");
+
+
+		oi = ade.checkOverCurrentStatus();
+		if (oi.OIPHASE) ade.readOverCurrentLevels(&curr);
+		if (oi.OIPHASEA && !lastOI.OIPHASEA)
+			Serial.printf("Entering Over Current event on phase A! -> %.2fA\n", curr.CurrentRMS_A);
+		else if (!oi.OIPHASEA && lastOI.OIPHASEA)
+			Serial.printf("Exiting Over Current event on phase A!\n");
+
+		if (oi.OIPHASEB && !lastOI.OIPHASEB)
+			Serial.printf("Entering Over Current event on phase B! -> %.2fA\n", curr.CurrentRMS_B);
+		else if (!oi.OIPHASEB && lastOI.OIPHASEB)
+			Serial.printf("Exiting Over Current event on phase B!\n");
+
+		if (oi.OIPHASEC && !lastOI.OIPHASEC)
+			Serial.printf("Entering Over Current event on phase C! -> %.2fA\n", curr.CurrentRMS_C);
+		else if (!oi.OIPHASEC && lastOI.OIPHASEC)
+			Serial.printf("Exiting Over Current event on phase C!\n");
+
+		if (oi.OIPHASEN && !lastOI.OIPHASEN)
+			Serial.printf("Entering Over Current event on phase N! -> %.2fA\n", curr.CurrentRMS_N);
+		else if (!oi.OIPHASEN && lastOI.OIPHASEN)
+			Serial.printf("Exiting Over Current event on phase N!\n");
+
+
+		lastEvent = event;
+		lastOI = oi;
 		MeterLoop();
 		vTaskDelay(2 / portTICK_RATE_MS);
 	}

@@ -99,7 +99,7 @@ void ADE9000::setupADE9000(void)
     SPI_Write_16(ADDR_PGA_GAIN, 0x0055);
     SPI_Write_32(ADDR_ADC_REDIRECT, ADC_REDIRECT);      //Load adc redirect configuration. Call ADC_redirect before thi function to change channels.
     SPI_Write_32(ADDR_CONFIG0, ADE9000_CONFIG0);
-    SPI_Write_16(ADDR_CONFIG1, ADE9000_CONFIG1);
+    SPI_Write_16(ADDR_CONFIG1, ADE9000_CONFIG1 | ADE_CONFIG1_BITS_DIP_SWELL_IRQ_MODE);
     SPI_Write_16(ADDR_CONFIG2, ADE9000_CONFIG2);
     SPI_Write_16(ADDR_CONFIG3, ADE9000_CONFIG3);
     SPI_Write_16(ADDR_ACCMODE, ADE9000_ACCMODE);
@@ -1238,3 +1238,101 @@ bool ADE9000::endCalibration(bool save)
     return result;
 }
 
+
+void ADE9000::enableOverCurrentDetection(float level, uint32_t channels)
+{
+    if (level < 0 || level > getMaxInputCurrent()) return;
+    channels &= 0xF;
+
+    int32_t value = level * (float)ONE_MILLION / (CAL_IRMS_CC) * 0.03125;  //OI_LVL = xIRMSONE*2^−5
+    Serial.printf("enableOverCurrentDetection: %.2fV -> OILVL=%d, channels=0x%X\n", level, value, channels);
+    SPI_Write_32(ADDR_OILVL, (uint32_t)value);
+
+    ADE_CONFIG3_t cfg;
+    cfg.raw = SPI_Read_16(ADDR_CONFIG3);
+    cfg.OC_EN = channels;
+    SPI_Write_16(ADDR_CONFIG3, cfg.raw);
+}
+
+ADE_OISTATUS_t ADE9000::checkOverCurrentStatus()
+{
+    ADE_OISTATUS_t status;
+    status.raw = SPI_Read_16(ADDR_OISTATUS);
+    return status;
+}
+
+void ADE9000::readOverCurrentLevels(struct CurrentRMSRegs* Data)
+{
+    Data->CurrentRMSReg_A = int32_t(SPI_Read_32(ADDR_OIA) & 0x00FFFFFF);
+    Data->CurrentRMSReg_B = int32_t(SPI_Read_32(ADDR_OIB) & 0x00FFFFFF);
+    Data->CurrentRMSReg_C = int32_t(SPI_Read_32(ADDR_OIC) & 0x00FFFFFF);
+    Data->CurrentRMSReg_N = int32_t(SPI_Read_32(ADDR_OIN) & 0x00FFFFFF);
+    Data->CurrentRMS_A = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_A) / ONE_MILLION * 32.0;  //OI_LVL = xIRMSONE*2^−5
+    Data->CurrentRMS_B = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_B) / ONE_MILLION * 32.0;
+    Data->CurrentRMS_C = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_C) / ONE_MILLION * 32.0;
+    Data->CurrentRMS_N = (float)(CAL_IRMS_CC * Data->CurrentRMSReg_N) / ONE_MILLION * 32.0;
+}
+
+
+void ADE9000::enableDipDetection(float level, uint32_t cycles)
+{
+    if (level < 0 || level > getMaxInputVoltage()) return;
+    if (cycles < 2 || cycles > 100) return;
+
+    int32_t value = level * (float)ONE_MILLION / (CAL_VRMS_CC) * 0.03125;  //DIP_LVL = xVRMSONE*2^−5
+    Serial.printf("enableDipDetection: %.2fV -> DIPLVL=%d, DIPCYC=%d\n", level, value, cycles);
+    SPI_Write_32(ADDR_DIP_LVL, (uint32_t)value);
+    SPI_Write_16(ADDR_DIP_CYC, cycles);
+}
+
+uint32_t ADE9000::checkDipStatus()
+{
+    uint32_t res = 0x0;
+    ADE_EVENT_STATUS_t status = readEventStatus();
+    if (status.DIPA) res |= 0x1;
+    if (status.DIPB) res |= 0x2;
+    if (status.DIPC) res |= 0x4;
+    return res;
+}
+
+void ADE9000::readDipEventLevels(struct VoltageRMSRegs* Data)
+{
+    Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_DIPA) & 0x00FFFFFF);
+    Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_DIPB) & 0x00FFFFFF);
+    Data->VoltageRMSReg_C = int32_t(SPI_Read_32(ADDR_DIPC) & 0x00FFFFFF);
+    Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION * 32.0; //DIP_LVL = xVRMSONE*2^−5
+    Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION * 32.0;
+    Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION * 32.0;
+}
+
+void ADE9000::enableSwellDetection(float level, uint32_t cycles)
+{
+    if (level < 0 || level > getMaxInputVoltage()) return;
+    if (cycles < 2 || cycles > 100) return;
+
+    int32_t value = level * (float)ONE_MILLION / (CAL_VRMS_CC) * 0.03125;  //SWELL_LVL = xVRMSONE*2^−5
+    Serial.printf("enableSwellDetection: %.2fV -> SWELLLVL=%d, SWELLCYC=%d\n", level, value, cycles);
+    SPI_Write_32(ADDR_SWELL_LVL, (uint32_t)level);
+    SPI_Write_16(ADDR_SWELL_CYC, cycles);
+}
+
+
+uint32_t ADE9000::checkSweelStatus()
+{
+    uint32_t res = 0x0;
+    ADE_EVENT_STATUS_t status = readEventStatus();
+    if (status.SWELLA) res |= 0x1;
+    if (status.SWELLB) res |= 0x2;
+    if (status.SWELLC) res |= 0x4;
+    return res;
+}
+
+void ADE9000::readSwellEventLevels(struct VoltageRMSRegs* Data)
+{
+    Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_SWELLA) & 0x00FFFFFF);
+    Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_SWELLB) & 0x00FFFFFF);
+    Data->VoltageRMSReg_C = int32_t(SPI_Read_32(ADDR_SWELLC) & 0x00FFFFFF);
+    Data->VoltageRMS_A = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_A) / ONE_MILLION * 32.0; //SWELL_LVL = xVRMSONE*2^−5
+    Data->VoltageRMS_B = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_B) / ONE_MILLION * 32.0;
+    Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION * 32.0;
+}
