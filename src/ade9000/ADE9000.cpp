@@ -1070,8 +1070,6 @@ int32_t ADE9000::updateCalibration(float realValue, calibrationInfo* info)
             calInfo.loadRegs(wa, wb, wc, 0);
             calInfo.samples++;
         }
-        // else
-        //     Serial.print('.');
     }
     //Offsets y ganancia de potencias
     else if (calInfo.function == calPowerGain || calInfo.function == calActivePowerOffset) {
@@ -1274,13 +1272,13 @@ void ADE9000::readOverCurrentLevels(struct CurrentRMSRegs* Data)
 }
 
 
-void ADE9000::enableDipDetection(float level, uint32_t cycles)
+void ADE9000::setDipDetectionLevels(float level, uint32_t cycles)
 {
     if (level < 0 || level > getMaxInputVoltage()) return;
     if (cycles < 2 || cycles > 100) return;
 
     int32_t value = level * (float)ONE_MILLION / (CAL_VRMS_CC) * 0.03125;  //DIP_LVL = xVRMSONE*2^−5
-    Serial.printf("enableDipDetection: %.2fV -> DIPLVL=%d, DIPCYC=%d\n", level, value, cycles);
+    Serial.printf("setDipDetectionLevels: %.2fV -> DIPLVL=%d, DIPCYC=%d\n", level, value, cycles);
     SPI_Write_32(ADDR_DIP_LVL, (uint32_t)value);
     SPI_Write_16(ADDR_DIP_CYC, cycles);
 }
@@ -1295,7 +1293,7 @@ uint32_t ADE9000::checkDipStatus()
     return res;
 }
 
-void ADE9000::readDipEventLevels(struct VoltageRMSRegs* Data)
+void ADE9000::readDipLevels(struct VoltageRMSRegs* Data)
 {
     Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_DIPA) & 0x00FFFFFF);
     Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_DIPB) & 0x00FFFFFF);
@@ -1305,13 +1303,13 @@ void ADE9000::readDipEventLevels(struct VoltageRMSRegs* Data)
     Data->VoltageRMS_C = (float)(CAL_VRMS_CC * Data->VoltageRMSReg_C) / ONE_MILLION * 32.0;
 }
 
-void ADE9000::enableSwellDetection(float level, uint32_t cycles)
+void ADE9000::setSwellDetectionLevels(float level, uint32_t cycles)
 {
     if (level < 0 || level > getMaxInputVoltage()) return;
     if (cycles < 2 || cycles > 100) return;
 
     int32_t value = level * (float)ONE_MILLION / (CAL_VRMS_CC) * 0.03125;  //SWELL_LVL = xVRMSONE*2^−5
-    Serial.printf("enableSwellDetection: %.2fV -> SWELLLVL=%d, SWELLCYC=%d\n", level, value, cycles);
+    Serial.printf("setSwellDetectionLevels: %.2fV -> SWELLLVL=%d, SWELLCYC=%d\n", level, value, cycles);
     SPI_Write_32(ADDR_SWELL_LVL, (uint32_t)level);
     SPI_Write_16(ADDR_SWELL_CYC, cycles);
 }
@@ -1327,7 +1325,7 @@ uint32_t ADE9000::checkSweelStatus()
     return res;
 }
 
-void ADE9000::readSwellEventLevels(struct VoltageRMSRegs* Data)
+void ADE9000::readSwellLevels(struct VoltageRMSRegs* Data)
 {
     Data->VoltageRMSReg_A = int32_t(SPI_Read_32(ADDR_SWELLA) & 0x00FFFFFF);
     Data->VoltageRMSReg_B = int32_t(SPI_Read_32(ADDR_SWELLB) & 0x00FFFFFF);

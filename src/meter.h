@@ -97,6 +97,33 @@ void compressWaveBuffer12(int32_t* waveBufferRaw, uint8_t* waveBuffer, uint16_t 
 
 void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len);
 
+
+
+void meterReadRMS();
+
+void meterReadHalfRMS();
+
+void meterRead1012RMS();
+
+void meterReadPower();
+
+void meterReadTHD();
+
+void meterReadPowerFactor();
+
+void meterReadPeriods();
+
+void meterReadAngles();
+
+void meterReadEnergy();
+
+void meterReadDip();
+
+void meterReadSwell();
+
+void meterReadOverCurrent();
+
+
 extern ADE9000 ade;
 
 extern meterValues Meter;

@@ -756,7 +756,8 @@ public:
 
 
 	const double getMaxInputVoltage() {
-		return ((double)((CAL_VRMS_CC) * ((double)ADE9000_RMS_FULL_SCALE_CODES)) / (double)ONE_MILLION);
+		//The max input voltage ios divided by 2 because is not fully differential, it's single ended.
+		return ((double)((CAL_VRMS_CC) * ((double)ADE9000_RMS_FULL_SCALE_CODES)) / (double)ONE_MILLION) / 2.0;
 	};
 
 	const double getMaxInputCurrent() {
@@ -830,35 +831,41 @@ public:
 		return res;
 	};
 
-	void clearStatusBit0(uint32_t mask) {
+	void clearStatusBit0(uint32_t mask = 0xFFFFFFFF) {
 		SPI_Write_32(ADDR_STATUS0, mask);
 	}
 
-	void clearStatusBit1(uint32_t mask) {
+	void clearStatusBit1(uint32_t mask = 0xFFFFFFFF) {
 		SPI_Write_32(ADDR_STATUS1, mask);
 	}
 
+	// Enable over current detection with a specific threshold level and optional channels mask.
 	void enableOverCurrentDetection(float level, uint32_t channels = 0xF);
 
+	// Check the status of over current detection and return the current status as ADE_OISTATUS_t structure.
 	ADE_OISTATUS_t checkOverCurrentStatus();
 
+	// Read the levels of over current events and store them in a CurrentRMSRegs data structure.
 	void readOverCurrentLevels(struct CurrentRMSRegs* Data);
 
+	// Enable dip detection with a specific threshold level and optional number of cycles.
+	void setDipDetectionLevels(float level, uint32_t cycles = 10);
 
-
-	void enableDipDetection(float level, uint32_t cycles = 10);
-
+	// Check the status of dip detection and return the number of dip events registered.
 	uint32_t checkDipStatus();
 
-	void readDipEventLevels(struct VoltageRMSRegs* Data);
+	// Read the levels of dip event and store them in a VoltageRMSRegs data structure.
+	void readDipLevels(struct VoltageRMSRegs* Data);
 
+	// Enable swell detection with a specific threshold level and optional number of cycles.
+	void setSwellDetectionLevels(float level, uint32_t cycles = 10);
 
-
-	void enableSwellDetection(float level, uint32_t cycles = 10);
-
+	// Check the status of swell detection and return the number of swell events registered.
 	uint32_t checkSweelStatus();
 
-	void readSwellEventLevels(struct VoltageRMSRegs* Data);
+	// Read the levels of swell event and store them in a VoltageRMSRegs data structure.
+	void readSwellLevels(struct VoltageRMSRegs* Data);
+
 
 private:
 	Preferences preferences;		//Configuracion desde flash
