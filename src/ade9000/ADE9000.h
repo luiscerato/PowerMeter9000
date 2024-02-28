@@ -728,13 +728,6 @@ public:
 	*/
 	calibratePhaseResult phaseCalibrate(char phase);
 
-	/*
-	Power gain calibration function
-	Input: Stored in respective structure
-	Output:-
-	*/
-	void pGain_calibrate(int32_t*, int32_t*, int, uint8_t, uint8_t, float);
-
 
 	/*
 	Update energy register by interrupt
@@ -742,6 +735,8 @@ public:
 	Output:-
 	*/
 	bool updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fundEnergy = nullptr);
+
+	void readAccEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fundEnergy = nullptr);
 
 
 

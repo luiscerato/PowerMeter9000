@@ -820,38 +820,6 @@ calibratePhaseResult ADE9000::phaseCalibrate(char phase)
     return res;
 }
 
-void ADE9000::pGain_calibrate(int32_t* pgainReg, int32_t* accActiveEgyReg, int arraySize, uint8_t currentPGA_gain, uint8_t voltagePGA_gain, float pGaincalPF)
-{
-    Serial.println("Computing power gain calibration registers...");
-    delay((ACCUMULATION_TIME + 1) * 1000); // Delay to ensure the energy registers are accumulated for defined interval
-    int32_t expectedActiveEnergyCode;
-    int32_t actualActiveEnergyCode;
-    int i;
-    float temp;
-    temp = ((float)ADE9000_FDSP * (float)NOMINAL_INPUT_VOLTAGE * (float)NOMINAL_INPUT_CURRENT * (float)CURRENT_TRANSFER_FUNCTION * (float)currentPGA_gain * (float)VOLTAGE_TRANSFER_FUNCTION * (float)voltagePGA_gain * (float)ADE9000_WATT_FULL_SCALE_CODES * 2 * (float)(pGaincalPF)) / (float)(8192);
-    expectedActiveEnergyCode = (int32_t)temp;
-#ifdef DEBUG_MODE
-    Serial.print("Expected Active Energy Code: ");
-    Serial.println(expectedActiveEnergyCode, HEX);
-#endif
-
-    for (i = 0; i < arraySize; i++)
-    {
-        actualActiveEnergyCode = accActiveEgyReg[i];
-
-        temp = (((float)expectedActiveEnergyCode / (float)actualActiveEnergyCode) - 1) * 134217728; // Calculate the gain.
-        pgainReg[i] = (int32_t)temp;                                                                // Round off
-#ifdef DEBUG_MODE
-        Serial.print("Channel ");
-        Serial.print(i + 1);
-        Serial.print("Actual Active Energy Code: ");
-        Serial.println(actualActiveEnergyCode, HEX);
-        Serial.print("Power Gain Register: ");
-        Serial.println(pgainReg[i], HEX);
-#endif
-    }
-}
-
 bool ADE9000::updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fundEnergy)
 {
     if (calInfo.function != calNone) return false;      //No se pueden leer los registros de energía si se está calibrando
@@ -863,6 +831,17 @@ bool ADE9000::updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fun
     temp &= EGY_INTERRUPT_MASK0;
     if (temp == EGY_INTERRUPT_MASK0) {
         SPI_Write_32(ADDR_STATUS0, 0xFFFFFFFF);
+        readAccEnergyRegister(energy, fundEnergy);
+        return true;    //exit function
+    }
+    return false;
+}
+
+void ADE9000::readAccEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fundEnergy)
+{
+    if (calInfo.function != calNone) return;      //No se pueden leer los registros de energía si se está calibrando
+
+    if (energy != nullptr) {
         energy->PhaseR.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AWATTHR_HI)) / ONE_MILLION;
         energy->PhaseS.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BWATTHR_HI)) / ONE_MILLION;
         energy->PhaseT.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CWATTHR_HI)) / ONE_MILLION;
@@ -874,24 +853,23 @@ bool ADE9000::updateEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fun
         energy->PhaseR.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AVAHR_HI)) / ONE_MILLION;
         energy->PhaseS.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BVAHR_HI)) / ONE_MILLION;
         energy->PhaseT.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CVAHR_HI)) / ONE_MILLION;
-
-        if (fundEnergy != nullptr) {    //Actualizar contadores de energía fundamental si se puede
-            fundEnergy->PhaseR.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AFWATTHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseS.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BFWATTHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseT.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CFWATTHR_HI)) / ONE_MILLION;
-
-            fundEnergy->PhaseR.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AFVARHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseS.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BFVARHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseT.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CFVARHR_HI)) / ONE_MILLION;
-
-            fundEnergy->PhaseR.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AFVAHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseS.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BFVAHR_HI)) / ONE_MILLION;
-            fundEnergy->PhaseT.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CFVAHR_HI)) / ONE_MILLION;
-        }
-        return true;    //exit function
     }
-    return false;
+
+    if (fundEnergy != nullptr) {    //Actualizar contadores de energía fundamental si se puede
+        fundEnergy->PhaseR.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AFWATTHR_HI)) / ONE_MILLION;
+        fundEnergy->PhaseS.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BFWATTHR_HI)) / ONE_MILLION;
+        fundEnergy->PhaseT.Watt_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CFWATTHR_HI)) / ONE_MILLION;
+
+        fundEnergy->PhaseR.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AFVARHR_HI)) / ONE_MILLION;
+        fundEnergy->PhaseS.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BFVARHR_HI)) / ONE_MILLION;
+        fundEnergy->PhaseT.VAR_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CFVARHR_HI)) / ONE_MILLION;
+
+        fundEnergy->PhaseR.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_AFVAHR_HI)) / ONE_MILLION;
+        fundEnergy->PhaseS.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_BFVAHR_HI)) / ONE_MILLION;
+        fundEnergy->PhaseT.VA_H += (double)(CAL_ENERGY_CC * (int32_t)SPI_Read_32(ADDR_CFVAHR_HI)) / ONE_MILLION;
+    }
 }
+
 
 bool ADE9000::startCalibration(calibrationStep_t function, bool phaseA, bool phaseB, bool phaseC, bool neutral)
 {
@@ -1305,12 +1283,12 @@ void ADE9000::readDipLevels(struct VoltageRMSRegs* Data)
 
 void ADE9000::setSwellDetectionLevels(float level, uint32_t cycles)
 {
-    if (level < 0 || level > getMaxInputVoltage()) return;
-    if (cycles < 2 || cycles > 100) return;
+    // if (level < 0 || level > getMaxInputVoltage()) return;
+    // if (cycles < 2 || cycles > 100) return;
 
-    int32_t value = level * (float)ONE_MILLION / (CAL_VRMS_CC) * 0.03125;  //SWELL_LVL = xVRMSONE*2^−5
+    int32_t value = level * (float)ONE_MILLION / (CAL_VRMS_CC) * 0.03125;  //DIP_LVL = xVRMSONE*2^−5
     Serial.printf("setSwellDetectionLevels: %.2fV -> SWELLLVL=%d, SWELLCYC=%d\n", level, value, cycles);
-    SPI_Write_32(ADDR_SWELL_LVL, (uint32_t)level);
+    SPI_Write_32(ADDR_SWELL_LVL, (uint32_t)value);
     SPI_Write_16(ADDR_SWELL_CYC, cycles);
 }
 

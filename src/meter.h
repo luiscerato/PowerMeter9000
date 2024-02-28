@@ -1,5 +1,46 @@
 #include "ade9000/ADE9000.h"
 #include "AsyncWebSocket.h"
+#include "time.h"
+
+typedef struct {
+	bool active;
+	float value;
+	timeval start;
+	timeval end;
+
+	void inline setStatus(bool status) {
+		lastActive = active;
+		active = status;
+
+		if (active && !lastActive) 	//Entrando...
+			gettimeofday(&start, nullptr);
+		else if (!active && lastActive) //Saliendo...
+			gettimeofday(&end, nullptr);
+	};
+
+	void inline setStatus(bool status, float level) {
+		setStatus(status);
+		value = level;
+	};
+
+	bool inline hasChanged() {
+		return lastActive != active;
+	}
+
+	void printEvent(const char* Event, const char* phase) {
+		if (active) {
+			Serial.printf("Evento %s en fase %s iniciado a %d.%d, value: %.2f\n", Event, phase, start.tv_sec, start.tv_usec / 1000, value);
+		}
+		else {
+			uint64_t s = (uint64_t)start.tv_sec * 1000 + start.tv_usec / 1000;
+			uint64_t e = (uint64_t)end.tv_sec * 1000 + end.tv_usec / 1000;
+			Serial.printf("Evento %s en fase %s terminado a %d.%d, last value: %.2f, duracion: %d ms\n", Event, phase, end.tv_sec, end.tv_usec / 1000, value, e - s);
+		}
+	}
+
+private:
+	bool lastActive;
+} phaseEvent_t;
 
 struct phaseValues
 {
@@ -31,6 +72,10 @@ struct phaseValues
 		strncpy(Name, name, 7);
 		Name[7] = 0;
 	};
+
+	phaseEvent_t voltageDip;
+	phaseEvent_t voltageSwell;
+	phaseEvent_t overCurrent;
 };
 
 struct meterValues
@@ -67,6 +112,7 @@ struct meterValues
 	meterValues() : phaseR("FASE R"), phaseS("FASE S"), phaseT("FASE T"), neutral("NEUTRO") {
 		power.Watt = power.VAR = power.VA = 0;
 	};
+
 };
 
 typedef struct {
@@ -98,6 +144,7 @@ void compressWaveBuffer12(int32_t* waveBufferRaw, uint8_t* waveBuffer, uint16_t 
 void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len);
 
 
+void meterReadWaveBuffer();
 
 void meterReadRMS();
 
@@ -117,9 +164,7 @@ void meterReadAngles();
 
 void meterReadEnergy();
 
-void meterReadDip();
-
-void meterReadSwell();
+void meterReadDipSwell();
 
 void meterReadOverCurrent();
 
