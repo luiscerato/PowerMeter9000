@@ -292,6 +292,11 @@ struct VoltageRMSRegs
 	float VoltageRMS_A;
 	float VoltageRMS_B;
 	float VoltageRMS_C;
+
+	VoltageRMSRegs() {
+		VoltageRMSReg_A = VoltageRMSReg_B = VoltageRMSReg_C = 0;
+		VoltageRMS_A = VoltageRMS_B = VoltageRMS_C = 0.0;
+	};
 };
 
 /* Current structure for saved data codes */
@@ -305,6 +310,11 @@ struct CurrentRMSRegs
 	float CurrentRMS_B;
 	float CurrentRMS_C;
 	float CurrentRMS_N;
+
+	CurrentRMSRegs() {
+		CurrentRMSReg_A = CurrentRMSReg_B = CurrentRMSReg_C = CurrentRMSReg_N = 0;
+		CurrentRMS_A = CurrentRMS_B = CurrentRMS_C = CurrentRMS_N = 0.0;
+	};
 };
 
 /* PGA Gain structure for saved voltage and current gain */

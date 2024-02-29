@@ -12,6 +12,7 @@
 #include "keyboard.h"
 #include "webserver.h"
 #include "SPIFFS.h"
+#include "AsyncMqttClient.h"
 
 
 TactSwitch BtnEnter, BtnUp, BtnDown, BtnEsc, BtnNext; // Interfase de 5 botones
@@ -95,6 +96,11 @@ void setup(void)
 
   Serial.begin(115200);
 
+  //Iniciar hora al 1/1/2024
+  struct timeval now = { 1704067200 , 0 };
+  struct timezone tz = { -180, 0 };
+  settimeofday(&now, &tz);
+
   pinMode(pinRelay, OUTPUT);
   pinMode(pinBuzzer, OUTPUT);
   pinMode(pinLedOk, OUTPUT);
@@ -165,23 +171,22 @@ void loop(void)
 {
   Keyboard.scan();
 
-  //MeterLoop();
-
   UI();
-  // ledcWriteNote(4, NOTE_A, 4);
-      // ledcWrite(4, 0);
 
 
-  if (micros() - send > 95999) {  //Enviar cada 96ms 
-    send = micros();
-    // for (uint8_t i = 0; i < 3; i++) {
-    //   fillWaveBuffer();
-    //   compressWaveBuffer12(i);
-    // }
-    // uint8_t* p = waveBuffer;
-    // size_t size = sizeof(waveBuffer);
-    // bytes += size;
-    // counter++;
+  if (millis() - send > 1999) {  //Enviar cada 96ms 
+    send = millis();
+
+    String j;
+    uint32_t t = micros();
+    j = Meter.phaseR.getJson().c_str();
+    t = micros() - t;
+    Serial.printf("%s\nTime: %uus\n", j.c_str(), t);
+
+    t = micros();
+    j = Meter.getJson().c_str();
+    t = micros() - t;
+    Serial.printf("%s\nTime: %uus\n", j.c_str(), t);
   }
 
   if (millis() - leds > 24) {
@@ -267,10 +272,9 @@ void loop(void)
 
 struct tm getTime()
 {
-  struct tm time;
-  if (!getLocalTime(&time, 500))
-    Serial.println("Could not obtain time info");
-  return time;
+  struct timeval now;
+  gettimeofday(&now, nullptr);
+  return *localtime((time_t*)&now.tv_sec);
 }
 
 uint32_t indexUI = 0;

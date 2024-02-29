@@ -76,6 +76,26 @@ struct phaseValues
 	phaseEvent_t voltageDip;
 	phaseEvent_t voltageSwell;
 	phaseEvent_t overCurrent;
+
+	String getJson() {
+		const uint32_t strSize = 1024;
+		String res;
+		char* str = (char*)malloc(strSize);
+		if (str == nullptr) return res;
+		//"{\"Zero\":%.0f, \"Conversion\":%.0f, \"Weight\":%.3f, \"CalTemp\": %.2f, \"Date\": %d}"
+
+		snprintf(str, strSize, "{\"name\":\"%s\",\"vrms\":%.4f,\"irms\":%.4f,\"fvrms\":%.4f,\"firms\":%.4f,"
+			"\"freq\":%.2f,\"pf\":%.4f,\"angle\":%.2f,\"vthd\":%.2f,\"ithd\":%.2f,"
+			"\"watt\":%.4f,\"var\":%.4f,\"va\":%.4f,"
+			"\"watth\":%.4f,\"varh\":%.4f,\"vah\":%.4f}",
+			Name, Vrms, Irms, FastVrms, FastIrms,
+			Freq, PowerFactor, AngleVI, Vthd, Ithd,
+			Watt, VAR, VA,
+			Watt_H, VAR_H, VA_H);
+		res = str;
+		free(str);
+		return res;
+	};
 };
 
 struct meterValues
@@ -112,6 +132,25 @@ struct meterValues
 	meterValues() : phaseR("FASE R"), phaseS("FASE S"), phaseT("FASE T"), neutral("NEUTRO") {
 		power.Watt = power.VAR = power.VA = 0;
 	};
+
+	String getJson() {
+		const uint32_t strSize = 1024;
+		String res;
+		char* str = (char*)malloc(strSize);
+		if (str == nullptr) return res;
+
+		snprintf(str, strSize, "{\"vrms\":%.3f,\"irms\":%.3f,\"fvrms\":%.3f,\"firms\":%.3f,"
+			"\"freq\":%.2f,\"pf\":%.4f,\"vthd\":%.2f,\"ithd\":%.2f,"
+			"\"watt\":%.3f,\"var\":%.3f,\"va\":%.3f,"
+			"\"watth\":%.3f,\"varh\":%.3f,\"vah\":%.3f}",
+			average.Vrms, average.Irms, average.FastVrms, average.FastIrms,
+			average.Freq, average.PowerFactor, average.Vthd, average.Ithd,
+			power.Watt, power.VAR, power.VA,
+			energy.Watt_H, energy.VAR_H, energy.VA_H);
+		res = str;
+		free(str);
+		return res;
+	}
 
 };
 
