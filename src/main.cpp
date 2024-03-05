@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "wifiUtils.h"
 #include <SPI.h>
 #include "ESPAsyncWebServer.h"
 #include "SPIFFS.h"
@@ -8,7 +9,6 @@
 #include "fonts/fonts.h"
 #include "BQ25896.h"
 #include "meter.h"
-#include "esp_sntp.h"
 #include "keyboard.h"
 #include "webserver.h"
 #include "SPIFFS.h"
@@ -96,10 +96,14 @@ void setup(void)
 
   Serial.begin(115200);
 
-  //Iniciar hora al 1/1/2024
-  struct timeval now = { 1704067200 , 0 };
-  struct timezone tz = { -180, 0 };
-  settimeofday(&now, &tz);
+  UtilsInitSettings();
+  UtilsLoadDeafultSettings();
+  DebugStart();
+
+  // //Iniciar hora al 1/1/2024
+  // struct timeval now = { 1704067200 , 0 };
+  // struct timezone tz = { -180, 0 };
+  // settimeofday(&now, &tz);
 
   pinMode(pinRelay, OUTPUT);
   pinMode(pinBuzzer, OUTPUT);
@@ -130,12 +134,23 @@ void setup(void)
   ledcSetup(4, 1000, 10);
   ledcAttachPin(pinBuzzer, 4);
 
+
   Wire.begin(pinSDA, pinSCL);
   Wire.setClock(400000);
 
   lcd.init();
   lcd.cls();
   lcd.display(0);
+
+  WifiStart();
+  TimeStart();
+  OTAStart();
+  MQTTStart();
+
+  WiFi.onEvent([](arduino_event_t* event) {
+    Serial.println("Conectado a Wifi");
+    Init_WebServer();
+    }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
 
   strip.begin();
   strip.setAllLedsColor(0);
@@ -147,7 +162,7 @@ void setup(void)
   }
   Serial.println("SPIFFS mounted successfully");
 
-  initWiFi();
+  // initWiFi();
 
   battery_charging.begin();
 
@@ -169,24 +184,46 @@ uint8_t color = 0;
 
 void loop(void)
 {
+  
   Keyboard.scan();
+
+  UtilsLoop();
+
+  MeterLoop();
 
   UI();
 
 
-  if (millis() - send > 1999) {  //Enviar cada 96ms 
+  if (millis() - send > 999) {  //Enviar cada 96ms 
     send = millis();
 
-    String j;
-    uint32_t t = micros();
-    j = Meter.phaseR.getJson().c_str();
-    t = micros() - t;
-    Serial.printf("%s\nTime: %uus\n", j.c_str(), t);
+    if (mqtt.connected()) {
+      static String data;
+      Meter.getJsonBasic(data);
+      mqtt.publish("PowerMeter9000/meter", 0, false, data.c_str());
+      Meter.getJsonEnergy(data);
+      mqtt.publish("PowerMeter9000/meter/energy", 0, false, data.c_str());
+      Meter.getJsonFastMeasures(data);
+      mqtt.publish("PowerMeter9000/meter/fast", 0, false, data.c_str());
+      data = Meter.phaseR.getJson();
+      mqtt.publish("PowerMeter9000/meter/r", 0, false, data.c_str());
+      data = Meter.phaseS.getJson();
+      mqtt.publish("PowerMeter9000/meter/s", 0, false, data.c_str());
+      data = Meter.phaseT.getJson();
+      mqtt.publish("PowerMeter9000/meter/t", 0, false, data.c_str());
 
-    t = micros();
-    j = Meter.getJson().c_str();
-    t = micros() - t;
-    Serial.printf("%s\nTime: %uus\n", j.c_str(), t);
+    }
+
+    // String j;
+    // uint32_t t = micros();
+    // j = Meter.phaseR.getJson().c_str();
+    // t = micros() - t;
+    // Serial.printf("%s\nTime: %uus\n", j.c_str(), t);
+
+    // t = micros();
+    // j = Meter.getJson().c_str();
+    // t = micros() - t;
+    // Serial.printf("%s\nTime: %uus\n", j.c_str(), t);
   }
 
   if (millis() - leds > 24) {
@@ -761,44 +798,5 @@ boardButtons_t getButtons()
     return buttonOk;
   else
     return buttonNone;
-}
-
-
-
-int32_t waveBufferRaw[2048];
-uint8_t waveBuffer[4032 * 2];    //2048*3 * 0.875 * 0.75 => 4032 palabras después de la compresion
-
-void fillWaveBuffer()
-{
-  uint32_t time = micros();
-  float pi = 3.1415, frequency = 50, sampling_rate = 8000, factor;
-  static uint16_t offset[8] = { 150, 0, 43, 53, 97, 107, 22, 0 }; //Ia, Va, Ib, Vb, Ic, Vc, In, nn
-  static float amplitud[8] = { 0.21, 0.56, 0.2, 0.53, 0.265, 0.495, 0.085, 0 }; //Ia, Va, Ib, Vb, Ic, Vc, In, nn
-
-  //Crear una onda base de 50hz
-  float wave[160];  //frequency / sampling_rate
-  factor = 2 * pi / 160;  //160 es la cantidad de muestras que ocupa un ciclo de 50hz
-  for (uint8_t i = 0; i < 160; i++) {
-    wave[i] = sin(factor * i) * 8388607;
-  }
-
-  //Meter la onda en cada canal, segun su desplazamiento y amplitud
-  for (uint16_t j = 0; j < 2048; j += 8) {
-    for (uint8_t i = 0; i < 8; i++) {
-      waveBufferRaw[j + i] = (((int32_t)((wave[offset[i]] + (random() & 0x1FFff)) * amplitud[i])) << 4);
-      if (++offset[i] >= 160) offset[i] = 0;
-    }
-  }
-  time = micros() - time;
-  // Serial.printf("Tiempo de llenado: %u us\n", time);
-
-  // for (uint8_t i = 0; i < 8; i++) {
-  //   Serial.printf("waveBufferRaw[%d]", i);
-  //   for (uint16_t j = i; j < 2048; j += 8) {
-  //     Serial.printf("%d, ", waveBufferRaw[j + i]>>4);
-  //   }
-  //   Serial.println();
-  // }
-
 }
 

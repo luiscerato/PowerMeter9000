@@ -13,3 +13,8 @@ void webServerSetMeterEvents(WSeventFunctionCallback func);
 AsyncWebSocket* webServerGetMeterWS();
 
 void Init_WebServer();
+
+
+const char* getWifiAuthMode(uint8_t mode);
+int32_t scanWifiGetJson(String& List);
+void getStatus(String& str);

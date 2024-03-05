@@ -152,6 +152,54 @@ struct meterValues
 		return res;
 	}
 
+	void getJsonBasic(String& dest) {
+		const uint32_t strSize = 1280;
+		char* str = (char*)malloc(strSize);
+		if (str == nullptr) {
+			dest = "";
+			return;
+		};
+
+		snprintf(str, strSize, "{\"vrms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f,\"avg\":%.3f},"
+			"\"irms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f,\"avg\":%.3f},"
+			"\"watt\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
+			"\"var\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
+			"\"va\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
+			"\"wattH\":%.3f,\"varH\":%.3f,\"vaH\":%.3f,\"freq\":%.2f}",
+			phaseR.Vrms, phaseS.Vrms, phaseT.Vrms, neutral.Vrms, average.Vrms,
+			phaseR.Irms, phaseS.Irms, phaseT.Irms, neutral.Irms, average.Irms,
+			phaseR.Watt, phaseS.Watt, phaseT.Watt, average.Watt, power.Watt,
+			phaseR.VAR, phaseS.VAR, phaseT.VAR, average.VAR, power.VAR,
+			phaseR.VA, phaseS.VA, phaseT.VA, average.VA, power.VA,
+			energy.Watt_H, energy.VAR_H, energy.VA_H, average.Freq);
+		dest = str;
+		free(str);
+	}
+
+	void getJsonFastMeasures(String& dest) {
+		char str[128];
+		snprintf(str, sizeof(str), "{\"fastV\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f},"
+			"\"fastI\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f}}",
+			phaseR.FastVrms, phaseS.FastVrms, phaseT.FastVrms, neutral.Vrms,
+			phaseR.FastIrms, phaseS.FastIrms, phaseT.FastIrms, neutral.FastIrms);
+		dest = str;
+	}
+
+	void getJsonEnergy(String& dest) {
+		char str[256];
+		snprintf(str, sizeof(str), "{\"wattH\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"tot\":%.3f},"
+			"\"varH\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"tot\":%.3f},"
+			"\"vaH\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"tot\":%.3f}}",
+			phaseR.Watt_H, phaseS.Watt_H, phaseT.Watt_H, energy.Watt_H,
+			phaseR.VAR_H, phaseS.VAR_H, phaseT.VAR_H, energy.VAR_H,
+			phaseR.VA_H, phaseS.VA_H, phaseT.VA_H, energy.VA_H);
+		dest = str;
+	}
+
+	void getJsonAngles(String& dest) {
+		char str[256];
+		dest = "{}";
+	}
 };
 
 typedef struct {
@@ -167,7 +215,7 @@ typedef struct {
 
 void MeterInit();
 
-void MeterInitScope();
+void MeterLoop();
 
 void MeterLoop();
 

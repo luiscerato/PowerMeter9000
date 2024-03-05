@@ -18,7 +18,8 @@ const float ATTEUNATION_FACTOR = 1001;/* The defaul atteunation factor on board 
 const uint8_t ACCUMULATION_TIME = 1;/* Accumulation time in seconds when EGY_TIME=7999, accumulation mode= sample based */
 
 
-meterValues Meter;
+meterValues meterVals;		//Contiene los datos leidos por taskMeter, por lo que no se deben usar fuera de esa tarea
+meterValues Meter;			//Contiene datos que se pueden leer de manera segura por otro task
 struct TotalEnergyVals MeterEnergy;
 
 TaskHandle_t meterHandle = NULL;
@@ -27,6 +28,8 @@ WFBFixedDataRate_t readBuffer[WFB_SAMPLES_PER_CHANNEL / 2];		//Buffer temporal p
 uint8_t outputSamples[8064];	//Buffer para 96ms de datos de 12 bits. 96ms ->768 samples por canal. 768*7*(12/8) => 8064 bytes
 
 scopeInfo_t scopeInfo;
+uint32_t meterUpdated = 0;
+portMUX_TYPE meterMutex = portMUX_INITIALIZER_UNLOCKED;
 
 
 void MeterInit()
@@ -49,7 +52,7 @@ void MeterInit()
 	scopeInfo.sampleFreq = 8000;
 	webServerSetMeterEvents(scopeWSevents);
 
-	xTaskCreatePinnedToCore(MeterTask, "meterTask", 4096, NULL, 10, &meterHandle, APP_CPU_NUM);
+	xTaskCreatePinnedToCore(MeterTask, "meterTask", 8192, NULL, 10, &meterHandle, APP_CPU_NUM);
 
 	/*
 		Asignar los pines de interrupciones a una función que se encargue de desbloquear la tarea que lee el ADE9000
@@ -81,16 +84,12 @@ void MeterInit()
 		vTaskNotifyGiveFromISR(meterHandle, &switchToMeterTask);
 		portYIELD_FROM_ISR(switchToMeterTask);
 		}, FALLING);
-	
+
 	ade.clearStatusBit1();	//Limpiar flags de interrupciones
 
 	Serial.println("Meter inicializado!");
 }
 
-void MeterInitScope()
-{
-
-}
 
 void MeterTask(void* arg)
 {
@@ -135,23 +134,28 @@ void MeterTask(void* arg)
 			// Serial.printf("Status 0= 0x%X. time: %uus\n", status0, t);
 			if (status0.PAGE_FULL) {
 				meterReadWaveBuffer();
+				meterUpdated++;
 			}
 			if (status0.RMSONERDY) {
 				meterReadHalfRMS();
+				meterUpdated++;
 			}
 			if (status0.RMS1012RDY) {
 				meterRead1012RMS();
 				meterReadRMS();
 				meterReadPower();
+				meterUpdated++;
 			}
 			if (status0.THD_PF_RDY) {
 				meterReadTHD();
 				meterReadPowerFactor();
 				meterReadAngles();
 				meterReadPeriods();
+				meterUpdated++;
 			}
 			if (status0.EGYRDY) {
 				meterReadEnergy();
+				meterUpdated++;
 			}
 		}
 
@@ -161,6 +165,7 @@ void MeterTask(void* arg)
 
 			meterReadDipSwell();
 			meterReadOverCurrent();
+			meterUpdated++;
 		}
 	}
 }
@@ -215,31 +220,23 @@ void MeterLoop()
 {
 	static uint32_t fast = 0, rms = 0, power = 0, thd = 0, angles = 0, energy_time = 0;
 
+	if (meterUpdated) {
+		taskENTER_CRITICAL(&meterMutex);
+		meterUpdated = 0;
+		Meter = meterVals;
+		taskEXIT_CRITICAL(&meterMutex);
+	}
+
 	if (millis() - rms > 199) {
 		rms = millis();
-
-		meterReadRMS();
-
 	}
 
 	if (millis() - fast > 39) {	//Actualizar lecturas rms rápidas 
 		fast = millis();
-		meterReadHalfRMS();
 	}
 
 	if (millis() - power > 499) {
 		power = millis();
-
-		meterReadPower();
-
-		// Serial.printf("Fase R: %10.3fW, %10.3fVA, %10.3fVAR. Raw: %10d, %10d, %10d. Conversion: %10.6f\n", watt.ActivePower_A, var.ReactivePower_A, va.ApparentPower_A,
-		// 	watt.ActivePowerReg_A, var.ReactivePowerReg_A, va.ApparentPowerReg_A, CAL_POWER_CC);
-
-		// Serial.printf("Fase S: %10.3fW, %10.3fVA, %10.3fVAR. Raw: %10d, %10d, %10d. Conversion: %10.6f\n", watt.ActivePower_B, var.ReactivePower_B, va.ApparentPower_B,
-		// 	watt.ActivePowerReg_B, var.ReactivePowerReg_B, va.ApparentPowerReg_B, CAL_POWER_CC);
-
-		// Serial.printf("Fase T: %10.3fW, %10.3fVA, %10.3fVAR. Raw: %10d, %10d, %10d. Conversion: %10.6f\n", watt.ActivePower_C, var.ReactivePower_C, va.ApparentPower_C,
-		// 	watt.ActivePowerReg_C, var.ReactivePowerReg_C, va.ApparentPowerReg_C, CAL_POWER_CC);
 	}
 
 	if (millis() - thd > 1023) {
@@ -248,13 +245,6 @@ void MeterLoop()
 
 	if (millis() - angles > 499) {
 		angles = millis();
-
-		meterReadAngles();
-		meterReadPeriods();
-	}
-
-	if (digitalRead(pinAdeInt0) == 0) {	//Interrupcion por datos de energía?
-		meterReadEnergy();
 	}
 
 	if (millis() - energy_time > 499) {
@@ -299,16 +289,16 @@ void meterReadRMS()
 	ade.readVoltageRMSRegs(&volts);
 	ade.readCurrentRMSRegs(&curr);
 
-	Meter.phaseR.Vrms = volts.VoltageRMS_A;
-	Meter.phaseS.Vrms = volts.VoltageRMS_B;
-	Meter.phaseT.Vrms = volts.VoltageRMS_C;
-	Meter.phaseR.Irms = curr.CurrentRMS_A;
-	Meter.phaseS.Irms = curr.CurrentRMS_B;
-	Meter.phaseT.Irms = curr.CurrentRMS_C;
-	Meter.neutral.Irms = curr.CurrentRMS_N;
+	meterVals.phaseR.Vrms = volts.VoltageRMS_A;
+	meterVals.phaseS.Vrms = volts.VoltageRMS_B;
+	meterVals.phaseT.Vrms = volts.VoltageRMS_C;
+	meterVals.phaseR.Irms = curr.CurrentRMS_A;
+	meterVals.phaseS.Irms = curr.CurrentRMS_B;
+	meterVals.phaseT.Irms = curr.CurrentRMS_C;
+	meterVals.neutral.Irms = curr.CurrentRMS_N;
 
-	Meter.average.Vrms = (Meter.phaseR.Vrms + Meter.phaseS.Vrms + Meter.phaseT.Vrms) / 3.0;
-	Meter.average.Irms = (Meter.phaseR.Irms + Meter.phaseS.Irms + Meter.phaseT.Irms) / 3.0;
+	meterVals.average.Vrms = (meterVals.phaseR.Vrms + meterVals.phaseS.Vrms + meterVals.phaseT.Vrms) / 3.0;
+	meterVals.average.Irms = (meterVals.phaseR.Irms + meterVals.phaseS.Irms + meterVals.phaseT.Irms) / 3.0;
 }
 
 void meterReadHalfRMS()
@@ -318,16 +308,16 @@ void meterReadHalfRMS()
 	ade.ReadHalfVoltageRMSRegs(&volts);
 	ade.ReadHalfCurrentRMSRegs(&curr);
 
-	Meter.phaseR.FastVrms = volts.VoltageRMS_A;
-	Meter.phaseS.FastVrms = volts.VoltageRMS_B;
-	Meter.phaseT.FastVrms = volts.VoltageRMS_C;
-	Meter.phaseR.FastIrms = curr.CurrentRMS_A;
-	Meter.phaseS.FastIrms = curr.CurrentRMS_B;
-	Meter.phaseT.FastIrms = curr.CurrentRMS_C;
-	Meter.neutral.FastIrms = curr.CurrentRMS_N;
+	meterVals.phaseR.FastVrms = volts.VoltageRMS_A;
+	meterVals.phaseS.FastVrms = volts.VoltageRMS_B;
+	meterVals.phaseT.FastVrms = volts.VoltageRMS_C;
+	meterVals.phaseR.FastIrms = curr.CurrentRMS_A;
+	meterVals.phaseS.FastIrms = curr.CurrentRMS_B;
+	meterVals.phaseT.FastIrms = curr.CurrentRMS_C;
+	meterVals.neutral.FastIrms = curr.CurrentRMS_N;
 
-	Meter.average.FastVrms = (Meter.phaseR.FastVrms + Meter.phaseS.FastVrms + Meter.phaseT.FastVrms) / 3.0;
-	Meter.average.FastIrms = (Meter.phaseR.FastIrms + Meter.phaseS.FastIrms + Meter.phaseT.FastIrms) / 3.0;
+	meterVals.average.FastVrms = (meterVals.phaseR.FastVrms + meterVals.phaseS.FastVrms + meterVals.phaseT.FastVrms) / 3.0;
+	meterVals.average.FastIrms = (meterVals.phaseR.FastIrms + meterVals.phaseS.FastIrms + meterVals.phaseT.FastIrms) / 3.0;
 }
 
 void meterRead1012RMS()
@@ -343,28 +333,28 @@ void meterReadPower()
 	ade.readReactivePowerRegs(&var);
 	ade.readApparentPowerRegs(&va);
 
-	Meter.phaseR.Watt = watt.ActivePower_A;
-	Meter.phaseS.Watt = watt.ActivePower_B;
-	Meter.phaseT.Watt = watt.ActivePower_C;
-	Meter.neutral.Watt = 0;
+	meterVals.phaseR.Watt = watt.ActivePower_A;
+	meterVals.phaseS.Watt = watt.ActivePower_B;
+	meterVals.phaseT.Watt = watt.ActivePower_C;
+	meterVals.neutral.Watt = 0;
 
-	Meter.phaseR.VAR = var.ReactivePower_A;
-	Meter.phaseS.VAR = var.ReactivePower_B;
-	Meter.phaseT.VAR = var.ReactivePower_C;
-	Meter.neutral.VAR = 0;
+	meterVals.phaseR.VAR = var.ReactivePower_A;
+	meterVals.phaseS.VAR = var.ReactivePower_B;
+	meterVals.phaseT.VAR = var.ReactivePower_C;
+	meterVals.neutral.VAR = 0;
 
-	Meter.phaseR.VA = va.ApparentPower_A;
-	Meter.phaseS.VA = va.ApparentPower_B;
-	Meter.phaseT.VA = va.ApparentPower_C;
-	Meter.neutral.VA = 0;
+	meterVals.phaseR.VA = va.ApparentPower_A;
+	meterVals.phaseS.VA = va.ApparentPower_B;
+	meterVals.phaseT.VA = va.ApparentPower_C;
+	meterVals.neutral.VA = 0;
 
-	Meter.power.Watt = Meter.phaseR.Watt + Meter.phaseS.Watt + Meter.phaseT.Watt;
-	Meter.power.VAR = Meter.phaseR.VAR + Meter.phaseS.VAR + Meter.phaseT.VAR;
-	Meter.power.VA = Meter.phaseR.VA + Meter.phaseS.VA + Meter.phaseT.VA;
+	meterVals.power.Watt = meterVals.phaseR.Watt + meterVals.phaseS.Watt + meterVals.phaseT.Watt;
+	meterVals.power.VAR = meterVals.phaseR.VAR + meterVals.phaseS.VAR + meterVals.phaseT.VAR;
+	meterVals.power.VA = meterVals.phaseR.VA + meterVals.phaseS.VA + meterVals.phaseT.VA;
 
-	Meter.average.Watt = (Meter.phaseR.Watt + Meter.phaseS.Watt + Meter.phaseT.Watt) / 3.0;
-	Meter.average.VAR = (Meter.phaseR.VAR + Meter.phaseS.VAR + Meter.phaseT.VAR) / 3.0;
-	Meter.average.VA = (Meter.phaseR.VA + Meter.phaseS.VA + Meter.phaseT.VA) / 3.0;
+	meterVals.average.Watt = (meterVals.phaseR.Watt + meterVals.phaseS.Watt + meterVals.phaseT.Watt) / 3.0;
+	meterVals.average.VAR = (meterVals.phaseR.VAR + meterVals.phaseS.VAR + meterVals.phaseT.VAR) / 3.0;
+	meterVals.average.VA = (meterVals.phaseR.VA + meterVals.phaseS.VA + meterVals.phaseT.VA) / 3.0;
 }
 
 void meterReadTHD()
@@ -374,18 +364,18 @@ void meterReadTHD()
 	ade.ReadVoltageTHDRegsnValues(&volt);
 	ade.ReadCurrentTHDRegsnValues(&curr);
 
-	Meter.phaseR.Ithd = curr.CurrentTHDValue_A;
-	Meter.phaseS.Ithd = curr.CurrentTHDValue_B;
-	Meter.phaseT.Ithd = curr.CurrentTHDValue_C;
-	Meter.neutral.Ithd = 0;
+	meterVals.phaseR.Ithd = curr.CurrentTHDValue_A;
+	meterVals.phaseS.Ithd = curr.CurrentTHDValue_B;
+	meterVals.phaseT.Ithd = curr.CurrentTHDValue_C;
+	meterVals.neutral.Ithd = 0;
 
-	Meter.phaseR.Vthd = volt.VoltageTHDValue_A;
-	Meter.phaseS.Vthd = volt.VoltageTHDValue_B;
-	Meter.phaseT.Vthd = volt.VoltageTHDValue_C;
-	Meter.neutral.Vthd = 0;
+	meterVals.phaseR.Vthd = volt.VoltageTHDValue_A;
+	meterVals.phaseS.Vthd = volt.VoltageTHDValue_B;
+	meterVals.phaseT.Vthd = volt.VoltageTHDValue_C;
+	meterVals.neutral.Vthd = 0;
 
-	Meter.average.Ithd = (Meter.phaseR.Ithd + Meter.phaseS.Ithd + Meter.phaseT.Ithd) / 3.0;
-	Meter.average.Vthd = (Meter.phaseR.Vthd + Meter.phaseS.Vthd + Meter.phaseT.Vthd) / 3.0;
+	meterVals.average.Ithd = (meterVals.phaseR.Ithd + meterVals.phaseS.Ithd + meterVals.phaseT.Ithd) / 3.0;
+	meterVals.average.Vthd = (meterVals.phaseR.Vthd + meterVals.phaseS.Vthd + meterVals.phaseT.Vthd) / 3.0;
 }
 
 void meterReadPowerFactor()
@@ -393,12 +383,12 @@ void meterReadPowerFactor()
 	PowerFactorRegs pf;
 	ade.readPowerFactorRegsnValues(&pf);
 
-	Meter.phaseR.PowerFactor = pf.PowerFactorValue_A;
-	Meter.phaseS.PowerFactor = pf.PowerFactorValue_B;
-	Meter.phaseT.PowerFactor = pf.PowerFactorValue_C;
-	Meter.neutral.PowerFactor = 0;
+	meterVals.phaseR.PowerFactor = pf.PowerFactorValue_A;
+	meterVals.phaseS.PowerFactor = pf.PowerFactorValue_B;
+	meterVals.phaseT.PowerFactor = pf.PowerFactorValue_C;
+	meterVals.neutral.PowerFactor = 0;
 
-	Meter.average.PowerFactor = (Meter.phaseR.PowerFactor + Meter.phaseS.PowerFactor + Meter.phaseT.PowerFactor) / 3.0;
+	meterVals.average.PowerFactor = (meterVals.phaseR.PowerFactor + meterVals.phaseS.PowerFactor + meterVals.phaseT.PowerFactor) / 3.0;
 }
 
 void meterReadPeriods()
@@ -406,10 +396,10 @@ void meterReadPeriods()
 	PeriodRegs period;
 	ade.readPeriodRegsnValues(&period);
 
-	Meter.phaseR.Freq = period.FrequencyValue_A;
-	Meter.phaseS.Freq = period.FrequencyValue_B;
-	Meter.phaseT.Freq = period.FrequencyValue_C;
-	Meter.average.Freq = (Meter.phaseR.Freq + Meter.phaseS.Freq + Meter.phaseT.Freq) / 3.0;
+	meterVals.phaseR.Freq = period.FrequencyValue_A;
+	meterVals.phaseS.Freq = period.FrequencyValue_B;
+	meterVals.phaseT.Freq = period.FrequencyValue_C;
+	meterVals.average.Freq = (meterVals.phaseR.Freq + meterVals.phaseS.Freq + meterVals.phaseT.Freq) / 3.0;
 }
 
 void meterReadAngles()
@@ -417,33 +407,33 @@ void meterReadAngles()
 	AngleRegs ang;
 	ade.readAngleRegsnValues(&ang);
 
-	Meter.phaseR.AngleVI = ang.AngleValue_VA_IA;
-	Meter.phaseS.AngleVI = ang.AngleValue_VB_IB;
-	Meter.phaseT.AngleVI = ang.AngleValue_VC_IC;
-	if (Meter.phaseR.Watt < 10) Meter.phaseR.AngleVI = 0.0;
-	if (Meter.phaseS.Watt < 10) Meter.phaseS.AngleVI = 0.0;
-	if (Meter.phaseT.Watt < 10) Meter.phaseT.AngleVI = 0.0;
+	meterVals.phaseR.AngleVI = ang.AngleValue_VA_IA;
+	meterVals.phaseS.AngleVI = ang.AngleValue_VB_IB;
+	meterVals.phaseT.AngleVI = ang.AngleValue_VC_IC;
+	if (meterVals.phaseR.Watt < 10) meterVals.phaseR.AngleVI = 0.0;
+	if (meterVals.phaseS.Watt < 10) meterVals.phaseS.AngleVI = 0.0;
+	if (meterVals.phaseT.Watt < 10) meterVals.phaseT.AngleVI = 0.0;
 }
 
 void meterReadEnergy()
 {
 	ade.readAccEnergyRegister(&MeterEnergy);
 
-	Meter.phaseR.Watt_H = MeterEnergy.PhaseR.Watt_H;
-	Meter.phaseS.Watt_H = MeterEnergy.PhaseS.Watt_H;
-	Meter.phaseT.Watt_H = MeterEnergy.PhaseT.Watt_H;
+	meterVals.phaseR.Watt_H = MeterEnergy.PhaseR.Watt_H;
+	meterVals.phaseS.Watt_H = MeterEnergy.PhaseS.Watt_H;
+	meterVals.phaseT.Watt_H = MeterEnergy.PhaseT.Watt_H;
 
-	Meter.phaseR.VAR_H = MeterEnergy.PhaseR.VAR_H;
-	Meter.phaseS.VAR_H = MeterEnergy.PhaseS.VAR_H;
-	Meter.phaseT.VAR_H = MeterEnergy.PhaseT.VAR_H;
+	meterVals.phaseR.VAR_H = MeterEnergy.PhaseR.VAR_H;
+	meterVals.phaseS.VAR_H = MeterEnergy.PhaseS.VAR_H;
+	meterVals.phaseT.VAR_H = MeterEnergy.PhaseT.VAR_H;
 
-	Meter.phaseR.VA_H = MeterEnergy.PhaseR.VA_H;
-	Meter.phaseS.VA_H = MeterEnergy.PhaseS.VA_H;
-	Meter.phaseT.VA_H = MeterEnergy.PhaseT.VA_H;
+	meterVals.phaseR.VA_H = MeterEnergy.PhaseR.VA_H;
+	meterVals.phaseS.VA_H = MeterEnergy.PhaseS.VA_H;
+	meterVals.phaseT.VA_H = MeterEnergy.PhaseT.VA_H;
 
-	Meter.energy.Watt_H = MeterEnergy.PhaseR.Watt_H + MeterEnergy.PhaseS.Watt_H + MeterEnergy.PhaseT.Watt_H;
-	Meter.energy.VAR_H = MeterEnergy.PhaseR.VAR_H + MeterEnergy.PhaseS.VAR_H + MeterEnergy.PhaseT.VAR_H;
-	Meter.energy.VA_H = MeterEnergy.PhaseR.VA_H + MeterEnergy.PhaseS.VA_H + MeterEnergy.PhaseT.VA_H;
+	meterVals.energy.Watt_H = MeterEnergy.PhaseR.Watt_H + MeterEnergy.PhaseS.Watt_H + MeterEnergy.PhaseT.Watt_H;
+	meterVals.energy.VAR_H = MeterEnergy.PhaseR.VAR_H + MeterEnergy.PhaseS.VAR_H + MeterEnergy.PhaseT.VAR_H;
+	meterVals.energy.VA_H = MeterEnergy.PhaseR.VA_H + MeterEnergy.PhaseS.VA_H + MeterEnergy.PhaseT.VA_H;
 }
 
 void meterReadDipSwell()
@@ -454,22 +444,22 @@ void meterReadDipSwell()
 	event = ade.readEventStatus();
 	if (event.DIPA || event.DIPB || event.DIPC) ade.readDipLevels(&volts);	//Leer solo si hay un evento activo
 
-	Meter.phaseR.voltageDip.setStatus(event.DIPA, volts.VoltageRMS_A);
-	Meter.phaseS.voltageDip.setStatus(event.DIPB, volts.VoltageRMS_B);
-	Meter.phaseT.voltageDip.setStatus(event.DIPC, volts.VoltageRMS_C);
+	meterVals.phaseR.voltageDip.setStatus(event.DIPA, volts.VoltageRMS_A);
+	meterVals.phaseS.voltageDip.setStatus(event.DIPB, volts.VoltageRMS_B);
+	meterVals.phaseT.voltageDip.setStatus(event.DIPC, volts.VoltageRMS_C);
 
-	if (Meter.phaseR.voltageDip.hasChanged()) Meter.phaseR.voltageDip.printEvent("dip", "R");
-	if (Meter.phaseS.voltageDip.hasChanged()) Meter.phaseS.voltageDip.printEvent("dip", "S");
-	if (Meter.phaseT.voltageDip.hasChanged()) Meter.phaseT.voltageDip.printEvent("dip", "T");
+	if (meterVals.phaseR.voltageDip.hasChanged()) meterVals.phaseR.voltageDip.printEvent("dip", "R");
+	if (meterVals.phaseS.voltageDip.hasChanged()) meterVals.phaseS.voltageDip.printEvent("dip", "S");
+	if (meterVals.phaseT.voltageDip.hasChanged()) meterVals.phaseT.voltageDip.printEvent("dip", "T");
 
 	if (event.SWELLA || event.SWELLB || event.SWELLC) ade.readSwellLevels(&volts);	//Leer solo si hay un evento activo
-	Meter.phaseR.voltageSwell.setStatus(event.SWELLA, volts.VoltageRMS_A);
-	Meter.phaseS.voltageSwell.setStatus(event.SWELLB, volts.VoltageRMS_B);
-	Meter.phaseT.voltageSwell.setStatus(event.SWELLC, volts.VoltageRMS_C);
+	meterVals.phaseR.voltageSwell.setStatus(event.SWELLA, volts.VoltageRMS_A);
+	meterVals.phaseS.voltageSwell.setStatus(event.SWELLB, volts.VoltageRMS_B);
+	meterVals.phaseT.voltageSwell.setStatus(event.SWELLC, volts.VoltageRMS_C);
 
-	if (Meter.phaseR.voltageSwell.hasChanged()) Meter.phaseR.voltageSwell.printEvent("swell", "R");
-	if (Meter.phaseS.voltageSwell.hasChanged()) Meter.phaseS.voltageSwell.printEvent("swell", "S");
-	if (Meter.phaseT.voltageSwell.hasChanged()) Meter.phaseT.voltageSwell.printEvent("swell", "T");
+	if (meterVals.phaseR.voltageSwell.hasChanged()) meterVals.phaseR.voltageSwell.printEvent("swell", "R");
+	if (meterVals.phaseS.voltageSwell.hasChanged()) meterVals.phaseS.voltageSwell.printEvent("swell", "S");
+	if (meterVals.phaseT.voltageSwell.hasChanged()) meterVals.phaseT.voltageSwell.printEvent("swell", "T");
 }
 
 
@@ -481,15 +471,15 @@ void meterReadOverCurrent()
 	status = ade.checkOverCurrentStatus();
 	if (status.OIPHASE) ade.readOverCurrentLevels(&current);	//Leer solo si hay un evento activo
 
-	Meter.phaseR.overCurrent.setStatus(status.OIPHASEA, current.CurrentRMS_A);
-	Meter.phaseS.overCurrent.setStatus(status.OIPHASEB, current.CurrentRMS_B);
-	Meter.phaseT.overCurrent.setStatus(status.OIPHASEC, current.CurrentRMS_C);
-	Meter.neutral.overCurrent.setStatus(status.OIPHASEN, current.CurrentRMS_N);
+	meterVals.phaseR.overCurrent.setStatus(status.OIPHASEA, current.CurrentRMS_A);
+	meterVals.phaseS.overCurrent.setStatus(status.OIPHASEB, current.CurrentRMS_B);
+	meterVals.phaseT.overCurrent.setStatus(status.OIPHASEC, current.CurrentRMS_C);
+	meterVals.neutral.overCurrent.setStatus(status.OIPHASEN, current.CurrentRMS_N);
 
-	if (Meter.phaseR.overCurrent.hasChanged()) Meter.phaseR.overCurrent.printEvent("overCurrent", "R");
-	if (Meter.phaseS.overCurrent.hasChanged()) Meter.phaseS.overCurrent.printEvent("overCurrent", "S");
-	if (Meter.phaseT.overCurrent.hasChanged()) Meter.phaseT.overCurrent.printEvent("overCurrent", "T");
-	if (Meter.neutral.overCurrent.hasChanged()) Meter.neutral.overCurrent.printEvent("overCurrent", "N");
+	if (meterVals.phaseR.overCurrent.hasChanged()) meterVals.phaseR.overCurrent.printEvent("overCurrent", "R");
+	if (meterVals.phaseS.overCurrent.hasChanged()) meterVals.phaseS.overCurrent.printEvent("overCurrent", "S");
+	if (meterVals.phaseT.overCurrent.hasChanged()) meterVals.phaseT.overCurrent.printEvent("overCurrent", "T");
+	if (meterVals.neutral.overCurrent.hasChanged()) meterVals.neutral.overCurrent.printEvent("overCurrent", "N");
 }
 
 
