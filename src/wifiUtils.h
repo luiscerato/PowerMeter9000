@@ -46,6 +46,8 @@ void DebugStart();
 
 void WifiStart();
 
+void WifiReconnect();
+
 void OTAStart();
 
 void OTAEnd();

@@ -27,6 +27,13 @@ function initUI() {
     let ws = board.IP + "/ws";
     Scope.begin("chartContainer", board.getWebSocketURL(ws));
 
+    updateBoardStatus("loading");
+    board.getStateRepeat(
+        (data) => updateBoardStatus(data),
+        () => updateBoardStatus("fail"),
+        500
+    );
+
     updateUI();
 
     //Switchs de canales
@@ -196,4 +203,22 @@ function updateTrigger() {
     $("#lblTrigger").text(`${info.Value.toFixed(3)}${info.unit}`);
 
     $("#radioTriggerEdge").val(info.Edge);
+}
+
+function updateBoardStatus(status) {
+    const spinner = '<span class="spinner-border spinner-border-sm ml-2" role="status" aria-hidden="true"></span>';
+    if (status == "loading" || status == "fail") {
+        $("#statusWifi").html("Conectado a " + spinner + " | señal: " + spinner);
+        $("#statusIP").html("IP: " + spinner);
+        $("#statusHeap").html("Heap total: " + spinner + " libre: " + spinner);
+    } else {
+        let icon = iconWifiFull;
+        if (status.rssi < -80) icon = iconWifi0;
+        else if (status.rssi < -65) icon = iconWifi1;
+        else if (status.rssi < -50) icon = iconWifi2;
+
+        $("#statusWifi").html("Conectado a " + status.ssid + " " + icon);
+        $("#statusIP").text("IP: " + status.ip);
+        $("#statusHeap").text("Heap total: " + status.heap + " libre: " + status.free);
+    }
 }

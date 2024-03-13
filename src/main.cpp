@@ -7,7 +7,7 @@
 #include "ST7920_SPI.h"
 #include "pins.h"
 #include "fonts/fonts.h"
-#include "BQ25896.h"
+#include "battery.h"
 #include "meter.h"
 #include "keyboard.h"
 #include "webserver.h"
@@ -23,16 +23,13 @@ ST7920_SPI lcd(pinLcdSS, pinSpiClk, pinSpiSdo);
 
 Freenove_ESP32_WS2812 strip = Freenove_ESP32_WS2812(5, pinPixelLed, 1);
 
-BQ25896  battery_charging(Wire);
-
 AngleRegs angles;
 
 boardButtons_t readButtons();
 
-
-
 void Draw_Main();
 void Draw_Title(const char* Title);
+void Draw_Status();
 void Draw_Fase();
 void Draw_Angulos();
 void Draw_CalibrarFase();
@@ -40,6 +37,8 @@ void Draw_Battery();
 void Draw_CalibrateCorriente();
 void UI();
 boardButtons_t getButtons();
+
+
 void testFormat()
 {
   float vals[] = { 1.0, 12.0, 123.0, 1234.0, 12345.0, 123456.0, 1234567.0, 12345678.0, 123456789.0 };
@@ -57,39 +56,6 @@ void testFormat()
   }
 }
 
-void initWiFi() {
-  // Initialize WiFi
-  IPAddress staticIP(192, 168, 1, 90);
-  IPAddress gateway(192, 168, 1, 1);
-  IPAddress subnet(255, 255, 255, 0);
-  IPAddress dns(192, 168, 1, 30);
-  IPAddress dns2(8, 8, 8, 8);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(WIFI_PS_NONE);
-  WiFi.config(staticIP, gateway, subnet, dns, dns);
-  WiFi.begin("Wifi-Luis", "");
-  Serial.print("Connecting to WiFi ..");
-
-  WiFi.onEvent([](arduino_event_t* event) {
-    Serial.println(WiFi.localIP());
-    }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
-
-  WiFi.onEvent([](arduino_event_t* event) {
-    Serial.println("Conectado a Wifi");
-    configTime(-3600 * 3, 0, "ar.pool.ntp.org");
-
-    Init_WebServer();
-
-    }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
-
-  sntp_set_time_sync_notification_cb([](struct timeval* tv) {
-    Serial.println("\n----Time Sync-----");
-    Serial.println(tv->tv_sec);
-    Serial.println(ctime(&tv->tv_sec));
-    });
-}
-
 
 void setup(void)
 {
@@ -99,11 +65,6 @@ void setup(void)
   UtilsInitSettings();
   UtilsLoadDeafultSettings();
   DebugStart();
-
-  // //Iniciar hora al 1/1/2024
-  // struct timeval now = { 1704067200 , 0 };
-  // struct timezone tz = { -180, 0 };
-  // settimeofday(&now, &tz);
 
   pinMode(pinRelay, OUTPUT);
   pinMode(pinBuzzer, OUTPUT);
@@ -134,10 +95,6 @@ void setup(void)
   ledcSetup(4, 1000, 10);
   ledcAttachPin(pinBuzzer, 4);
 
-
-  Wire.begin(pinSDA, pinSCL);
-  Wire.setClock(400000);
-
   lcd.init();
   lcd.cls();
   lcd.display(0);
@@ -156,26 +113,16 @@ void setup(void)
   strip.setAllLedsColor(0);
 
 
-  Serial.print("Iniciando sistema de archivos... ");
-  if (!SPIFFS.begin(true)) {
-    Serial.println("An error has occurred while mounting SPIFFS");
-  }
-  Serial.println("SPIFFS mounted successfully");
-
-  // initWiFi();
-
-  battery_charging.begin();
-
-  battery_charging.setPreCharge_Current_Limit(0.15);
-  battery_charging.setFast_Charge_Current_Limit(0.35);
-  battery_charging.setInput_Current_Limit(false);
-  battery_charging.setChargeEnable(true);
-
-  Serial.println("Set up finished");
-
-  // testFormat();
-
+  debugI("Iniciando sistema de archivos... ");
+  if (!SPIFFS.begin(true))
+    debugI("An error has occurred while mounting SPIFFS");
+  else
+    debugI("SPIFFS mounted successfully");
   MeterInit();
+
+  Batt.Init();
+
+  debugI("Inicialización terminada!");
 }
 
 
@@ -184,8 +131,10 @@ uint8_t color = 0;
 
 void loop(void)
 {
-  
+
   Keyboard.scan();
+
+  Batt.Loop();
 
   UtilsLoop();
 
@@ -194,7 +143,7 @@ void loop(void)
   UI();
 
 
-  if (millis() - send > 999) {  //Enviar cada 96ms 
+  if (millis() - send > 999) {
     send = millis();
 
     if (mqtt.connected()) {
@@ -213,17 +162,6 @@ void loop(void)
       mqtt.publish("PowerMeter9000/meter/t", 0, false, data.c_str());
 
     }
-
-    // String j;
-    // uint32_t t = micros();
-    // j = Meter.phaseR.getJson().c_str();
-    // t = micros() - t;
-    // Serial.printf("%s\nTime: %uus\n", j.c_str(), t);
-
-    // t = micros();
-    // j = Meter.getJson().c_str();
-    // t = micros() - t;
-    // Serial.printf("%s\nTime: %uus\n", j.c_str(), t);
   }
 
   if (millis() - leds > 24) {
@@ -260,47 +198,6 @@ void loop(void)
 
     counter = 0;
     bytes = 0;
-
-
-
-    uint32_t tbatt = micros();
-    battery_charging.properties();
-    tbatt = micros() - tbatt;
-    //Serial.printf("Tiempo de lectura de BQ25895: %u us\n\n", tbatt);
-
-    // Serial.println("Battery Management System Parameter : \n===============================================================");
-    // Serial.print("VBUS : "); Serial.println(battery_charging.getVBUS());
-    // Serial.print("VSYS : "); Serial.println(battery_charging.getVSYS());
-    // Serial.print("VBAT : "); Serial.println(battery_charging.getVBAT());
-    // Serial.print("ICHG : "); Serial.println(battery_charging.getICHG(), 4);
-    // Serial.print("TSPCT : "); Serial.println(battery_charging.getTSPCT());
-    // Serial.print("Temperature : "); Serial.println(battery_charging.getTemperature());
-
-    // Serial.print("FS_Current Limit : "); Serial.println(battery_charging.getFast_Charge_Current_Limit());
-    // Serial.print("IN_Current Limit : "); Serial.println(battery_charging.getInput_Current_Limit());
-    // Serial.print("PRE_CHG_Current Limit : "); Serial.println(battery_charging.getPreCharge_Current_Limit());
-    // Serial.print("TERM_Current Limit : "); Serial.println(battery_charging.getTermination_Current_Limit());
-
-    // Serial.print("Charging Status : "); Serial.println(battery_charging.getCHG_STATUS() == BQ25896::CHG_STAT::NOT_CHARGING ? " not charging" :
-    //   (battery_charging.getCHG_STATUS() == BQ25896::CHG_STAT::PRE_CHARGE ? " pre charging" :
-    //     (battery_charging.getCHG_STATUS() == BQ25896::CHG_STAT::FAST_CHARGE ? " Fast charging" : "charging done")));
-
-    // Serial.print("VBUS Status : "); Serial.println(battery_charging.getVBUS_STATUS() == BQ25896::VBUS_STAT::NO_INPUT ? " not input" :
-    //   (battery_charging.getVBUS_STATUS() == BQ25896::VBUS_STAT::USB_HOST ? " USB host" :
-    //     (battery_charging.getVBUS_STATUS() == BQ25896::VBUS_STAT::ADAPTER ? " Adapter" : "OTG")));
-
-    // Serial.print("VSYS Status : "); Serial.println(battery_charging.getVSYS_STATUS() == BQ25896::VSYS_STAT::IN_VSYSMIN ? " In VSYSMIN regulation (BAT < VSYSMIN)" :
-    //   "Not in VSYSMIN regulation (BAT > VSYSMIN)");
-
-    // Serial.print("Temperature rank : "); Serial.println(battery_charging.getTemp_Rank() == BQ25896::TS_RANK::NORMAL ? " Normal" :
-    //   (battery_charging.getTemp_Rank() == BQ25896::TS_RANK::WARM ? " Warm" :
-    //     (battery_charging.getTemp_Rank() == BQ25896::TS_RANK::COOL ? " Cool" :
-    //       (battery_charging.getTemp_Rank() == BQ25896::TS_RANK::COLD ? " Cold" : "HOT"))));
-
-    // Serial.print("Charger fault status  : "); Serial.println(battery_charging.getCHG_Fault_STATUS() == BQ25896::CHG_FAULT::NORMAL ? " Normal" :
-    //   (battery_charging.getCHG_Fault_STATUS() == BQ25896::CHG_FAULT::INPUT_FAULT ? " Input Fault" :
-    //     (battery_charging.getCHG_Fault_STATUS() == BQ25896::CHG_FAULT::THERMAL_SHUTDOWN ? " Thermal Shutdown" : "TIMER_EXPIRED")));
-
   }
 
 
@@ -345,7 +242,6 @@ void Draw_Main()
 
     Draw_Title("MAIN");
 
-
     lcd.setFont(c64enh);
     lcd.setFont(Small5x7PLBold);
     lcd.printStr(c1, l1, "R");
@@ -369,13 +265,7 @@ void Draw_Main()
     lcd.printStr(c1, l5, ade.format(Meter.energy.Watt_H, 5, "Wh", 1).c_str());
     lcd.printStr(c4, l5, ade.format(Meter.power.Watt, 5, "W", 1).c_str());
 
-
-    snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery_charging.getVBUS(), battery_charging.getVBAT(), battery_charging.getICHG(), battery_charging.getTemperature());
-    //Serial.println(str);
-    lcd.setFont(Small4x5PL);
-    lcd.drawLineHfast(0, 127, 57, 1);
-    lcd.printStr(0, 59, str);
-    // lcd.fillRect(0, 57, 64, 6, 2);
+    Draw_Status();
 
     lcd.display(0);
   }
@@ -435,11 +325,6 @@ void Draw_Fase()
     lcd.printStr(c1, l5, ade.format(vals.VA, 5, "VA").c_str());
     lcd.printStr(c3, l5, ade.format(vals.Watt_H, 5, "Wh").c_str());
 
-    snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery_charging.getVBUS(), battery_charging.getVBAT(), battery_charging.getICHG(), battery_charging.getTemperature());
-    //Serial.println(str);
-    lcd.setFont(Small4x5PL);
-    lcd.drawLineHfast(0, 127, 57, 1);
-    lcd.printStr(0, 59, str);
     // lcd.fillRect(0, 57, 64, 6, 2);
 
     lcd.display(0);
@@ -459,6 +344,66 @@ void Draw_Fase()
     if (fase < 0)
       fase = 3;
   }
+}
+
+
+
+void Draw_Status()
+{
+  char str[64], chargeStat = ' ', wifi = '.', mqtt_status = '.', battTemp = 'N', powerSrc = 'N';
+  const char* chargeFault = "";
+  BQ25896::CHG_STAT stat = battery.getCHG_STATUS();
+  BQ25896::CHG_FAULT fault = battery.getCHG_Fault_STATUS();
+  BQ25896::TS_RANK temp = battery.getTemp_Rank();
+  BQ25896::VBUS_STAT source = battery.getVBUS_STATUS();
+  float Vin = battery.getVBUS();
+  float Vbatt = battery.getVBAT();
+  float Icharge = battery.getICHG();
+
+  if (stat == BQ25896::CHG_STAT::NOT_CHARGING)
+    chargeStat = 'N';
+  else if (stat == BQ25896::CHG_STAT::PRE_CHARGE)
+    chargeStat = 'P';
+  else if (stat == BQ25896::CHG_STAT::FAST_CHARGE)
+    chargeStat = 'F';
+  else if (stat == BQ25896::CHG_STAT::CHARGE_DONE)
+    chargeStat = 'D';
+
+  if (fault == BQ25896::CHG_FAULT::INPUT_FAULT)
+    chargeFault = "Input";
+  else if (fault == BQ25896::CHG_FAULT::THERMAL_SHUTDOWN)
+    chargeFault = "Ther";
+  else if (fault == BQ25896::CHG_FAULT::TIMER_EXPIRED)
+    chargeFault = "Timer";
+
+  if (temp == BQ25896::TS_RANK::HOT)
+    battTemp = 'W';
+  else if (temp == BQ25896::TS_RANK::COLD)
+    battTemp = 'C';
+  else if (temp == BQ25896::TS_RANK::BOOST_COLD)
+    battTemp = 'F';
+  else if (temp == BQ25896::TS_RANK::BOOST_HOT)
+    battTemp = 'H';
+
+  if (source == BQ25896::VBUS_STAT::NO_INPUT)
+    powerSrc = 'N';
+  else if (source == BQ25896::VBUS_STAT::USB_HOST)
+    powerSrc = 'U';
+  else if (source == BQ25896::VBUS_STAT::ADAPTER)
+    powerSrc = 'L';
+  else if (source == BQ25896::VBUS_STAT::OTG)
+    powerSrc = 'O';
+
+
+  if (WiFi.isConnected())
+    wifi = 'W';
+  if (mqtt.connected())
+    mqtt_status = 'M';
+
+  snprintf(str, sizeof(str), "%c%c%c V:%1.2f B:%1.2f I:%1.2f %c%c %s", powerSrc, wifi, mqtt_status, Vin, Vbatt, Icharge, chargeStat, battTemp, chargeFault);
+  lcd.setFont(Small4x5PL);
+  lcd.drawLineHfast(0, 127, 57, 1);
+  lcd.printStr(0, 59, str);
 }
 
 
@@ -493,7 +438,7 @@ void Draw_Angulos()
     lcd.printStr(1, 46, str);
 
 
-    snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery_charging.getVBUS(), battery_charging.getVBAT(), battery_charging.getICHG(), battery_charging.getTemperature());
+    snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery.getVBUS(), battery.getVBAT(), battery.getICHG(), battery.getTemperature());
     //Serial.println(str);
     lcd.setFont(Small4x5PL);
     lcd.drawLineHfast(0, 127, 57, 1);

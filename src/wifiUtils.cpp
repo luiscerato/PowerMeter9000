@@ -17,6 +17,7 @@ const char* hostName = "PowerMeter9000";
 bool usingOTA = false;
 bool usingDebug = false;
 bool usingTimeServer = false;
+bool usingMQTT = false;
 
 /*
 	Chequea que exista la configuración de WifiUtils
@@ -45,6 +46,30 @@ void UtilsInitSettings()
 
 void UtilsLoop()
 {
+	static uint32_t timerWifi, timerMQTT;
+	
+	if (WiFi.isConnected()) {
+		timerWifi = millis();
+		if (usingMQTT) {
+			if (mqtt.connected())
+				timerMQTT = millis();
+			else {
+				if (millis() - timerMQTT > 9999) {
+					timerMQTT = millis();
+					debugI("Reconectando mqtt...");
+					mqtt.connect();
+				}
+			}
+		}
+	}
+	else {
+		if (millis() - timerWifi > 9999) {
+			timerWifi = millis();
+			WifiReconnect();
+		}
+		timerMQTT = millis();
+	}
+
 	if (usingDebug)Debug.handle();
 	if (usingOTA) ArduinoOTA.handle();
 }
@@ -91,6 +116,7 @@ void MQTTStart()
 	bool enabled = Settings.getBool("mqtt-enabled", false);
 	if (enabled) {
 		debugI("Iniciando servicio MQTT");
+		usingMQTT = true;
 		String url = Settings.getString("mqtt-server");
 		uint32_t port = Settings.getUInt("mqtt-port", 1883);
 		strcpy(server, url.c_str());
@@ -117,6 +143,7 @@ void MQTTStart()
 			});
 	}
 	else {
+		usingMQTT = false;
 		debugI("Servicio MQTT desactivado");
 	}
 	Settings.end();
@@ -181,12 +208,10 @@ void WifiStart()
 			debugW("Error al setear IP!\n");
 	}
 
-	String ssid = Settings.getString("sta-ssid", "Wifi-Luis");
+	String ssid = Settings.getString("sta-ssid", "");
 	String pass = Settings.getString("sta-pass", "");
 
 	debugI("Intentando conectar a: %s...", ssid);
-	WiFi.setAutoReconnect(true);
-
 	if (WiFi.begin(ssid.c_str(), pass.c_str()))
 		debugI("Ok!");
 	else
@@ -232,10 +257,24 @@ void WifiStart()
 			else
 				debugI("Error al setear IP!");
 		}
-		WiFi.softAPsetHostname("Medidor de Gas AP");
+		WiFi.softAPsetHostname("PowerMeter9000");
 		WiFi.enableAP(true);
 	}
 	debugI("Configuracion Wifi terminada correctamente\n");
+	Settings.end();
+}
+
+void WifiReconnect()
+{
+	Settings.begin(settingsName, false);
+	Wifi_Mode mode = static_cast<Wifi_Mode>(Settings.getInt("wifi-mode", static_cast<int32_t>(Wifi_Mode::Station)));
+
+	if (mode == Wifi_Mode::Station || mode == Wifi_Mode::Station_AP) {
+		String ssid = Settings.getString("sta-ssid", "");
+		String pass = Settings.getString("sta-pass", "");
+		debugI("Reconectando wifi...");
+		WiFi.begin(ssid.c_str(), pass.c_str());
+	}
 	Settings.end();
 }
 
@@ -248,15 +287,6 @@ void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info)
 	if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
 		debugI("Conectado a AP (SSID): %s", getWiFiSSID());
 
-		// ui.Msg.ShowMessage("Conectado!", getWiFiSSID());
-
-		// TimeSetServer();
-
-		// mqtt.begin(Settings.Mqtt.Broker, Settings.Mqtt.User,
-		// 	Settings.Mqtt.Password);
-
-
-		// initWebServer();
 	}
 	else if (event == (WiFiEvent_t)ARDUINO_EVENT_WIFI_STA_GOT_IP) {
 		debugI("Se obtuvo direccion IP: %s", WiFi.localIP().toString().c_str());

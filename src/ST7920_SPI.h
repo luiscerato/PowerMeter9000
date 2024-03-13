@@ -43,7 +43,7 @@
 #define LCD_LINE2       0x88
 #define LCD_LINE3       0x98
 
-#define SPI_SPEED (800000UL)
+#define SPI_SPEED (600000UL)
 
 #ifndef SCR_WD
 #define SCR_WD  128
