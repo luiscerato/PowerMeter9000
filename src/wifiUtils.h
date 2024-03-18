@@ -68,6 +68,8 @@ char getWiFiRSSICode();
 
 time_t getTime(time_t* _timer);
 
+struct tm getTime();
+
 void setTimeTo(uint32_t Secs);
 
 String setTimeZone(timezone* TimeZone);

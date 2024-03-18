@@ -6,26 +6,61 @@
 
 extern BQ25896 battery;
 
+typedef BQ25896::CHG_STAT ChargeState;
+typedef BQ25896::BQ_FAULT ChargeFault;
+
+enum class PowerSource {
+	USB = 1,
+	Line = 2,
+	Battery = 3
+};
+
+enum class BatteryFault {
+	None = 0,
+	NoBattery = 1,
+	InputVoltage,
+	TimerExpired,
+	BatteryHot,
+	BatteryCold,
+	ThermalShutdown,
+	BatteryOverVoltage
+};
+
+
 class Battery {
 
 public:
+
 	void Init();
 
 	void Loop();
 
 	float getPercent();
 
-	String getJson();
+	void getJson(String& dest);
+
+	bool isBatteryPresent();
+
+	BatteryFault getFault();
+
+	PowerSource getSource();
+
+	ChargeState getChargeState();
+
+	bool isCharging();
 
 
 private:
-	float minVolt, maxVolt;
+	float minVolt = 3.5, maxVolt = 4.2;
+	bool batteryPresent = false;
+	uint32_t chargeTime = 0;
 
-	static inline float sigmoidal(float voltage, float minVoltage, float maxVoltage) {
-		float result = 105.0 - (105.0 / (1 + pow(1.724 * (voltage - minVoltage) / (maxVoltage - minVoltage), 5.5)));
-		return result >= 100.0 ? 100.0 : result;
-	}
+	PowerSource powerSource = PowerSource::Line;
+	ChargeState chargeState = ChargeState::NOT_CHARGING;
+	ChargeFault chargerFault;
 
+
+	float sigmoidal(float voltage, float minVoltage, float maxVoltage);
 };
 
 

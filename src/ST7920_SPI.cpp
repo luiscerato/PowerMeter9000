@@ -72,6 +72,7 @@ void ST7920_SPI::gotoXY(byte x, byte y)
 }
 // ----------------------------------------------------------------
 // true - graphics mode
+// ----------------------------------------------------------------
 // false - text mode
 void ST7920_SPI::setGfxMode(bool mode)
 {

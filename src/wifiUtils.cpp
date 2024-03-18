@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include "AsyncMqttClient.h"
+#include "ST7920_SPI.h"
 
 Preferences Settings;
 const char* settingsName = "wifi-stuff";
@@ -47,7 +48,7 @@ void UtilsInitSettings()
 void UtilsLoop()
 {
 	static uint32_t timerWifi, timerMQTT;
-	
+
 	if (WiFi.isConnected()) {
 		timerWifi = millis();
 		if (usingMQTT) {
@@ -302,6 +303,7 @@ void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info)
 /*
 		Métodos de actualización OTA (over the air)
 */
+extern ST7920_SPI lcd;
 void OTAStart()
 {
 	/*
@@ -325,15 +327,25 @@ void OTAStart()
 			ArduinoOTA.setPassword(pass.c_str());
 
 		ArduinoOTA.onStart([]() {
-			if (ArduinoOTA.getCommand() == U_FLASH)
-				debugW("Iniciando actualizacion de firware via OTA...");
-			else // U_SPIFFS
-				debugW("Iniciando actualizacion de sistema de archivos via OTA...");
+			lcd.setGfxMode(false);
+			lcd.printTxt(LCD_LINE0, " Actualizacion  ");
 
+			if (ArduinoOTA.getCommand() == U_FLASH) {
+				debugW("Iniciando actualizacion de firware via OTA...");
+				lcd.printTxt(LCD_LINE1, "OTA de firmware ");
+			}
+			else {// U_SPIFFS
+				debugW("Iniciando actualizacion de sistema de archivos via OTA...");
+				lcd.printTxt(LCD_LINE1, "OTA de archivos ");
+			}
 			});
 
-		ArduinoOTA.onEnd(
-			[]() {debugI("Actualizacion terminada");}
+		ArduinoOTA.onEnd([]() {
+			debugI("Actualizacion terminada");
+			lcd.printTxt(LCD_LINE2, "    Listo!!!    ");
+			lcd.printTxt(LCD_LINE3, "Reiniciando.....");
+			delay(2000);
+			}
 		);
 
 		ArduinoOTA.onProgress([](uint32_t progress, uint32_t total) {
@@ -342,6 +354,19 @@ void OTAStart()
 			if (prog != lastProg) {
 				lastProg = prog;
 				debugI("Progreso OTA: %d%%", prog);
+
+				char str[32];
+				snprintf(str, sizeof(str), "      % 3d%%     ", prog);
+				lcd.printTxt(LCD_LINE2, str);
+
+				uint32_t pos = (float)progress / (float)total * 16;
+				if (pos > 16) pos = 16;
+				for (uint32_t x = 0; x < pos; x++)
+					str[x] = 1;
+				for (uint32_t x = pos; x < 16; x++)
+					str[x] = 7;
+				str[16] = 0;
+				lcd.printTxt(LCD_LINE3, str);
 			}});
 
 		ArduinoOTA.onError([](ota_error_t error) {
@@ -356,6 +381,10 @@ void OTAStart()
 				strcpy(OTA_ErrorMsg, "Error de recepcion");
 			else if (error == OTA_END_ERROR)
 				strcpy(OTA_ErrorMsg, "Error al terminar");
+
+			lcd.printTxt(LCD_LINE2, "Error!");
+			lcd.printTxt(LCD_LINE3, OTA_ErrorMsg);
+			delay(2000);
 
 			debugE("OTA Error[%u]: %s", error, OTA_ErrorMsg);
 			});
@@ -510,6 +539,15 @@ time_t getTime(time_t* _timer)
 	gettimeofday(&now, nullptr);
 	return now.tv_sec;
 }
+
+
+struct tm getTime()
+{
+	struct timeval now;
+	gettimeofday(&now, nullptr);
+	return *localtime((time_t*)&now.tv_sec);
+}
+
 
 void setTimeTo(uint32_t Secs)
 {

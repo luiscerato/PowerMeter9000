@@ -148,6 +148,8 @@ void loop(void)
 
     if (mqtt.connected()) {
       static String data;
+      static uint32_t batt = 0;
+
       Meter.getJsonBasic(data);
       mqtt.publish("PowerMeter9000/meter", 0, false, data.c_str());
       Meter.getJsonEnergy(data);
@@ -160,6 +162,12 @@ void loop(void)
       mqtt.publish("PowerMeter9000/meter/s", 0, false, data.c_str());
       data = Meter.phaseT.getJson();
       mqtt.publish("PowerMeter9000/meter/t", 0, false, data.c_str());
+
+      if (batt++ > 4) {
+        batt = 0;
+        Batt.getJson(data);
+        mqtt.publish("PowerMeter9000/batery", 0, false, data.c_str());
+      }
 
     }
   }
@@ -204,12 +212,6 @@ void loop(void)
 
 }
 
-struct tm getTime()
-{
-  struct timeval now;
-  gettimeofday(&now, nullptr);
-  return *localtime((time_t*)&now.tv_sec);
-}
 
 uint32_t indexUI = 0;
 
@@ -346,65 +348,6 @@ void Draw_Fase()
   }
 }
 
-
-
-void Draw_Status()
-{
-  char str[64], chargeStat = ' ', wifi = '.', mqtt_status = '.', battTemp = 'N', powerSrc = 'N';
-  const char* chargeFault = "";
-  BQ25896::CHG_STAT stat = battery.getCHG_STATUS();
-  BQ25896::CHG_FAULT fault = battery.getCHG_Fault_STATUS();
-  BQ25896::TS_RANK temp = battery.getTemp_Rank();
-  BQ25896::VBUS_STAT source = battery.getVBUS_STATUS();
-  float Vin = battery.getVBUS();
-  float Vbatt = battery.getVBAT();
-  float Icharge = battery.getICHG();
-
-  if (stat == BQ25896::CHG_STAT::NOT_CHARGING)
-    chargeStat = 'N';
-  else if (stat == BQ25896::CHG_STAT::PRE_CHARGE)
-    chargeStat = 'P';
-  else if (stat == BQ25896::CHG_STAT::FAST_CHARGE)
-    chargeStat = 'F';
-  else if (stat == BQ25896::CHG_STAT::CHARGE_DONE)
-    chargeStat = 'D';
-
-  if (fault == BQ25896::CHG_FAULT::INPUT_FAULT)
-    chargeFault = "Input";
-  else if (fault == BQ25896::CHG_FAULT::THERMAL_SHUTDOWN)
-    chargeFault = "Ther";
-  else if (fault == BQ25896::CHG_FAULT::TIMER_EXPIRED)
-    chargeFault = "Timer";
-
-  if (temp == BQ25896::TS_RANK::HOT)
-    battTemp = 'W';
-  else if (temp == BQ25896::TS_RANK::COLD)
-    battTemp = 'C';
-  else if (temp == BQ25896::TS_RANK::BOOST_COLD)
-    battTemp = 'F';
-  else if (temp == BQ25896::TS_RANK::BOOST_HOT)
-    battTemp = 'H';
-
-  if (source == BQ25896::VBUS_STAT::NO_INPUT)
-    powerSrc = 'N';
-  else if (source == BQ25896::VBUS_STAT::USB_HOST)
-    powerSrc = 'U';
-  else if (source == BQ25896::VBUS_STAT::ADAPTER)
-    powerSrc = 'L';
-  else if (source == BQ25896::VBUS_STAT::OTG)
-    powerSrc = 'O';
-
-
-  if (WiFi.isConnected())
-    wifi = 'W';
-  if (mqtt.connected())
-    mqtt_status = 'M';
-
-  snprintf(str, sizeof(str), "%c%c%c V:%1.2f B:%1.2f I:%1.2f %c%c %s", powerSrc, wifi, mqtt_status, Vin, Vbatt, Icharge, chargeStat, battTemp, chargeFault);
-  lcd.setFont(Small4x5PL);
-  lcd.drawLineHfast(0, 127, 57, 1);
-  lcd.printStr(0, 59, str);
-}
 
 
 void Draw_Angulos()
@@ -658,28 +601,160 @@ void Draw_CalibrateCorriente()
   }
 }
 
+
+
+const uint8_t icon_cross[] = { 3, 5, 0x0A, 0x04, 0x0A };
+const uint8_t icon_warn[] = { 3, 5,  0x00, 0x17, 0x00 };
+
+const uint8_t icon_batt_empty[] = { 8, 5, 0x0E, 0x1F, 0x11, 0x11 , 0x11 , 0x11, 0x11, 0x1F };
+const uint8_t icon_batt_1[] = { 8, 5, 0x0E, 0x1F, 0x11, 0x11 , 0x11 , 0x11, 0x1F, 0x1F };
+const uint8_t icon_batt_2[] = { 8, 5, 0x0E, 0x1F, 0x11, 0x11 , 0x11 , 0x1F, 0x1F, 0x1F };
+const uint8_t icon_batt_3[] = { 8, 5, 0x0E, 0x1F, 0x11, 0x11 , 0x1F , 0x1F, 0x1F, 0x1F };
+const uint8_t icon_batt_4[] = { 8, 5, 0x0E, 0x1F, 0x11, 0x1F , 0x1F , 0x1F, 0x1F, 0x1F };
+const uint8_t icon_batt_full[] = { 8, 5, 0x0E, 0x1F, 0x1F, 0x1F , 0x1F , 0x1F, 0x1F, 0x1F };
+
+const uint8_t icon_wifi_1[] = { 8, 5, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+const uint8_t icon_wifi_2[] = { 8, 5, 0x00, 0x10, 0x00, 0x18, 0x00, 0x00, 0x00, 0x00 };
+const uint8_t icon_wifi_3[] = { 8, 5, 0x00, 0x10, 0x00, 0x18, 0x00, 0x1E, 0x00, 0x00 };
+const uint8_t icon_wifi_4[] = { 8, 5, 0x00, 0x10, 0x00, 0x18, 0x00, 0x1E, 0x00, 0x1F };
+const uint8_t icon_plug[] = { 8, 5, 0x0E, 0x0E, 0x0E, 0x0E, 0x1F, 0x1F, 0x0A, 0x0A };
+
+
 void Draw_Title(const char* Title)
 {
 
   char str[128];
-  uint32_t width;
   struct tm time = getTime();
+  int32_t posX = 0, posY = 0, lenLeft, lenRight, width;
+  bool Invert = false;
+
+  if (Invert) { posY++; posX++; }
 
   lcd.fillRect(0, 0, 128, 7, 0);
-
   lcd.setFont(Small4x5PL);
-  snprintf(str, sizeof(str), "%02d:%02d:%02d", time.tm_hour, time.tm_min, time.tm_sec);
-  lcd.printStr(0, 0, str);
 
+
+  //Power el icono del wifi
+  lcd.printChar(posX, posY, 'W');
+  lenLeft = posX = 5;
+  char rssi = getWiFiRSSICode();
+  if (WiFi.isConnected()) {
+    if (rssi == WiFiChar_RSSI_1)
+      lcd.drawBitmap(icon_wifi_1, posX, posY);
+    else if (rssi == WiFiChar_RSSI_2)
+      lcd.drawBitmap(icon_wifi_2, posX, posY);
+    else if (rssi == WiFiChar_RSSI_3)
+      lcd.drawBitmap(icon_wifi_3, posX, posY);
+    else if (rssi == WiFiChar_RSSI_4)
+      lcd.drawBitmap(icon_wifi_4, posX, posY);
+    lenLeft += 8; //Ancho del icono
+  }
+  else {
+    lcd.drawBitmap(icon_wifi_1, posX, posY);
+    lcd.drawBitmap(icon_cross, posX + 2, posY);
+    lenLeft += 8; //Ancho del icono
+  }
+
+  //Calcular ancho de los iconos de la derecha
+  lenLeft += 3; //Separacion
+  lenRight = 9 + 8 + 3; //Icono bateria y fuente y separacion
+  if (Batt.getSource() == PowerSource::Battery) lenRight += 4;  //Icono de error
+  if (Batt.getFault() != BatteryFault::None) lenRight += 5;  //Icono de error
+  if (Invert) { lenLeft++; lenRight++; }
+
+  //Dibujar el titulo, centrado, si pisa los iconos, moverlo.
+  //Title = "lcd.drawBitmap(icon_batt_empty, posX, posY);";
   width = lcd.strWidth(Title);
-  lcd.printStr(63 - (width / 2), 0, Title);
+  posX = (128 - width) / 2;
+  if (posX < lenLeft) posX = lenLeft;
+  lcd.printStr(posX, posY, Title);
+  if (width > (128 - lenLeft - lenRight)) lcd.fillRect(128 - lenRight, posY, lenRight, 7, 0);
 
-  snprintf(str, sizeof(str), "%02d/%02d/%02d", time.tm_mday, time.tm_mon + 1, time.tm_year - 100);
-  width = lcd.strWidth(str);
-  lcd.printStr(127 - width, 0, str);
+  //Dibujar los íconos de la batería y la fuente
+  posX = 127 - lenRight + 3;  //Dejar 3 pix de separacion
+  if (Batt.getSource() != PowerSource::Battery) {
+    lcd.drawBitmap(icon_plug, posX, posY);
+    posX += 10;
+  }
+  else {
+    lcd.drawBitmap(icon_plug, posX, posY);
+    lcd.drawBitmap(icon_cross, posX + 9, posY);
+    posX += 13;
+  }
 
-  lcd.drawLineHfast(0, 127, 6, 1);
+  if (!Batt.isBatteryPresent()) {
+    lcd.drawBitmap(icon_batt_empty, posX, posY);
+    lcd.drawBitmap(icon_warn, posX+9, posY);
+  }
+  else if (Batt.getFault() == BatteryFault::None || Batt.isCharging()) {
+    static int32_t porcent = 0;
+    if (Batt.isCharging()) {
+      porcent += 10;
+      if (porcent > 100) porcent = 0;
+    }
+    else
+      porcent = Batt.getPercent();
+
+    if (porcent < 10)
+      lcd.drawBitmap(icon_batt_empty, posX, posY);
+    else if (porcent < 30)
+      lcd.drawBitmap(icon_batt_1, posX, posY);
+    else if (porcent < 50)
+      lcd.drawBitmap(icon_batt_2, posX, posY);
+    else if (porcent < 70)
+      lcd.drawBitmap(icon_batt_3, posX, posY);
+    else if (porcent < 90)
+      lcd.drawBitmap(icon_batt_4, posX, posY);
+    else
+      lcd.drawBitmap(icon_batt_full, posX, posY);
+  }
+  else {
+    lcd.drawBitmap(icon_batt_empty, posX, posY);
+    lcd.drawBitmap(icon_cross, posX+9, posY);
+  }
+
+  if (!Invert) lcd.drawLineHfast(0, 127, 6, 1);
+  else lcd.fillRect(0, 0, 128, 7, 2);
+
+  // snprintf(str, sizeof(str), "%02d:%02d:%02d", time.tm_hour, time.tm_min, time.tm_sec);
+  // lcd.printStr(0, 0, str);
+
+  // snprintf(str, sizeof(str), "%02d/%02d/%02d", time.tm_mday, time.tm_mon + 1, time.tm_year - 100);
+  // width = lcd.strWidth(str);
+  // lcd.printStr(127 - width, 0, str);
+
 }
+
+
+
+void Draw_Status()
+{
+  char str[64], wifi = '.', mqtt_status = '.', powerSrc = 'N';
+  const char* chargeFault = "";
+  BQ25896::CHG_STAT stat = battery.getCHG_STATUS();
+  BQ25896::CHG_FAULT fault = battery.getCHG_Fault_STATUS();
+  BQ25896::TS_RANK temp = battery.getTemp_Rank();
+  BQ25896::VBUS_STAT source = battery.getVBUS_STATUS();
+  float Vin = battery.getVBUS();
+  float Vbatt = battery.getVBAT();
+  float Icharge = battery.getICHG();
+
+  if (WiFi.isConnected())
+    wifi = 'W';
+  if (mqtt.connected())
+    mqtt_status = 'M';
+
+  int32_t posY = 57, posX = 1;
+
+
+
+  snprintf(str, sizeof(str), "%c%c%c V:%1.2f B:%1.2f I:%1.2f", powerSrc, wifi, mqtt_status, Vin, Vbatt, Icharge);
+  lcd.setFont(Small4x5PL);
+  lcd.printStr(13, 59, str);
+  // lcd.drawLineHfast(0, 127, 57, 1);
+  lcd.fillRect(0, 57, 128, 7, 2);
+}
+
 
 
 

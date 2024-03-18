@@ -50,21 +50,21 @@ public:
         NO_INPUT = 0,
         USB_HOST = 1,
         ADAPTER = 2,
-        OTG = 7
+        OTG = 3
     };
 
     enum class CHG_STAT
     {
-        NOT_CHARGING = 0,
-        PRE_CHARGE = 1,
-        FAST_CHARGE = 2,
-        CHARGE_DONE = 3
+        NOT_CHARGING = 0,       //000: No Input
+        PRE_CHARGE = 1,         //001: USB Host SDP
+        FAST_CHARGE = 2,        //010: USB CDP (1.5A), 011: USB DCP (3.25A), 100: Adjustable High Voltage DCP (MaxCharge) (1.5A), 101: Unknown Adapter (500mA), 110: Non-Standard Adapter (1A/2A/2.1A/2.4A)
+        CHARGE_DONE = 3         //111: OTG
     };
 
     enum class VSYS_STAT
     {
-        NOT_IN_VSYS = 0,
-        IN_VSYSMIN = 1
+        NOT_IN_VSYS = 0,        //0 – Not in VSYSMIN regulation (BAT > VSYSMIN)
+        IN_VSYSMIN = 1          //1 – In VSYSMIN regulation (BAT < VSYSMIN)
     };
 private:
     float RtoTemp(float R)
@@ -77,6 +77,7 @@ private:
         return temperature - 273.25f;
     }
     const uint8_t I2C_ADDR = 0x6A;
+public:
     enum class REG
     {
         ILIM = 0x00,
@@ -101,9 +102,6 @@ private:
         IDPM_LIM = 0x13,
         CTRL2 = 0x14
     };
-
-
-private:
 
     void write(const REG reg, const bool stop = true)
     {
@@ -130,6 +128,8 @@ private:
         return data;
     }
 
+
+private:
     TwoWire* wire;
     float   VBUS,
         VSYS,
@@ -139,6 +139,7 @@ private:
         VINDPM,
         Temperature;
 
+    BQ_FAULT    FAULT_STATUS;
     VBUS_STAT   VBUS_STATUS;
     CHG_STAT    CHG_STATUS;
     TS_RANK     TS_RANK_;
@@ -146,6 +147,8 @@ private:
     VSYS_STAT   VSYS_STAT_;
     bool VBUS_attached;
     bool thermal_regulation;
+
+
     void setADC_enabled(void)
     {
         byte data = read(REG::ADC_CTRL);
@@ -153,6 +156,7 @@ private:
         data |= (1UL << 6);         // set continuous convertion
         write_(REG::ADC_CTRL, data);
     }
+
     void takeVBUSData(void)
     {
         byte data = read(REG::VBUSV);
@@ -184,6 +188,7 @@ private:
         TSPCT = (float)data * 0.465f + 21.f;
 
     }
+
     void takeICHGData(void)
     {
         uint8_t data = read(REG::ICHGR);
@@ -193,46 +198,37 @@ private:
     void takeVBUSSTAT(void)
     {
         uint8_t data = read(REG::VBUS_STAT);
-        // parsing VBUS_STAT
-        if (((data) >> (7)) & 0x01)
-            VBUS_STATUS = VBUS_STAT::OTG;
-        else
-        {
-            if (((data) >> (6)) & 0x01)
-                VBUS_STATUS = VBUS_STAT::ADAPTER;
-            else if ((((data) >> (5)) & 0x01))
-                VBUS_STATUS = VBUS_STAT::USB_HOST;
-            else
-                VBUS_STATUS = VBUS_STAT::NO_INPUT;
-        };
-        // parsing CHG_STAT
-        if (((data) >> (4)) & 0x01)
-        {
-            if (((data) >> (3)) & 0x01) { CHG_STATUS = CHG_STAT::CHARGE_DONE; }
-            else { CHG_STATUS = CHG_STAT::FAST_CHARGE; };
-        }
-        else
-        {
-            if (((data) >> (3)) & 0x01)
-                CHG_STATUS = CHG_STAT::PRE_CHARGE;
-            else
-                CHG_STATUS = CHG_STAT::NOT_CHARGING;
 
-        };
-        // parsing VSYS_status
-        if (((data) >> (0)) & 0x01)
-        {
-            VSYS_STAT_ = VSYS_STAT::IN_VSYSMIN;
-        }
+        uint8_t vbus = data >> 5;
+
+        if (vbus == 7)
+            VBUS_STATUS = VBUS_STAT::OTG;
+        else if (vbus == 0)
+            VBUS_STATUS = VBUS_STAT::NO_INPUT;
+        else if (vbus == 1)
+            VBUS_STATUS = VBUS_STAT::USB_HOST;
         else
-        {
-            VSYS_STAT_ = VSYS_STAT::NOT_IN_VSYS;
-        };
+            VBUS_STATUS = VBUS_STAT::ADAPTER;
+
+        uint8_t charger = (data >> 3) & 0x3;
+        if (charger == 0)
+            CHG_STATUS = CHG_STAT::NOT_CHARGING;
+        else if (charger == 1)
+            CHG_STATUS = CHG_STAT::PRE_CHARGE;
+        else if (charger == 2)
+            CHG_STATUS = CHG_STAT::FAST_CHARGE;
+        else if (charger == 3)
+            CHG_STATUS = CHG_STAT::CHARGE_DONE;
+
+        VSYS_STAT_ = VSYS_STAT::NOT_IN_VSYS;
+        if (data & 0x1)VSYS_STAT_ = VSYS_STAT::IN_VSYSMIN;
     }
 
     void takeFaultData(void)
     {
         uint8_t data = read(REG::FAULT_);
+        FAULT_STATUS.raw = data;
+
         if ((data & 0x7) == 0)
             TS_RANK_ = TS_RANK::NORMAL;
         else if ((data & 0x7) == 1)
@@ -257,8 +253,6 @@ private:
             CHG_FAULT_ = CHG_FAULT::TIMER_EXPIRED;
     }
 
-    //DMA_HandleTypeDef s_DMAHandle;
-
 public:
     BQ25896(TwoWire& w) : wire(&w) {};
     void begin(void) { setADC_enabled(); }
@@ -271,17 +265,27 @@ public:
         takeVBUSData();
         takeVSYSData();
         takeVBATData();
-        takeTSPCTData();
+        // takeTSPCTData();
         takeICHGData();
         setADC_enabled();
     }
 
-    BQ_FAULT getFaultState() {
+    void readDumpAllRegs() {
+        Serial.println("Dump of BQ25895 registers!");
+        for (uint32_t reg = 0; reg < 0x15; reg++) {
+            uint8_t data = read(static_cast<BQ25896::REG>(reg));
+            Serial.printf("Reg%02x=0x%x ", reg, data);
+        }
+    };
+
+    BQ_FAULT readFaultReg() {
         BQ_FAULT res;
         res.raw = read(REG::FAULT_);
         return res;
     };
 
+
+    BQ_FAULT getBQFault(void) { return FAULT_STATUS; };
     float getVBUS(void) { return VBUS; }
     float getVSYS(void) { return VSYS; }
     float getVBAT(void) { return VBAT; }
@@ -374,15 +378,16 @@ public:
         write_(REG::ICHG, tmp);
     }
 
-    void setInput_Current_Limit(float cur)
+    void setInput_Current_Limit(float cur, bool enableILIMPin = false, bool enableHIZ = false)
     {
-        cur = (cur > 3.25f) ? 3.25f : ((cur < 100) ? 100 : cur);
-        cur -= 100;
+        cur = (cur > 3.25f) ? 3.25f : ((cur < 0.1) ? 0.1 : cur);
+        cur -= 0.1;
         cur /= 3.15;
         cur *= 63;
-        byte data = read(REG::ILIM);
-        byte tmp = (((data) >> (7)) & 0x01) | (((data) >> (6)) & 0x01) | (byte)cur;
-        write_(REG::ILIM, tmp);
+        byte data = (uint8_t)(cur) & 0x3F;
+        if (enableILIMPin) data |= 0x40;
+        if (enableHIZ) data |= 0x80;
+        write_(REG::ILIM, data);
     }
 
     void setPreCharge_Current_Limit(float cur)
@@ -396,6 +401,8 @@ public:
         data |= (byte)cur << 4;
         write_(REG::IPRE_ITERM, data);
     }
+
+
     void setTermination_Current_Limit(float cur)
     {
         cur = (cur > 1.024f) ? 1.024f : ((cur < 0.064f) ? 0.064f : cur);
@@ -431,21 +438,35 @@ public:
         write_(REG::BOOST_CTRL, data);
     }
 
+    void reset()
+    {
+        write(BQ25896::REG::CTRL2, 0x80);
+        delay(50);
+    };
+
+    //Write REG03 all config values in one time ()
+    //enableCharger: Charge Enable Configuration [0 - Charge Disable, 1 - Charge Enable(default)]
+    //enableOTG: Boost (OTG) Mode Configuration [0 – OTG Disable, 1 – OTG Enable(default)]
+    //resetWatchdog: I2C Watchdog Timer Reset [0 – Normal(default), 1 – Reset(Back to 0 after timer reset)]
+    //enabledBatLoad: LoadBattery Load (IBATLOAD) Enable [0 – Disabled(default), 1 – Enabled]
+    //VsysMin: Minimum System Voltage Limit Range 3.0V - 3.7V Default : 3.5V
+    void setREG03(bool enableCharger, bool enableOTG, bool resetWatchdog, bool enabledBatLoad, float VsysMin = 3.5)
+    {
+        uint8_t data = 0, min;
+        if (enableCharger) data |= 0x10;
+        if (enableOTG) data |= 0x20;
+        if (resetWatchdog) data |= 0x40;
+        if (enabledBatLoad) data |= 0x80;
+        VsysMin = constrain(VsysMin, 3.0, 3.7);
+        min = (VsysMin - 3.0) / 0.1;
+        data |= (min & 0x7) << 1;
+        write_(REG::SYS_CTRL, data);
+    };
+
     void setBatLoad(uint8_t mode)
     {
-        byte data = read(REG::SYS_CTRL);
-        if (mode == DISABLED)
-        {
-            data &= ~(1UL << 7UL);
-        }
-        else
-        {
-            data |= (1UL << 7UL);
-        }
-        data |= (1UL << 1UL);
-        data |= (1UL << 2UL);
-        data |= (1UL << 3UL);
-
+        byte data = read(REG::SYS_CTRL) & ~0x80;
+        if (mode) data |= 0x80;
         write_(REG::SYS_CTRL, data);
     }
 
@@ -458,15 +479,8 @@ public:
 
     void setChargeEnable(uint8_t mode)
     {
-        byte data = read(REG::SYS_CTRL);
-        if (mode == DISABLED)
-        {
-            data &= ~(1U << 4U);
-        }
-        else
-        {
-            data |= (1U << 4U);
-        }
+        byte data = read(REG::SYS_CTRL) & ~0x10;
+        if (mode) data |= 0x10;
         write_(REG::SYS_CTRL, data);
     }
     void setForceICO(uint8_t mode)
