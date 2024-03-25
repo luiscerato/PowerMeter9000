@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>TEST POWER METER</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="icon" type="image/png" href="favicon.png" />
+        <link rel="stylesheet" type="text/css" href="style.css" />
+        <link rel="stylesheet" type="text/css" href="lib/bootstrap.min.css" />
+    </head>
+    <body>
+        <div id="navbar"></div>
+
+        <div class="container-fluid nav_sep">
+            <div class="row p-2">
+                <div class="col-sm-12 col-md-9 p-1 pt-2 pb-2">
+                    <div class="card p-1">
+                        <div id="chartContainer" style="height: 600px"></div>
+                    </div>
+                </div>
+
+                <div class="col-sm-12 col-md-3 p-1 pt-2 pb-2" style="min-width: 240px">
+                    <div class="card mb-2">
+                        <div class="card-header text-center p-1">Canales</div>
+                        <div class="card-body pt-1 pb-1">
+                            <div class="row p-0">
+                                <div class="col p-1">
+                                    <button type="button" class="btn btn-primary w-100" id="btnStartStop">Iniciar</button>
+                                </div>
+                                <div class="col p-1">
+                                    <div><h5 id="lblSpeed"></h5></div>
+                                </div>
+                            </div>
+                            <div class="row p-0">
+                                <div class="col p-1">
+                                    <div class="btn-group btn-group-sm w-100" role="group">
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnFaseR" value="fase-r" autocomplete="off" checked />
+                                        <label class="btn btn-outline-primary" for="btnFaseR">Fase R</label>
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnFaseS" value="fase-s" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnFaseS">Fase S</label>
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnFaseT" value="fase-t" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnFaseT">Fase T</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row p-0">
+                                <div class="col p-1">
+                                    <div class="btn-group btn-group-sm w-100" role="group">
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnCorriente" value="corriente" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnCorriente">Corriente</label>
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnVoltaje" value="voltaje" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnVoltaje">Voltaje</label>
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnTodos" value="todos" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnTodos">Todos</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-6 p-1">
+                                    <div class="card">
+                                        <div class="card-header text-center p-0">Corriente</div>
+                                        <div class="card-body p-1">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input corriente" type="checkbox" id="switchCorrienteR" checked />
+                                                <label class="form-check-label" for="switchCorrienteR">Fase R</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input corriente" type="checkbox" id="switchCorrienteS" checked />
+                                                <label class="form-check-label" for="switchCorrienteS">Fase S</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input corriente" type="checkbox" id="switchCorrienteT" checked />
+                                                <label class="form-check-label" for="switchCorrienteT">Fase T</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input corriente" type="checkbox" id="switchCorrienteN" checked />
+                                                <label class="form-check-label" for="switchCorrienteN">Neutro</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-6 p-1">
+                                    <div class="card">
+                                        <div class="card-header text-center p-0">Voltaje</div>
+                                        <div class="card-body p-1">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input voltaje" type="checkbox" id="switchVoltR" checked />
+                                                <label class="form-check-label" for="switchVoltR">Fase R</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input voltaje" type="checkbox" id="switchVoltS" checked />
+                                                <label class="form-check-label" for="switchVoltS">Fase S</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input voltaje" type="checkbox" id="switchVoltT" checked />
+                                                <label class="form-check-label" for="switchVoltT">Fase T</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card mb-2">
+                        <div class="card-header text-center p-1">Escalas</div>
+                        <div class="card-body p-1">
+                            <div>
+                                <div class="">
+                                    <label for="rangeVolt" class="escalasLabel">Voltaje</label>
+                                    <input type="range" id="rangeVolt" min="0" max="10" value="10" class="escalasRange" />
+                                    <label id="lblVoltDiv" class="escalasLabel">25ms/Div</label>
+                                </div>
+                            </div>
+                            <div>
+                                <div>
+                                    <label for="rangeCorr" class="escalasLabel">Corriente</label>
+                                    <input type="range" id="rangeCorr" min="0" max="12" value="12" class="escalasRange" />
+                                    <label id="lblCorrDiv" class="escalasLabel">25ms/Div</label>
+                                </div>
+                            </div>
+                            <div>
+                                <div>
+                                    <label for="rangeTiempo" class="escalasLabel">Tiempo</label>
+                                    <input type="range" id="rangeTiempo" min="0" max="9" value="5" class="escalasRange" />
+                                    <label id="lblTimeDiv" class="escalasLabel">25ms/Div</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header text-center p-1">Trigger</div>
+                        <div class="card-body p-1">
+                            <div>
+                                <div class="mb-2 mt-1">
+                                    <label for="rangeTrigger" class="w-25">Nivel</label>
+                                    <input type="range" id="rangeTrigger" min="-1000" max="1000" value="0" class="w-50" />
+                                    <label id="lblTrigger" class="">25ms</label>
+                                </div>
+                            </div>
+                            <div class="d-flex align-items-center mb-2">
+                                <label for="selectTriggerCh" class="escalasLabel">Canal</label>
+                                <select class="form-select form-select-sm" aria-label="Canal trigger" id="selectTriggerCh"></select>
+                            </div>
+                            <div>
+                                <div class="btn-group btn-group-sm w-100" role="group">
+                                    <input type="radio" class="btn-check" name="radioTriggerEdge" id="btnTriggerRising" value="rising" autocomplete="off" checked />
+                                    <label class="btn btn-outline-primary" for="btnTriggerRising">Rising edge</label>
+                                    <input type="radio" class="btn-check" name="radioTriggerEdge" id="btnTriggerFalling" value="falling" autocomplete="off" />
+                                    <label class="btn btn-outline-primary" for="btnTriggerFalling">Falling edge</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="content">
+                <div class="card" style="zoom: 1.5">
+                    <div id="lcd"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="divFooter"></div>
+    </body>
+
+    <script src="lib/canvasjs.min.js" defer></script>
+    <script src="lib/jquery-3.6.4.min.js" defer></script>
+    <script src="lib/bootstrap.bundle.min.js" defer></script>
+    <script src="lib/char-lcd.js" defer></script>
+    <script src="board.js" defer></script>
+    <script src="scope.js" defer></script>
+    <script src="scope_ui.js" defer></script>
+    <script src="script.js" defer></script>
+</html>

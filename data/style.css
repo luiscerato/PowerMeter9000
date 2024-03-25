@@ -87,3 +87,32 @@ input[type=range][orient=vertical] {
 .escalasRange {
 	width: 35%;
 }
+
+.powerTable {
+	font-family: "Roboto Mono";
+	font-optical-sizing: auto;
+	font-weight: 800;
+	font-style: normal;
+	font-size: x-large;
+  }
+
+.valueTable {
+  font-family: "Roboto Mono", monospace;
+  font-optical-sizing: auto;
+  font-weight: 800;
+  font-style: normal;
+  font-size: x-large;
+  color:green;
+}
+
+.valueTable:hover {
+  background-color: lightblue;
+}
+
+.valueTableHead {
+	height: auto;
+}
+
+.valueTableRow {
+	width: 120px;
+}
