@@ -27,9 +27,12 @@ AngleRegs angles;
 
 boardButtons_t readButtons();
 
+
+
+void Draw_Window(const char* Title, const char* Status);
 void Draw_Main();
 void Draw_Title(const char* Title);
-void Draw_Status();
+void Draw_Status(const char* Status);
 void Draw_Fase();
 void Draw_Angulos();
 void Draw_CalibrarFase();
@@ -232,57 +235,92 @@ void UI()
 
 void Draw_Main()
 {
-  const uint32_t c1 = 0, c2 = 10, c3 = 52, c4 = 90;
+  const uint32_t c1 = 3, c2 = 47, c3 = 87, c4 = 125;
   const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
 
   static uint32_t update = 0;
+  static int32_t index = 0, mode = 0;
   char str[128];
 
   if (millis() - update > 333) {
     update = millis();
-    lcd.fillRect(0, 0, 128, 64, 0);
 
-    Draw_Title("MAIN");
-
-    lcd.setFont(c64enh);
+    Draw_Window("MAIN", "Next");
     lcd.setFont(Small5x7PLBold);
-    lcd.printStr(c1, l1, "R");
-    lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 6, "V").c_str());
-    lcd.printStr(c3, l1, ade.format(Meter.phaseR.Irms, 5, "A").c_str());
-    lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt, 4, "W").c_str());
 
-    lcd.printStr(c1, l2, "S");
-    lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 6, "V").c_str());
-    lcd.printStr(c3, l2, ade.format(Meter.phaseS.Irms, 5, "A").c_str());
-    lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt, 4, "W").c_str());
+    switch (index) {
+    case 0:         //Dibujar la pantalla principal
+      lcd.printStr(c1, l1, "R:");
+      lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 5, "V").c_str(), TextAling::TopRight);
+      lcd.printStr(c3, l1, ade.format(Meter.phaseR.Irms, 5, "A").c_str(), TextAling::TopRight);
+      lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt, 4, "W").c_str(), TextAling::TopRight);
 
-    lcd.printStr(c1, l3, "T");
-    lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 6, "V", 1).c_str());
-    lcd.printStr(c3, l3, ade.format(Meter.phaseT.Irms, 5, "A", 1).c_str());
-    lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt, 4, "W").c_str());
+      lcd.printStr(c1, l2, "S:");
+      lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 5, "V").c_str(), TextAling::TopRight);
+      lcd.printStr(c3, l2, ade.format(Meter.phaseS.Irms, 5, "A").c_str(), TextAling::TopRight);
+      lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt, 4, "W").c_str(), TextAling::TopRight);
 
-    lcd.printStr(c1, l4, "N");
-    lcd.printStr(c3, l4, ade.format(Meter.neutral.Irms, 5, "A", 1).c_str());
+      lcd.printStr(c1, l3, "T:");
+      lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 5, "V", 1).c_str(), TextAling::TopRight);
+      lcd.printStr(c3, l3, ade.format(Meter.phaseT.Irms, 5, "A", 1).c_str(), TextAling::TopRight);
+      lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt, 4, "W").c_str(), TextAling::TopRight);
 
-    lcd.printStr(c1, l5, ade.format(Meter.energy.Watt_H, 5, "Wh", 1).c_str());
-    lcd.printStr(c4, l5, ade.format(Meter.power.Watt, 5, "W", 1).c_str());
+      lcd.printStr(c1, l4, "N:");
+      lcd.printStr(c2, l4, ade.format(Meter.neutral.Vrms, 5, "V", 1).c_str(), TextAling::TopRight);
+      lcd.printStr(c3, l4, ade.format(Meter.neutral.Irms, 5, "A", 1).c_str(), TextAling::TopRight);
 
-    Draw_Status();
+      lcd.printStr(c1, l5, "E:");
+      lcd.printStr(c2 + 10, l5, ade.format(Meter.energy.Watt_H, 5, "Wh", 1).c_str(), TextAling::TopRight);
+      lcd.printStr(c3, l5, "Pt:", TextAling::TopRight);
+      lcd.printStr(c4, l5, ade.format(Meter.power.Watt, 5, "W", 1).c_str(), TextAling::TopRight);
+      break;
+
+    case 1:     ///Pantalla energía
+      lcd.printStr(c1, l1, "R:");
+      lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+
+      lcd.printStr(c1, l2, "S:");
+      lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+
+      lcd.printStr(c1, l3, "T:");
+      lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+
+      lcd.printStr(c1, l5, "TOTAL:");
+      lcd.printStr(c4, l5, ade.format(Meter.energy.Watt_H, 6, "Wh", 1).c_str(), TextAling::TopRight);
+      break;
+
+    case 2:     ///Pantalla angulos
+      lcd.printStr(c1, l1, "R:");
+      lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+
+      lcd.printStr(c1, l2, "S:");
+      lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+
+      lcd.printStr(c1, l3, "T:");
+      lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+
+      lcd.printStr(c1, l5, "TOTAL:");
+      lcd.printStr(c4, l5, ade.format(Meter.energy.Watt_H, 6, "Wh", 1).c_str(), TextAling::TopRight);
+      break;
+    }
 
     lcd.display(0);
   }
   Keys key = Keyboard.getNextKey();
 
-  if (key == Keys::Enter)
-    indexUI = 1;
+  if (key == Keys::Esc)
+    ;
+  else if (key == Keys::Enter)
+    ;
   else if (key == Keys::Next)
-    indexUI = 2;
-  else if (key == Keys::Esc)
-    indexUI = 3;
+    ;
   else if (key == Keys::Up)
-    indexUI = 4;
-  // else if (Keyboard.getNextKey() == Keys::Up)
-  //   indexUI = 3;
+    index++;
+  else if (key == Keys::Down)
+    index--;
+
+  if (index > 2) index = 0;
+  else if (index < 2) index = 1;
 }
 
 void Draw_Fase()
@@ -307,7 +345,7 @@ void Draw_Fase()
       vals = Meter.phaseT;
 
     lcd.fillRect(0, 0, 128, 64, 0);
-    Draw_Title(vals.Name);
+    Draw_Window(vals.Name, "");
 
     lcd.setFont(Small5x7PLBold);
     lcd.printStr(c1, l1, ade.format(vals.Vrms, 6, "V").c_str());
@@ -326,8 +364,6 @@ void Draw_Fase()
 
     lcd.printStr(c1, l5, ade.format(vals.VA, 5, "VA").c_str());
     lcd.printStr(c3, l5, ade.format(vals.Watt_H, 5, "Wh").c_str());
-
-    // lcd.fillRect(0, 57, 64, 6, 2);
 
     lcd.display(0);
   }
@@ -359,7 +395,7 @@ void Draw_Angulos()
     char str[128];
     lcd.fillRect(0, 0, 128, 64, 0);
 
-    Draw_Title("ANGULOS");
+    Draw_Window("ANGULOS", "");
 
     AngleRegs angles;
     // ade.readAngleRegsnValues(&angles);
@@ -379,13 +415,6 @@ void Draw_Angulos()
 
     snprintf(str, sizeof(str), "IST:%3.2f", angles.AngleValue_IB_IC);
     lcd.printStr(1, 46, str);
-
-
-    snprintf(str, sizeof(str), "V: %1.2f Vb: %1.2f I: %1.2f T: %2.1f", battery.getVBUS(), battery.getVBAT(), battery.getICHG(), battery.getTemperature());
-    //Serial.println(str);
-    lcd.setFont(Small4x5PL);
-    lcd.drawLineHfast(0, 127, 57, 1);
-    lcd.printStr(0, 59, str);
 
     lcd.display(0);
   }
@@ -413,10 +442,10 @@ void Draw_CalibrarFase()
     lcd.fillRect(0, 0, 128, 64, 0);
 
     lcd.fillRect(0, 0, 128, 64, 0);
-    Draw_Title("CAL. FASE");
+
+    Draw_Window("CALIBRAR FASE", "");
 
     lcd.setFont(Small5x7PLBold);
-
     lcd.printStr(c1, l1, "R");
     lcd.printStr(c2, l1, ade.format(Meter.phaseR.Watt, 6, "W").c_str());
     lcd.printStr(c3, l1, ade.format(Meter.phaseR.VAR, 4, "VAR").c_str());
@@ -481,7 +510,7 @@ void Draw_CalibrateCorriente()
     lcd.fillRect(0, 0, 128, 64, 0);
 
     lcd.fillRect(0, 0, 128, 64, 0);
-    Draw_Title("CALIBRACION");
+    Draw_Window("CALIBRACION", "");
 
 
     if (running) {
@@ -620,19 +649,37 @@ const uint8_t icon_wifi_4[] = { 8, 5, 0x00, 0x10, 0x00, 0x18, 0x00, 0x1E, 0x00, 
 const uint8_t icon_plug[] = { 8, 5, 0x0E, 0x0E, 0x0E, 0x0E, 0x1F, 0x1F, 0x0A, 0x0A };
 
 
+void Draw_Window(const char* Title, const char* Status)
+{
+  lcd.fillRect(0, 0, 128, 64, 0);
+
+  Draw_Title(Title);
+
+  int32_t r = 2, x = 0, y = 6, w = 127, h = 57;
+  lcd.drawLine(x + r, y, w - r, y, 1);    //Top
+  lcd.drawLine(x + r, h, w - r, h, 1);    //Bottom
+  lcd.drawLine(x, y + r, x, h - r, 1);    //Left
+  lcd.drawLine(w, y + r, w, h - r, 1);    //Right
+
+  lcd.drawLine(x + r, y, x, y + r, 1);    //TL
+  lcd.drawLine(w - r, y, w, y + r, 1);    //TR
+  lcd.drawLine(x + r, h, x, h - r, 1);    //BL
+  lcd.drawLine(w - r, h, w, h - r, 1);    //Br
+
+  Draw_Status(Status);
+}
+
 void Draw_Title(const char* Title)
 {
 
   char str[128];
-  struct tm time = getTime();
   int32_t posX = 0, posY = 0, lenLeft, lenRight, width;
   bool Invert = false;
 
   if (Invert) { posY++; posX++; }
 
-  lcd.fillRect(0, 0, 128, 7, 0);
+  lcd.fillRect(0, 0, 128, 6, 0);
   lcd.setFont(Small4x5PL);
-
 
   //Power el icono del wifi
   lcd.printChar(posX, posY, 'W');
@@ -651,7 +698,7 @@ void Draw_Title(const char* Title)
   }
   else {
     lcd.drawBitmap(icon_wifi_1, posX, posY);
-    lcd.drawBitmap(icon_cross, posX + 2, posY);
+    lcd.drawBitmap(icon_cross, posX + 3, posY);
     lenLeft += 8; //Ancho del icono
   }
 
@@ -684,7 +731,7 @@ void Draw_Title(const char* Title)
 
   if (!Batt.isBatteryPresent()) {
     lcd.drawBitmap(icon_batt_empty, posX, posY);
-    lcd.drawBitmap(icon_warn, posX+9, posY);
+    lcd.drawBitmap(icon_warn, posX + 9, posY);
   }
   else if (Batt.getFault() == BatteryFault::None || Batt.isCharging()) {
     static int32_t porcent = 0;
@@ -710,49 +757,39 @@ void Draw_Title(const char* Title)
   }
   else {
     lcd.drawBitmap(icon_batt_empty, posX, posY);
-    lcd.drawBitmap(icon_cross, posX+9, posY);
+    lcd.drawBitmap(icon_cross, posX + 9, posY);
   }
 
-  if (!Invert) lcd.drawLineHfast(0, 127, 6, 1);
-  else lcd.fillRect(0, 0, 128, 7, 2);
+  // if (!Invert) lcd.drawLineHfast(0, 127, 6, 1);
+  // else lcd.fillRect(0, 0, 128, 7, 2);
 
-  // snprintf(str, sizeof(str), "%02d:%02d:%02d", time.tm_hour, time.tm_min, time.tm_sec);
-  // lcd.printStr(0, 0, str);
 
   // snprintf(str, sizeof(str), "%02d/%02d/%02d", time.tm_mday, time.tm_mon + 1, time.tm_year - 100);
   // width = lcd.strWidth(str);
   // lcd.printStr(127 - width, 0, str);
-
 }
 
-
-
-void Draw_Status()
+void Draw_Status(const char* Status)
 {
-  char str[64], wifi = '.', mqtt_status = '.', powerSrc = 'N';
-  const char* chargeFault = "";
-  BQ25896::CHG_STAT stat = battery.getCHG_STATUS();
-  BQ25896::CHG_FAULT fault = battery.getCHG_Fault_STATUS();
-  BQ25896::TS_RANK temp = battery.getTemp_Rank();
-  BQ25896::VBUS_STAT source = battery.getVBUS_STATUS();
-  float Vin = battery.getVBUS();
-  float Vbatt = battery.getVBAT();
-  float Icharge = battery.getICHG();
+  char str[64];
+  int32_t posY = 59, posX = 1, width;
+  struct tm time = getTime();
 
-  if (WiFi.isConnected())
-    wifi = 'W';
-  if (mqtt.connected())
-    mqtt_status = 'M';
-
-  int32_t posY = 57, posX = 1;
-
-
-
-  snprintf(str, sizeof(str), "%c%c%c V:%1.2f B:%1.2f I:%1.2f", powerSrc, wifi, mqtt_status, Vin, Vbatt, Icharge);
   lcd.setFont(Small4x5PL);
-  lcd.printStr(13, 59, str);
+  if (mqtt.connected())
+    lcd.printStr(posX, posY, "MT");
+  else
+    lcd.printStr(posX, posY, "..");
+
+  if (Status)
+    lcd.printStr(63, posY, Status, TextAling::TopCenter);
+
+  snprintf(str, sizeof(str), "%02d:%02d:%02d", time.tm_hour, time.tm_min, time.tm_sec);
+  width = lcd.strWidth(str);
+  lcd.printStr(128 - width, posY, str);
+
   // lcd.drawLineHfast(0, 127, 57, 1);
-  lcd.fillRect(0, 57, 128, 7, 2);
+  // lcd.fillRect(0, 57, 128, 7, 2);
 }
 
 

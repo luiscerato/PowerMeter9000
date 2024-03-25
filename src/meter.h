@@ -47,6 +47,7 @@ struct phaseValues
 	/* data */
 	char Name[8];		//Nombre de fase
 	float Vrms;			//Voltaje RMS
+	float VVrms;		//Voltaje entre fase siguiente
 	float Irms;			//Corriente RMS
 	float FastVrms;		//Voltaje RMS rápida
 	float FastIrms;		//Corriente RMS rápida
@@ -57,13 +58,14 @@ struct phaseValues
 	float Vthd;			//Distorción de voltaje
 	float Ithd; 		//Distorción de corriente
 	float AngleVI;		//Ángulo entre corriente y voltaje
+	float AngleV;		//Ángulo con la fase siguiente
 	float Freq;			//Frecuencia de fase 
 	float Watt_H;		//Energía activa
 	float VAR_H;		//Energía reactiva
 	float VA_H;			//Energía aparente
 
 	phaseValues() {
-		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = 0.0;
+		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = AngleV = 0.0;
 		Name[0] = 0;
 	};
 

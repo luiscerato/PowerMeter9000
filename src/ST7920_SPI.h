@@ -54,6 +54,18 @@
 #define ALIGN_RIGHT  -1 
 #define ALIGN_CENTER -2
 
+enum class TextAling {
+  TopLeft,
+  TopCenter,
+  TopRight,
+  MiddleLeft,
+  MiddleCenter,
+  MiddleRight,
+  BottomLeft,
+  BottomCenter,
+  BottomRight,
+};
+
 struct _propFont
 {
   const uint8_t* font;
@@ -111,6 +123,7 @@ public:
   void setDigitMinWd(uint8_t wd) { cfont.minDigitWd = wd; }
   int printChar(int xpos, int ypos, unsigned char c);
   int printStr(int xpos, int ypos, const  char* str);
+  int printStr(int xpos, int ypos, const char* str, TextAling aling, bool clearBG = false);
   int charWidth(uint8_t _ch, bool last = true);
   int strWidth(const char* txt);
   unsigned char convertPolish(unsigned char _c);

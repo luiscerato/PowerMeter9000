@@ -410,9 +410,15 @@ void meterReadAngles()
 	meterVals.phaseR.AngleVI = ang.AngleValue_VA_IA;
 	meterVals.phaseS.AngleVI = ang.AngleValue_VB_IB;
 	meterVals.phaseT.AngleVI = ang.AngleValue_VC_IC;
+	meterVals.phaseR.AngleV = ang.AngleReg_VA_VB;
+	meterVals.phaseS.AngleV = ang.AngleReg_VB_VC;
+	meterVals.phaseT.AngleV = 360.0 - ang.AngleReg_VA_VC;
 	if (meterVals.phaseR.Watt < 10) meterVals.phaseR.AngleVI = 0.0;
 	if (meterVals.phaseS.Watt < 10) meterVals.phaseS.AngleVI = 0.0;
 	if (meterVals.phaseT.Watt < 10) meterVals.phaseT.AngleVI = 0.0;
+
+
+	// meterVals.phaseR.VVrms = 
 }
 
 void meterReadEnergy()
