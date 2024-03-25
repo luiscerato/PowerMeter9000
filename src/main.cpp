@@ -320,7 +320,7 @@ void Draw_Main()
     index--;
 
   if (index > 2) index = 0;
-  else if (index < 2) index = 1;
+  else if (index < 0) index = 1;
 }
 
 void Draw_Fase()
