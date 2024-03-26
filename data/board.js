@@ -35,6 +35,14 @@ function saveBoardURL(url) {
     return true;
 }
 
+board.getUpdateTime = function (speed = "normal") {
+    let remote = {fast: 1000, normal: 2500, slow: 5000};
+    let local = {fast: 500, normal: 1000, slow: 2500};
+
+    let value = isServerRemote(boardURL) ? remote[speed] : local[speed] || 1500;
+    return value;
+};
+
 //Devolver un websocket según el protocolo web de la url base
 //Server es la direccion del socket
 board.getWebSocketURL = function (server) {
@@ -137,7 +145,6 @@ board.getStateRepeat = function (done, fail, period) {
     }, period);
 };
 
-
 board.getRespone = function (request, done = undefined, fail = undefined, async = true) {
     if (done == undefined && fail == undefined) async = false;
 
@@ -155,15 +162,17 @@ board.getRespone = function (request, done = undefined, fail = undefined, async 
 };
 
 board.getResponseRepeat = function (request, done, fail, period) {
-    if (period == undefined) period = board.updateTime;
+    if (period == undefined) period = board.getUpdateTime();
     board.getRespone(request, done, fail);
+
+    if (typeof period == "string") period = board.getUpdateTime(period);
+    else if (period < 150) period = 150;
 
     timer = setInterval(() => {
         board.getRespone(request, done, fail);
     }, period);
     return timer;
 };
-
 
 board.getWifiList = function (done, fail = () => {}) {
     if (typeof done != "function" || typeof fail != "function") return;
@@ -222,8 +231,8 @@ board.setTime = function (time = Date.now(), done = undefined, fail = undefined,
 */
 function isServerRemote(server) {
     let url = new URL(server);
-    if (url.hostname == "localhost") return true;
-    if (url.protocol == "https:") return true;          // si es https es porque está detrás de algún
+    if (url.hostname == "localhost") return false;
+    if (url.protocol == "https:") return true; // si es https es porque está detrás de algún
     return !ValidateIPaddress(url.hostname);
 }
 

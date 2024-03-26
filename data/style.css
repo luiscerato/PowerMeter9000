@@ -2,6 +2,10 @@
 	margin-top: 60px;
 }
 
+.nav_bar {
+	flex-wrap: nowrap !important;
+}
+
 body {
 	min-width: 300px;
 }
@@ -114,5 +118,25 @@ input[type=range][orient=vertical] {
 }
 
 .valueTableRow {
-	width: 120px;
+	width: fit-content;
+}
+
+@media only screen and (max-width: 1000px) {
+	/* .valueTableRow { */
+		/* width: 30px; */
+		/* padding: 0.2rem !important; */
+	/* } */
+	.valueTable {
+		font-size: smaller;
+		padding: 0.2rem !important;
+	}
+	.powerTable {
+		font-size: smaller;
+		padding: 0.1rem !important;
+	}
+}
+
+.divScrollX {
+	scroll-behavior: smooth;
+	overflow-x: scroll;
 }

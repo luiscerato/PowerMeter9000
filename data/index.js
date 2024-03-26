@@ -5,6 +5,8 @@ let tableHeader = [
     {name: "Potencia", unit: "watt", visible: true, decimals: 1},
     {name: "Potencia Reactiva", unit: "var", visible: true, decimals: 1},
     {name: "Potencia Aparente", unit: "va", visible: true, decimals: 1},
+    {name: "Ang fases", unit: "degv", visible: true, decimals: 2},
+    {name: "Ang vi", unit: "degvi", visible: true, decimals: 2},
     {name: "Frecuencia", unit: "freq", visible: true, decimals: 2},
     {name: "Energía", unit: "wattH", visible: true, decimals: 2},
 ];
@@ -21,19 +23,19 @@ tableRows = [
     {name: "Promedio", short: "Avg", visible: true},
 ];
 
-function initUI()
-{
+function initUI() {
     createTable();
 
-    board.getResponseRepeat("meter", meterOk, meterFail, 500);
-    
-    board.getResponseRepeat("meter?energy", energyOk, energyFail, 1500);
+    board.getResponseRepeat("meter", meterOk, meterFail, "fast");
+
+    board.getResponseRepeat("meter?energy", energyOk, energyFail, "slow");
+
+    board.getResponseRepeat("meter?angles", angleOk, angleFail);
 }
 
-function createTable() 
-{
-    decimalPlaces = {};     //Crear una tabla que contenga la cantidad de lugrares decimales por variable
-    tableHeader.forEach(element => {
+function createTable() {
+    decimalPlaces = {}; //Crear una tabla que contenga la cantidad de lugrares decimales por variable
+    tableHeader.forEach((element) => {
         decimalPlaces[element.unit] = element.decimals;
     });
 
@@ -62,15 +64,16 @@ function createTable()
     });
 
     let body = '<tbody class="table-group-divider">';
-    rows.forEach(element => {
+    rows.forEach((element) => {
         body += element;
     });
-    body+="</tbody>";
+    body += "</tbody>";
     $("#powerTable").html('<table class="table table-bordered">' + header + body + "</table>");
 }
 
 function meterOk(response) {
-    let resp = JSON.parse(response); //bug
+    // let resp = JSON.parse(response); //bug
+    resp = response;
 
     $("#vrmsR").text(formatNumber(resp.vrms.r, "V"));
     $("#vrmsS").text(formatNumber(resp.vrms.s, "V"));
@@ -107,12 +110,11 @@ function meterOk(response) {
     $("#freqAvg").text(formatNumber(resp.freq, "Hz"));
 }
 
-function meterFail(response) {
-}
-
+function meterFail(response) {}
 
 function energyOk(response) {
-    let resp = JSON.parse(response); //bug
+    // let resp = JSON.parse(response); //bug
+    resp = response;
 
     $("#wattHR").text(formatNumber(resp.wattH.r, "Wh"));
     $("#wattHS").text(formatNumber(resp.wattH.s, "Wh"));
@@ -130,12 +132,24 @@ function energyOk(response) {
     $("#vaHTot").text(formatNumber(resp.vaH.tot, "VAh"));
 }
 
-function energyFail(response) {
+function energyFail(response) {}
+
+function angleOk(response) {
+    // let resp = JSON.parse(response); //bug
+    resp = response;
+
+    $("#degvR").text(formatNumber(resp.voltage.r, "°"));
+    $("#degvS").text(formatNumber(resp.voltage.s, "°"));
+    $("#degvT").text(formatNumber(resp.voltage.t, "°"));
+
+    $("#degviR").text(formatNumber(resp.vi.r, "°"));
+    $("#degviS").text(formatNumber(resp.vi.s, "°"));
+    $("#degviT").text(formatNumber(resp.vi.t, "°"));
 }
 
+function angleFail(response) {}
 
-function formatNumber(value, unit)
-{
+function formatNumber(value, unit) {
     let places = 2;
     if (unit == "V") places = decimalPlaces.vrms;
     else if (unit == "A") places = decimalPlaces.irms;
@@ -143,6 +157,8 @@ function formatNumber(value, unit)
     else if (unit == "VAR") places = decimalPlaces.var;
     else if (unit == "VA") places = decimalPlaces.va;
     else if (unit == "Wh") places = decimalPlaces.wattH;
+    else if (unit == "°") places = decimalPlaces.degv;
+    else if (unit == "°") places = decimalPlaces.degvi;
 
     return value.toFixed(places) + " " + unit;
 }

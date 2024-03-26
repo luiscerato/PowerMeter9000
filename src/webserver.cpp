@@ -105,13 +105,15 @@ void Init_WebServer()
 				Value = Meter.phaseT.getJson();
 			else if (param == "neutral")
 				Value = Meter.neutral.getJson();
+			else if (param == "angles")
+				Meter.getJsonAngles(Value);
 			else
 				request->send(404, "text/plain", "Page Not Found");
 		}
 		else {
 			Meter.getJsonBasic(Value);
 		}
-		request->send(200, "text/plain", Value);
+		request->send(200, "application/json", Value);
 		});
 
 

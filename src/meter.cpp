@@ -410,15 +410,23 @@ void meterReadAngles()
 	meterVals.phaseR.AngleVI = ang.AngleValue_VA_IA;
 	meterVals.phaseS.AngleVI = ang.AngleValue_VB_IB;
 	meterVals.phaseT.AngleVI = ang.AngleValue_VC_IC;
-	meterVals.phaseR.AngleV = ang.AngleReg_VA_VB;
-	meterVals.phaseS.AngleV = ang.AngleReg_VB_VC;
-	meterVals.phaseT.AngleV = 360.0 - ang.AngleReg_VA_VC;
+
+	meterVals.phaseR.AngleV = ang.AngleValue_VA_VB;
+	meterVals.phaseS.AngleV = ang.AngleValue_VB_VC;
+	meterVals.phaseT.AngleV = 360 - ang.AngleValue_VA_VC;
+
+	meterVals.phaseR.AngleI = ang.AngleValue_IA_IB;
+	meterVals.phaseS.AngleI = ang.AngleValue_IB_IC;
+	meterVals.phaseT.AngleI = 360 - ang.AngleValue_IA_IC;
+
 	if (meterVals.phaseR.Watt < 10) meterVals.phaseR.AngleVI = 0.0;
 	if (meterVals.phaseS.Watt < 10) meterVals.phaseS.AngleVI = 0.0;
 	if (meterVals.phaseT.Watt < 10) meterVals.phaseT.AngleVI = 0.0;
 
-
-	// meterVals.phaseR.VVrms = 
+	//Calcular voltajes entre fase y fase
+	meterVals.phaseR.VVrms = sumVoltages(meterVals.phaseR.Vrms, 0, meterVals.phaseS.Vrms, meterVals.phaseR.AngleV);
+	meterVals.phaseS.VVrms = sumVoltages(meterVals.phaseS.Vrms, 0, meterVals.phaseT.Vrms, meterVals.phaseR.AngleV);
+	meterVals.phaseT.VVrms = sumVoltages(meterVals.phaseT.Vrms, 0, meterVals.phaseR.Vrms, meterVals.phaseR.AngleV);
 }
 
 void meterReadEnergy()
@@ -560,4 +568,12 @@ void compressWaveBuffer12(int32_t* waveBufferRaw, uint8_t* waveBuffer, uint16_t 
 
 	time = micros() - time;
 	// Serial.printf("Tiempo de compresion: %u us, k: %d, bytes: %d\n", time, k, bytes);
+}
+
+float sumVoltages(float v1, float deg1, float v2, float deg2)
+{
+	deg2 -= deg1;		//Diferencia en grados entre cada fase
+	//c2 = a^2 + b^2 − 2 a b cos(θ)
+	float sum = v1 * v1 + v2 * v2 - 2 * v1 * v2 * cosf(radians(deg2));
+	return sqrtf(sum);
 }

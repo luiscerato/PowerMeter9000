@@ -59,13 +59,14 @@ struct phaseValues
 	float Ithd; 		//Distorción de corriente
 	float AngleVI;		//Ángulo entre corriente y voltaje
 	float AngleV;		//Ángulo con la fase siguiente
+	float AngleI;		//Ángulo de corriente con la fase siguiente
 	float Freq;			//Frecuencia de fase 
 	float Watt_H;		//Energía activa
 	float VAR_H;		//Energía reactiva
 	float VA_H;			//Energía aparente
 
 	phaseValues() {
-		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = AngleV = 0.0;
+		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = AngleV = AngleI = 0.0;
 		Name[0] = 0;
 	};
 
@@ -200,7 +201,13 @@ struct meterValues
 
 	void getJsonAngles(String& dest) {
 		char str[256];
-		dest = "{}";
+		snprintf(str, sizeof(str), "{\"voltage\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f},"
+			"\"vi\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f},"
+			"\"current\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f}}",
+			phaseR.AngleV, phaseS.AngleV, phaseT.AngleV,
+			phaseR.AngleVI, phaseS.AngleVI, phaseT.AngleVI,
+			phaseR.AngleI, phaseS.AngleI, phaseT.AngleI);
+		dest = str;
 	}
 };
 
@@ -256,6 +263,8 @@ void meterReadEnergy();
 void meterReadDipSwell();
 
 void meterReadOverCurrent();
+
+float sumVoltages(float v1, float deg1, float v2, float deg2);
 
 
 extern ADE9000 ade;

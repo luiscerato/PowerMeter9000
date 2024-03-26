@@ -245,23 +245,33 @@ void Draw_Main()
   if (millis() - update > 333) {
     update = millis();
 
-    Draw_Window("MAIN", "Next");
-    lcd.setFont(Small5x7PLBold);
 
     switch (index) {
     case 0:         //Dibujar la pantalla principal
+      Draw_Window("MAIN", "Next");
+      lcd.setFont(Small5x7PLBold);
+
       lcd.printStr(c1, l1, "R:");
-      lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 5, "V").c_str(), TextAling::TopRight);
+      if (mode)
+        lcd.printStr(c2, l1, ade.format(Meter.phaseR.VVrms, 5, "V").c_str(), TextAling::TopRight);
+      else
+        lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 5, "V").c_str(), TextAling::TopRight);
       lcd.printStr(c3, l1, ade.format(Meter.phaseR.Irms, 5, "A").c_str(), TextAling::TopRight);
       lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt, 4, "W").c_str(), TextAling::TopRight);
 
       lcd.printStr(c1, l2, "S:");
-      lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 5, "V").c_str(), TextAling::TopRight);
+      if (mode)
+        lcd.printStr(c2, l2, ade.format(Meter.phaseS.VVrms, 5, "V").c_str(), TextAling::TopRight);
+      else
+        lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 5, "V").c_str(), TextAling::TopRight);
       lcd.printStr(c3, l2, ade.format(Meter.phaseS.Irms, 5, "A").c_str(), TextAling::TopRight);
       lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt, 4, "W").c_str(), TextAling::TopRight);
 
       lcd.printStr(c1, l3, "T:");
-      lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 5, "V", 1).c_str(), TextAling::TopRight);
+      if (mode)
+        lcd.printStr(c2, l3, ade.format(Meter.phaseT.VVrms, 5, "V", 1).c_str(), TextAling::TopRight);
+      else
+        lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 5, "V", 1).c_str(), TextAling::TopRight);
       lcd.printStr(c3, l3, ade.format(Meter.phaseT.Irms, 5, "A", 1).c_str(), TextAling::TopRight);
       lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt, 4, "W").c_str(), TextAling::TopRight);
 
@@ -276,6 +286,8 @@ void Draw_Main()
       break;
 
     case 1:     ///Pantalla energía
+      Draw_Window("ENERGIA", "Next");
+      lcd.setFont(Small5x7PLBold);
       lcd.printStr(c1, l1, "R:");
       lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
 
@@ -290,17 +302,27 @@ void Draw_Main()
       break;
 
     case 2:     ///Pantalla angulos
-      lcd.printStr(c1, l1, "R:");
-      lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+      Draw_Window("ANGULOS", "Next");
+      lcd.setFont(Small5x7PLBold);
 
-      lcd.printStr(c1, l2, "S:");
-      lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+      lcd.printStr(c2, l1, "Volt", TextAling::TopRight);
+      lcd.printStr(c3, l1, "VI", TextAling::TopRight);
+      lcd.printStr(c4, l1, "Corr", TextAling::TopRight);
 
-      lcd.printStr(c1, l3, "T:");
-      lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+      lcd.printStr(c1, l2, "R:");
+      lcd.printStr(c2, l2, ade.format(Meter.phaseR.AngleV, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+      lcd.printStr(c3, l2, ade.format(Meter.phaseR.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+      lcd.printStr(c4, l2, ade.format(Meter.phaseR.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l5, "TOTAL:");
-      lcd.printStr(c4, l5, ade.format(Meter.energy.Watt_H, 6, "Wh", 1).c_str(), TextAling::TopRight);
+      lcd.printStr(c1, l3, "S:");
+      lcd.printStr(c2, l3, ade.format(Meter.phaseS.AngleV, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+      lcd.printStr(c3, l3, ade.format(Meter.phaseS.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+      lcd.printStr(c4, l3, ade.format(Meter.phaseS.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+
+      lcd.printStr(c1, l4, "T:");
+      lcd.printStr(c2, l4, ade.format(Meter.phaseT.AngleV, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+      lcd.printStr(c3, l4, ade.format(Meter.phaseT.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+      lcd.printStr(c4, l4, ade.format(Meter.phaseT.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
       break;
     }
 
@@ -313,14 +335,15 @@ void Draw_Main()
   else if (key == Keys::Enter)
     ;
   else if (key == Keys::Next)
-    ;
+    mode++;
   else if (key == Keys::Up)
     index++;
   else if (key == Keys::Down)
     index--;
 
   if (index > 2) index = 0;
-  else if (index < 0) index = 1;
+  else if (index < 0) index = 2;
+  if (mode > 1) mode = 0;
 }
 
 void Draw_Fase()

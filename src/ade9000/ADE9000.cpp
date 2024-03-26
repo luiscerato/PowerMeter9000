@@ -595,47 +595,53 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     }
     mulConstant = 0.017578125; // Multiplier constant for 50Hz system
 
-    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VB)); // Read ANGLE register
+    //Mediciones de angulos entre fases
+    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VB));            //Fase R    (rango 0° a 360°)
     Data->AngleReg_VA_VB = tempReg;
     tempValue = tempReg * mulConstant; // Calculate Angle in degrees
-    Data->AngleValue_VA_VB = constrain(tempValue, -3600, 3600);
-
-    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_VC));
+    Data->AngleValue_VA_VB = constrain(tempValue, 0, 360);  //Valor normal 120°
+    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_VC));            //Fase S    (rango 0° a 360°)
     Data->AngleReg_VB_VC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_VB_VC = constrain(tempValue, -3600, 3600);
-    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VC));
+    Data->AngleValue_VB_VC = constrain(tempValue, 0, 360);  //Valor normal 120°
+    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VC));            //Fase T    (rango 0° a 360°)
     Data->AngleReg_VA_VC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_VA_VC = constrain(tempValue, -3600, 3600);
-    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_IA));
+    Data->AngleValue_VA_VC = constrain(tempValue, 0, 360);  //Valor normal 240°
+
+    //Mediciones de angulos entre voltaje y corriente por fase
+    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_IA));            //Fase R    (rango -180° a 180°)
     Data->AngleReg_VA_IA = tempReg;
     tempValue = tempReg * mulConstant;
-    if (tempValue > 180) tempValue = tempValue - 360;
-    Data->AngleValue_VA_IA = constrain(tempValue, -3600, 3600);
-
-    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_IB));
+    tempValue = constrain(tempValue, 0, 360);
+    if (tempValue > 180) tempValue -= 360;
+    Data->AngleValue_VA_IA = tempValue;
+    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_IB));            //Fase S    (rango -180° a 180°)
     Data->AngleReg_VB_IB = tempReg;
     tempValue = tempReg * mulConstant;
-    if (tempValue > 180) tempValue = tempValue - 360;
-    Data->AngleValue_VB_IB = constrain(tempValue, -3600, 3600);
-    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VC_IC));
+    tempValue = constrain(tempValue, 0, 360);
+    if (tempValue > 180) tempValue -= 360;
+    Data->AngleValue_VB_IB = tempValue;
+    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VC_IC));            //Fase T    (rango -180° a 180°)
     Data->AngleReg_VC_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    if (tempValue > 180) tempValue = tempValue - 360;
-    Data->AngleValue_VC_IC = constrain(tempValue, -3600, 3600);
-    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IB));
+    tempValue = constrain(tempValue, 0, 360);
+    if (tempValue > 180) tempValue -= 360;
+    Data->AngleValue_VC_IC = tempValue;
+
+    //Mediciones entre fases de corriente
+    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IB));            //Fase R    (rango 0° a 360°)
     Data->AngleReg_IA_IB = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IB = constrain(tempValue, -3600, 3600);
-    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IB_IC));
+    Data->AngleValue_IA_IB = constrain(tempValue, 0, 360);
+    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IB_IC));            //Fase S    (rango 0° a 360°)
     Data->AngleReg_IB_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IB_IC = constrain(tempValue, -3600, 3600);
-    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IC));
+    Data->AngleValue_IB_IC = constrain(tempValue, 0, 360);
+    tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IC));            //Fase T    (rango 0° a 360°)
     Data->AngleReg_IA_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IC = constrain(tempValue, -3600, 3600);
+    Data->AngleValue_IA_IC = constrain(tempValue, 0, 360);
     return micros() - time;
 }
 uint32_t ADE9000::ReadVoltageTHDRegsnValues(VoltageTHDRegs* Data)
