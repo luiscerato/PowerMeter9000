@@ -235,7 +235,7 @@ void UI()
 
 void Draw_Main()
 {
-  const uint32_t c1 = 3, c2 = 47, c3 = 87, c4 = 125;
+  const uint32_t c1 = 3, c2 = 48, c3 = 87, c4 = 125;
   const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
 
   static uint32_t update = 0;
@@ -310,17 +310,17 @@ void Draw_Main()
       lcd.printStr(c4, l1, "Corr", TextAling::TopRight);
 
       lcd.printStr(c1, l2, "R:");
-      lcd.printStr(c2, l2, ade.format(Meter.phaseR.AngleV, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+      lcd.printStr(c2, l2, ade.format(Meter.phaseR.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
       lcd.printStr(c3, l2, ade.format(Meter.phaseR.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
       lcd.printStr(c4, l2, ade.format(Meter.phaseR.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
 
       lcd.printStr(c1, l3, "S:");
-      lcd.printStr(c2, l3, ade.format(Meter.phaseS.AngleV, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+      lcd.printStr(c2, l3, ade.format(Meter.phaseS.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
       lcd.printStr(c3, l3, ade.format(Meter.phaseS.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
       lcd.printStr(c4, l3, ade.format(Meter.phaseS.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
 
       lcd.printStr(c1, l4, "T:");
-      lcd.printStr(c2, l4, ade.format(Meter.phaseT.AngleV, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+      lcd.printStr(c2, l4, ade.format(Meter.phaseT.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
       lcd.printStr(c3, l4, ade.format(Meter.phaseT.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
       lcd.printStr(c4, l4, ade.format(Meter.phaseT.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
       break;

@@ -299,6 +299,11 @@ void meterReadRMS()
 
 	meterVals.average.Vrms = (meterVals.phaseR.Vrms + meterVals.phaseS.Vrms + meterVals.phaseT.Vrms) / 3.0;
 	meterVals.average.Irms = (meterVals.phaseR.Irms + meterVals.phaseS.Irms + meterVals.phaseT.Irms) / 3.0;
+
+	//Calcular voltajes entre fase y fase
+	meterVals.phaseR.VVrms = sumVoltages(meterVals.phaseR.Vrms, 0, meterVals.phaseS.Vrms, meterVals.phaseR.AngleV);
+	meterVals.phaseS.VVrms = sumVoltages(meterVals.phaseS.Vrms, 0, meterVals.phaseT.Vrms, meterVals.phaseS.AngleV);
+	meterVals.phaseT.VVrms = sumVoltages(meterVals.phaseT.Vrms, 0, meterVals.phaseR.Vrms, meterVals.phaseT.AngleV);
 }
 
 void meterReadHalfRMS()
@@ -419,14 +424,9 @@ void meterReadAngles()
 	meterVals.phaseS.AngleI = ang.AngleValue_IB_IC;
 	meterVals.phaseT.AngleI = 360 - ang.AngleValue_IA_IC;
 
-	if (meterVals.phaseR.Watt < 10) meterVals.phaseR.AngleVI = 0.0;
-	if (meterVals.phaseS.Watt < 10) meterVals.phaseS.AngleVI = 0.0;
-	if (meterVals.phaseT.Watt < 10) meterVals.phaseT.AngleVI = 0.0;
-
-	//Calcular voltajes entre fase y fase
-	meterVals.phaseR.VVrms = sumVoltages(meterVals.phaseR.Vrms, 0, meterVals.phaseS.Vrms, meterVals.phaseR.AngleV);
-	meterVals.phaseS.VVrms = sumVoltages(meterVals.phaseS.Vrms, 0, meterVals.phaseT.Vrms, meterVals.phaseR.AngleV);
-	meterVals.phaseT.VVrms = sumVoltages(meterVals.phaseT.Vrms, 0, meterVals.phaseR.Vrms, meterVals.phaseR.AngleV);
+	if (meterVals.phaseR.Irms < 0.2) meterVals.phaseR.AngleVI = meterVals.phaseR.AngleI = 0.0;
+	if (meterVals.phaseS.Irms < 0.2) meterVals.phaseS.AngleVI = meterVals.phaseS.AngleI = 0.0;
+	if (meterVals.phaseT.Irms < 0.2) meterVals.phaseT.AngleVI = meterVals.phaseT.AngleI = 0.0;
 }
 
 void meterReadEnergy()
