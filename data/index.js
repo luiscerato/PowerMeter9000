@@ -193,6 +193,22 @@ function meterOk(resp) {
     $("#cellVTR").text(formatNumber(resp.vvrms.t, "V"));
     $("#cellVVavg").text(formatNumber(resp.vvrms.avg, "V"));
 
+
+
+    $("#cellWattR").text(formatNumber(resp.watt.r, "V"));
+    $("#cellWattS").text(formatNumber(resp.watt.s, "V"));
+    $("#cellWattT").text(formatNumber(resp.watt.t, "V"));
+    $("#cellWattTot").text(formatNumber(resp.watt.tot, "V"));
+    // $("#cellVRS").text(formatNumber(resp.vvrms.r, "V"));
+    // $("#cellVST").text(formatNumber(resp.vvrms.s, "V"));
+    // $("#cellVTR").text(formatNumber(resp.vvrms.t, "V"));
+    // $("#cellVVavg").text(formatNumber(resp.vvrms.avg, "V"));
+
+
+
+
+
+
     $("#cellIR").text(formatNumber(resp.irms.r, "A"));
     $("#cellIS").text(formatNumber(resp.irms.s, "A"));
     $("#cellIT").text(formatNumber(resp.irms.t, "A"));
