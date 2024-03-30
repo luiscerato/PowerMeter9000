@@ -11,183 +11,289 @@
     <body>
         <div id="navbar"></div>
 
-        <div class="container nav_sep">
+        <div class="nav_sep container-xl">
             <div class="row text-center mt-4">
-                <h1>Power Meter ADE9000 - Mediciones en tiempo real</h1>
+                <h2>Power Meter ADE9000 - Mediciones en tiempo real</h2>
             </div>
-            <div class="row">
-                <div class="col mt-2 mb-2">
-                    <div class="d-flex flex-wrap justify-content-center">
-                        <div>
-                            <h3 class="text-center">Voltaje</h3>
-                            <div id="gaugeVoltaje" class="gauge"></div>
-                        </div>
-                        <div>
-                            <h3 class="text-center">Voltaje Fases</h3>
-                            <div id="gaugeVoltajeF" class="gauge"></div>
-                        </div>
-                        <div>
-                            <h3 class="text-center">Corriente</h3>
-                            <div id="gaugeCorriente" class="gauge"></div>
-                        </div>
-                        <div>
-                            <h3 class="text-center">Potencia</h3>
-                            <div id="gaugePotencia" class="gauge"></div>
+
+              <ul class="nav nav-tabs" id="myTab" role="tablist">
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link active" id="home-tab" data-bs-toggle="tab" data-bs-target="#home" type="button" role="tab" aria-controls="home" aria-selected="true">Resumen</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" id="events-tab" data-bs-toggle="tab" data-bs-target="#events" type="button" role="tab" aria-controls="profile" aria-selected="false">Eventos</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" id="allMeasures-tab" data-bs-toggle="tab" data-bs-target="#allMeasures" type="button" role="tab" aria-controls="messages" aria-selected="false">Todas las mediciones</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings" type="button" role="tab" aria-controls="settings" aria-selected="false">Opciones</button>
+                </li>
+              </ul>
+              
+              <div class="tab-content">
+                <div class="tab-pane active" id="home" role="tabpanel" aria-labelledby="home-tab">
+
+                    <div class="row">
+                        <div class="col mt-2 mb-2">
+                            <div class="d-flex flex-wrap justify-content-center">
+                                <div>
+                                    <h3 class="text-center">Voltaje</h3>
+                                    <div id="gaugeVoltaje" class="gauge meter"></div>
+                                </div>
+                                <div>
+                                    <h3 class="text-center">Voltaje Fases</h3>
+                                    <div id="gaugeVoltajeF" class="gauge meter"></div>
+                                </div>
+                                <div>
+                                    <h3 class="text-center">Corriente</h3>
+                                    <div id="gaugeCorriente" class="gauge meter"></div>
+                                </div>
+                                <div>
+                                    <h3 class="text-center">Potencia</h3>
+                                    <div id="gaugePotencia" class="gauge meter"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                </div>
-            </div>
+        
+                    <div class="row p-2">
+                        <div class="col-md-6 col-sm-12">
+                            <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
+                                <thead>
+                                    <tr>
+                                        <th colspan="4" class="text-center">Mediciones de voltaje</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Voltaje Fase R</td>
+                                        <td id="cellVR" class="valueTable meter vrmsR">230.00 V</td>
+                                        <td>Voltaje Fases RS</td>
+                                        <td id="cellVRS" class="valueTable meter vvrmsR">390.00 V</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Voltaje Fase S</td>
+                                        <td id="cellVS" class="valueTable meter vrmsS">230.00 V</td>
+                                        <td>Voltaje Fases ST</td>
+                                        <td id="cellVST" class="valueTable meter vvrmsS">390.00 V</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Voltaje Fase T</td>
+                                        <td id="cellVT" class="valueTable meter vrmsT">230.00 V</td>
+                                        <td>Voltaje Fases TR</td>
+                                        <td id="cellVTR" class="valueTable meter vvrmsT">390.00 V</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Voltaje promedio</td>
+                                        <td id="cellVavg" class="valueTable meter vrmsAvg">230.00 V</td>
+                                        <td>Voltaje promedio</td>
+                                        <td id="cellVVavg" class="valueTable meter vvrmsAvg">390.00 V</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+        
+                        <div class="col-md-6 col-sm-12">
+                            <table class="table table-responsive powerTable">
+                                <thead>
+                                    <tr>
+                                        <th colspan="4" class="text-center">Mediciones de corriente</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Corriente Fase R</td>
+                                        <td id="cellIR" class="valueTable meter irmsR">0.000 A</td>
+                                        <td>Corriente Neutro</td>
+                                        <td id="cellIN" class="valueTable meter irmsN">0.000 A</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Corriente Fase S</td>
+                                        <td id="cellIS" class="valueTable meter irmsS">0.000 A</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Corriente Fase T</td>
+                                        <td id="cellIT" class="valueTable meter irmsT">0.000 A</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Corriente promedio</td>
+                                        <td id="cellIavg" class="valueTable meter irmsAvg">0.000 A</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="row p-2">
+                        <div class="col-md-6 col-sm-12">
+                            <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
+                                <thead>
+                                    <tr>
+                                        <th colspan="4" class="text-center">Mediciones de potencia</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Potencia Fase R</td>
+                                        <td id="cellWattR" class="valueTable meter wattR">0 W</td>
+                                        <td id="cellVarR" class="valueTable meter varR">0 VAR</td>
+                                        <td id="cellVaR" class="valueTable meter vaR">0 VA</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Potencia Fase S</td>
+                                        <td id="cellWattS" class="valueTable meter wattS">0 W</td>
+                                        <td id="cellVarS" class="valueTable meter varS">0 VAR</td>
+                                        <td id="cellVaS" class="valueTable meter vaS">0 VA</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Potencia Fase T</td>
+                                        <td id="cellWattT" class="valueTable meter wattT">0 W</td>
+                                        <td id="cellVarT" class="valueTable meter varT">0 VAR</td>
+                                        <td id="cellVaT" class="valueTable meter vaT">0 VA</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Potencia total</td>
+                                        <td id="cellWattTot" class="valueTable meter wattTot">0 W</td>
+                                        <td id="cellVarTot" class="valueTable meter varTot">0 VAR</td>
+                                        <td id="cellVaTot" class="valueTable meter  vaTot">0 VA</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+        
+                        <div class="col-md-6 col-sm-12">
+                            <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
+                                <thead>
+                                    <tr>
+                                        <th colspan="4" class="text-center">Mediciones de energía</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Energía Fase R</td>
+                                        <td id="cellWatt_HR" class="valueTable energia wattHR">0 Wh</td>
+                                        <td id="cellVar_HR" class="valueTable energia varHR">0 VARh</td>
+                                        <td id="cellVa_HR" class="valueTable energia vaHR">0 VAh</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Energía Fase S</td>
+                                        <td id="cellWatt_HS" class="valueTable energia wattHS">0 Wh</td>
+                                        <td id="cellVar_HS" class="valueTable energia varHS">0 VARh</td>
+                                        <td id="cellVa_HS" class="valueTable energia vaHS" >0 VAh</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Energía Fase T</td>
+                                        <td id="cellWatt_HT" class="valueTable energia wattHT">0 Wh</td>
+                                        <td id="cellVar_HT" class="valueTable energia varHT">0 VARh</td>
+                                        <td id="cellVa_HT" class="valueTable energia vaHT">0 VAh</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Energía total</td>
+                                        <td id="cellWatt_HTot" class="valueTable energia wattHTot">0 Wh</td>
+                                        <td id="cellVar_HTot" class="valueTable energia varHTot">0 VARh</td>
+                                        <td id="cellVa_HTot" class="valueTable energia vaHTot">0 VAh</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+        
+                    <div class="row p-2">
+                        <div class="col-md-6 col-sm-12">
+                            <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
+                                <thead>
+                                    <tr>
+                                        <th colspan="4" class="text-center">Mediciones varias</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Frecuencia Fase R</td>
+                                        <td id="cellFR" class="valueTable freqR">50.00 Hz</td>
+                                        <td>Factor potencia Fase R</td>
+                                        <td id="cellFPR" class="valueTable fpR">0.999</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Frecuencia Fase S</td>
+                                        <td id="cellFS" class="valueTable freqS">50.00 Hz</td>
+                                        <td>Factor potencia Fase S</td>
+                                        <td id="cellFPS" class="valueTable fpS">0.999</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Frecuencia Fase T</td>
+                                        <td id="cellFT" class="valueTable freqT">50.00 Hz</td>
+                                        <td>Factor potencia Fase T</td>
+                                        <td id="cellFPT" class="valueTable fpT">0.999</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Frecuencia promedio</td>
+                                        <td id="cellFAvg" class="valueTable freqAvg">50.00 Hz</td>
+                                        <td>Factor potencia promedio</td>
+                                        <td id="cellFPAvg" class="valueTable fpAvg">0.999</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+        
+                        <div class="col-md-6 col-sm-12">
+                            <table class="table table-responsive  powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
+                                <thead>
+                                    <tr>
+                                        <th colspan="4" class="text-center">Calidad de energía</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>THD voltaje Fase R</td>
+                                        <td id="cellTHDVR" class="valueTable">0.0 %</td>
+                                        <td>THD corriente Fase R</td>
+                                        <td id="cellTHDIR" class="valueTable">0.0 %</td>
+                                    </tr>
+                                    <tr>
+                                        <td>THD voltaje Fase S</td>
+                                        <td id="cellTHDVS" class="valueTable">0.0 %</td>
+                                        <td>THD corriente Fase S</td>
+                                        <td id="cellTHDIS" class="valueTable">0.0 %</td>
+                                    </tr>
+                                    <tr>
+                                        <td>THD voltaje Fase T</td>
+                                        <td id="cellTHDVT" class="valueTable">0.0 %</td>
+                                        <td>THD corriente Fase T</td>
+                                        <td id="cellTHDIT" class="valueTable">0.0 %</td>
+                                    </tr>
+                                    <tr>
+                                        <td>THD voltaje promedio</td>
+                                        <td id="cellTHDVAvg" class="valueTable">0.0 %</td>
+                                        <td>THD corriente promedio</td>
+                                        <td id="cellTHDIAvg" class="valueTable">0.0 %</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+        
 
-            <div class="row p-2">
-                <div class="col-md-6 col-sm-12">
-                    <table class="table table-striped-columns table-responsive" style="background-color: rgba(177, 145, 250, 0.1)">
-                        <thead>
-                            <tr>
-                                <th colspan="4" class="text-center">Mediciones de voltaje</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Voltaje Fase R</td>
-                                <td id="cellVR" class="valueTable">230.00 V</td>
-                                <td>Voltaje Fases RS</td>
-                                <td id="cellVRS" class="valueTable">390.00 V</td>
-                            </tr>
-                            <tr>
-                                <td>Voltaje Fase S</td>
-                                <td id="cellVS" class="valueTable">230.00 V</td>
-                                <td>Voltaje Fases ST</td>
-                                <td id="cellVST" class="valueTable">390.00 V</td>
-                            </tr>
-                            <tr>
-                                <td>Voltaje Fase T</td>
-                                <td id="cellVT" class="valueTable">230.00 V</td>
-                                <td>Voltaje Fases TR</td>
-                                <td id="cellVTR" class="valueTable">390.00 V</td>
-                            </tr>
-                            <tr>
-                                <td>Voltaje promedio</td>
-                                <td id="cellVavg" class="valueTable">230.00 V</td>
-                                <td>Voltaje promedio</td>
-                                <td id="cellVVavg" class="valueTable">390.00 V</td>
-                            </tr>
-                        </tbody>
-                    </table>
                 </div>
+                <div class="tab-pane" id="events" role="tabpanel" aria-labelledby="events-tab">
 
-                <div class="col-md-6 col-sm-12">
-                    <table class="table table-striped-columns table-responsive powerTable">
-                        <thead>
-                            <tr>
-                                <th colspan="4" class="text-center">Mediciones de corriente</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Corriente Fase R</td>
-                                <td id="cellIR" class="valueTable">0.000 A</td>
-                                <td>Corriente Neutro</td>
-                                <td id="cellIN" class="valueTable">0.000 A</td>
-                            </tr>
-                            <tr>
-                                <td>Corriente Fase S</td>
-                                <td id="cellIS" class="valueTable">0.000 A</td>
-                            </tr>
-                            <tr>
-                                <td>Corriente Fase T</td>
-                                <td id="cellIT" class="valueTable">0.000 A</td>
-                            </tr>
-                            <tr>
-                                <td>Corriente promedio</td>
-                                <td id="cellIavg" class="valueTable">0.000 A</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                
-            </div>
-            <div class="row p-2">
-                
-                <div class="col-md-6 col-sm-12">
-                    <table class="table table-striped-columns table-responsive" style="background-color: rgba(177, 145, 250, 0.1)">
-                        <thead>
-                            <tr>
-                                <th colspan="4" class="text-center">Mediciones de potencia</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Potencia Fase R</td>
-                                <td id="cellWattR" class="valueTable">0 W</td>
-                                <td id="cellVarR" class="valueTable">0 VAR</td>
-                                <td id="cellVaR" class="valueTable">0 VA</td>
-                            </tr>
-                            <tr>
-                                <td>Potencia Fase S</td>
-                                <td id="cellWattS" class="valueTable">0 W</td>
-                                <td id="cellVarS" class="valueTable">0 VAR</td>
-                                <td id="cellVaS" class="valueTable">0 VA</td>
-                            </tr>
-                            <tr>
-                                <td>Potencia Fase T</td>
-                                <td id="cellWattT" class="valueTable">0 W</td>
-                                <td id="cellVarT" class="valueTable">0 VAR</td>
-                                <td id="cellVaT" class="valueTable">0 VA</td>
-                            </tr>
-                            <tr>
-                                <td>Potencia total</td>
-                                <td id="cellWattTot" class="valueTable">0 W</td>
-                                <td id="cellVarTot" class="valueTable">0 VAR</td>
-                                <td id="cellVaTot" class="valueTable">0 VA</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
 
-                
-                <div class="col-md-6 col-sm-12">
-                    <table class="table table-striped-columns table-responsive" style="background-color: rgba(177, 145, 250, 0.1)">
-                        <thead>
-                            <tr>
-                                <th colspan="4" class="text-center">Mediciones de energía</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Energía Fase R</td>
-                                <td id="cellWatt_HR" class="valueTable">0 Wh</td>
-                                <td id="cellVar_HR" class="valueTable">0 VARh</td>
-                                <td id="cellVa_HR" class="valueTable">0 VAh</td>
-                            </tr>
-                            <tr>
-                                <td>Energía Fase S</td>
-                                <td id="cellWatt_HS" class="valueTable">0 Wh</td>
-                                <td id="cellVar_HS" class="valueTable">0 VARh</td>
-                                <td id="cellVa_HS" class="valueTable">0 VAh</td>
-                            </tr>
-                            <tr>
-                                <td>Energía Fase T</td>
-                                <td id="cellWatt_HT" class="valueTable">0 Wh</td>
-                                <td id="cellVar_HT" class="valueTable">0 VARh</td>
-                                <td id="cellVa_HT" class="valueTable">0 VAh</td>
-                            </tr>
-                            <tr>
-                                <td>Energía total</td>
-                                <td id="cellWatt_HTot" class="valueTable">0 Wh</td>
-                                <td id="cellVar_HTot" class="valueTable">0 VARh</td>
-                                <td id="cellVa_HTot" class="valueTable">0 VAh</td>
-                            </tr>
-                        </tbody>
-                    </table>
                 </div>
+                <div class="tab-pane" id="allMeasures" role="tabpanel" aria-labelledby="allMeasures-tab">
 
-            </div>
+                    <div class="row p-2">
+                        <div class="col divScrollX">
+                            <div id="powerTable" class="powerTable"></div>
+                        </div>
+                    </div>
 
-            <div class="row p-2">
-                <div class="col divScrollX">
-                    <div id="powerTable" class="powerTable"></div>
                 </div>
-            </div>
+                <div class="tab-pane" id="settings" role="tabpanel" aria-labelledby="settings-tab">
+                    
+
+                </div>
+              </div>
+
+
         </div>
         <div id="divFooter"></div>
     </body>

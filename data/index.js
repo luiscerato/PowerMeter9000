@@ -1,19 +1,26 @@
-let tableHeader = [
-    {name: "Fase", unit: "", visible: true, decimals: 2},
-    {name: "Voltaje", unit: "vrms", visible: true, decimals: 2},
-    {name: "Corriente", unit: "irms", visible: true, decimals: 3},
-    {name: "Potencia", unit: "watt", visible: true, decimals: 1},
-    {name: "Potencia Reactiva", unit: "var", visible: true, decimals: 1},
-    {name: "Potencia Aparente", unit: "va", visible: true, decimals: 1},
-    {name: "Ang fases", unit: "degv", visible: true, decimals: 2},
-    {name: "Ang vi", unit: "degvi", visible: true, decimals: 2},
-    {name: "Frecuencia", unit: "freq", visible: true, decimals: 2},
-    {name: "Energía", unit: "wattH", visible: true, decimals: 2},
+let tableRows = [
+    {name: "Voltaje", unit: "vrms", visible: true, decimals: 2, source: "meter"},
+    {name: "Voltaje Fases", unit: "vvrms", visible: true, decimals: 2, source: "meter"},
+    {name: "Corriente", unit: "irms", visible: true, decimals: 3, source: "meter"},
+    {name: "Potencia", unit: "watt", visible: true, decimals: 1, source: "meter"},
+    {name: "Potencia Reactiva", unit: "var", visible: true, decimals: 1, source: "meter"},
+    {name: "Potencia Aparente", unit: "va", visible: true, decimals: 1, source: "meter"},
+    {name: "Frecuencia", unit: "freq", visible: true, decimals: 2, source: "meter"},
+    {name: "Facrtor de potencia", unit: "fp", visible: true, decimals: 2, source: "meter"},
+    {name: "Energía activa", unit: "wattH", visible: true, decimals: 2, source: "energia"},
+    {name: "Energía ractiva", unit: "varH", visible: true, decimals: 2, source: "energia"},
+    {name: "Energía aparente", unit: "vaH", visible: true, decimals: 2, source: "energia"},
+    {name: "Desfasaje fases", unit: "degv", visible: true, decimals: 2, source: "angulos"},
+    {name: "Desfasaje corriente", unit: "degvi", visible: true, decimals: 2, source: "angulos"},
+    {name: "Desfasaje fases corriente", unit: "degi", visible: true, decimals: 2, source: "angulos"},
+    {name: "Distorción Voltaje", unit: "thdV", visible: true, decimals: 2, source: "thd"},
+    {name: "Distorción Corriente", unit: "thdI", visible: true, decimals: 2, source: "thd"},
 ];
 
 let decimalPlaces = {};
 
-tableRows = [
+let tableHeaders = [
+    {name: "Variable", short: "", visible: true},
     {name: "Fase R", short: "R", visible: true},
     {name: "Fase S", short: "S", visible: true},
     {name: "Fase T", short: "T", visible: true},
@@ -34,7 +41,177 @@ function initUI() {
 
     board.getResponseRepeat("meter?energy", energyOk, energyFail, "slow");
 
-    board.getResponseRepeat("meter?angles", angleOk, angleFail);
+    board.getResponseRepeat("meter?angles", angleOk, angleFail, "slow");
+
+    // board.getResponseRepeat("meter?thd", thdOk, thdFail, "slow");
+
+    $(window).on("resize", function () {
+        let width = $(window).width();
+        let height = $(window).height();
+        let size = 200;
+
+        if (width > height) {   //landscape
+            size = width / 4.5;
+            if (size > height/1.5) size = height/1.5;
+        }
+        else {
+            size = height / 2.5;
+            if (size > width/1.5) size = width/1.5;
+        }
+
+        size = Math.round(size / 25.0);
+        size *=25;
+        if (size < 180) size = 180;
+        if (size > 320) size = 320;
+
+        console.log(width, height, size);
+        
+    // $("#gaugeVoltaje").simpleGauge(getGaugeOptions("Voltaje"));
+    // $("#gaugeVoltajeF").simpleGauge(getGaugeOptions("Voltaje Fases"));
+    // $("#gaugeCorriente").simpleGauge(getGaugeOptions("Corriente"));
+    // $("#gaugePotencia").simpleGauge(getGaugeOptions("Potencia"));
+    });
+}
+
+function meterOk(resp) {
+    if (meterOk.fail) $(".meter").removeClass("notLoading");
+    meterOk.fail = false;
+
+    //Actualizar los gauge
+    $("#gaugeVoltaje").simpleGauge("setValue", resp.vrms.avg);
+    $("#gaugeVoltajeF").simpleGauge("setValue", resp.vvrms.avg);
+    $("#gaugeCorriente").simpleGauge("setValue", resp.irms.avg);
+    $("#gaugePotencia").simpleGauge("setValue", resp.watt.avg);
+
+    // //Llenar las celdas de voltaje
+    $(".vvrmsR").text(formatNumber(resp.vvrms.r, "V"));
+    $(".vvrmsS").text(formatNumber(resp.vvrms.s, "V"));
+    $(".vvrmsT").text(formatNumber(resp.vvrms.t, "V"));
+    $(".vvrmsAvg").text(formatNumber(resp.vvrms.avg, "V"));
+
+    $(".vrmsR").text(formatNumber(resp.vrms.r, "V"));
+    $(".vrmsS").text(formatNumber(resp.vrms.s, "V"));
+    $(".vrmsT").text(formatNumber(resp.vrms.t, "V"));
+    $(".vrmsN").text(formatNumber(resp.vrms.n, "V"));
+    $(".vrmsAvg").text(formatNumber(resp.vrms.avg, "V"));
+
+    // //Llenar las celdas de corriente
+    $(".irmsR").text(formatNumber(resp.irms.r, "A"));
+    $(".irmsS").text(formatNumber(resp.irms.s, "A"));
+    $(".irmsT").text(formatNumber(resp.irms.t, "A"));
+    $(".irmsN").text(formatNumber(resp.irms.n, "A"));
+
+    // //Potencia activa
+    $(".wattR").text(formatNumber(resp.watt.r, "W"));
+    $(".wattS").text(formatNumber(resp.watt.s, "W"));
+    $(".wattT").text(formatNumber(resp.watt.t, "W"));
+    $(".wattAvg").text(formatNumber(resp.watt.avg, "W"));
+    $(".wattTot").text(formatNumber(resp.watt.tot, "W"));
+
+    // //Potencia reactiva
+    $(".varR").text(formatNumber(resp.var.r, "VAR"));
+    $(".varS").text(formatNumber(resp.var.s, "VAR"));
+    $(".varT").text(formatNumber(resp.var.t, "VAR"));
+    $(".varAvg").text(formatNumber(resp.var.avg, "VAR"));
+    $(".varTot").text(formatNumber(resp.var.tot, "VAR"));
+
+    // //Potencia aparente
+    $(".vaR").text(formatNumber(resp.va.r, "VA"));
+    $(".vaS").text(formatNumber(resp.va.s, "VA"));
+    $(".vaT").text(formatNumber(resp.va.t, "VA"));
+    $(".vaAvg").text(formatNumber(resp.va.avg, "VA"));
+    $(".vaTot").text(formatNumber(resp.va.tot, "VA"));
+
+    $(".freqR").text(formatNumber(resp.freq, "Hz"));
+    $(".freqS").text(formatNumber(resp.freq, "Hz"));
+    $(".freqT").text(formatNumber(resp.freq, "Hz"));
+    $(".freqAvg").text(formatNumber(resp.freq, "Hz"));
+}
+
+function meterFail(response) {
+    $(".meter").addClass("notLoading");
+    meterOk.fail = true;
+}
+
+function energyOk(resp) {
+    if (energyOk.fail) $(".energia").removeClass("notLoading");
+    energyOk.fail = false;
+
+    // //Energía activa
+    $(".wattHR").text(formatNumber(resp.wattH.r / 1000.0, "kWh"));
+    $(".wattHS").text(formatNumber(resp.wattH.s / 1000.0, "kWh"));
+    $(".wattHT").text(formatNumber(resp.wattH.t / 1000.0, "kWh"));
+    $(".wattHTot").text(formatNumber(resp.wattH.tot / 1000.0, "kWh"));
+
+    // //Energía reactiva
+    $(".varHR").text(formatNumber(resp.varH.r / 1000.0, "kVARh"));
+    $(".varHS").text(formatNumber(resp.varH.s / 1000.0, "kVARh"));
+    $(".varHT").text(formatNumber(resp.varH.t / 1000.0, "kVARh"));
+    $(".varHTot").text(formatNumber(resp.varH.tot / 1000.0, "kVARh"));
+
+    // //Energía aparente
+    $(".vaHR").text(formatNumber(resp.vaH.r / 1000.0, "kVAh"));
+    $(".vaHS").text(formatNumber(resp.vaH.s / 1000.0, "kVAh"));
+    $(".vaHT").text(formatNumber(resp.vaH.t / 1000.0, "kVAh"));
+    $(".vaHTot").text(formatNumber(resp.vaH.tot / 1000.0, "kVAh"));
+}
+
+function energyFail(response) {
+    energyOk.fail = true;
+    $(".energia").addClass("notLoading");
+}
+
+function angleOk(resp) {
+    // //Ángulos entre fases de voltaje
+    if (angleOk.fail) $(".angulos").removeClass("notLoading");
+    angleOk.fail = false;
+
+    $(".degvR").text(formatNumber(resp.voltage.r, "°"));
+    $(".degvS").text(formatNumber(resp.voltage.s, "°"));
+    $(".degvT").text(formatNumber(resp.voltage.t, "°"));
+
+    // //Ángulos entre fases de voltaje y fases de corriente
+    $(".degviR").text(formatNumber(resp.vi.r, "°"));
+    $(".degviS").text(formatNumber(resp.vi.s, "°"));
+    $(".degviT").text(formatNumber(resp.vi.t, "°"));
+
+    // //Ángulos entre fases de corriente
+    $(".degiR").text(formatNumber(resp.current.r, "°"));
+    $(".degiS").text(formatNumber(resp.current.s, "°"));
+    $(".degiT").text(formatNumber(resp.current.t, "°"));
+}
+
+function angleFail(response) {
+    $(".angulos").addClass("notLoading");
+    angleOk.fail = true;
+}
+
+function thdOk(response) {
+    if (thdOk.fail) $(".thd").removeClass("notLoading");
+    thdOk.fail = false;
+}
+
+function thdFail(response) {
+    $(".thd").addClass("notLoading");
+    thdOk.fail = true;
+}
+
+function formatNumber(value, unit) {
+    let places = 2;
+    if (unit == "V") places = decimalPlaces.vrms;
+    else if (unit == "A") places = decimalPlaces.irms;
+    else if (unit == "W") places = decimalPlaces.watt;
+    else if (unit == "VAR") places = decimalPlaces.var;
+    else if (unit == "VA") places = decimalPlaces.va;
+    else if (unit == "kWh") places = 3;
+    else if (unit == "kVARh") places = 3;
+    else if (unit == "kVAh") places = 3;
+    else if (unit == "Wh") places = decimalPlaces.wattH;
+    else if (unit == "°") places = decimalPlaces.degv;
+    else if (unit == "°") places = decimalPlaces.degvi;
+    else if (unit == "°") places = decimalPlaces.degi;
+
+    return value.toFixed(places) + " " + unit;
 }
 
 function getGaugeOptions(signal) {
@@ -142,27 +319,28 @@ function getGaugeOptions(signal) {
 
 function createTable() {
     decimalPlaces = {}; //Crear una tabla que contenga la cantidad de lugrares decimales por variable
-    tableHeader.forEach((element) => {
-        decimalPlaces[element.unit] = element.decimals;
+    tableRows.forEach((row) => {
+        decimalPlaces[row.unit] = row.decimals;
     });
 
     //Crear tabla
     let header = '<thead class="table"><tr class="valueTableHead">';
-    let rows = [],
-        row;
-    tableHeader.forEach((element, index) => {
-        if (element.visible) header += '<th scope="col" class="valueTableRow">' + element.name + "</th>";
+    let rows = [];
+    let row;
+
+    tableHeaders.forEach((headerItem, index) => {
+        if (headerItem.visible) header += '<th scope="col" class="valueTableRow">' + headerItem.name + "</th>";
     });
     header += " </tr></thead>";
 
-    tableRows.forEach((element, index) => {
-        if (element.visible) {
+    tableRows.forEach((rowItem, index) => {
+        if (rowItem.visible) {
             row = "<tr>";
-            tableHeader.forEach((head, indexHead) => {
-                if (element.visible) {
-                    let id = head.unit + element.short;
-                    if (indexHead == 0) row += `<th scope="row">${element.name}</th>`;
-                    else row += `<td id="${id}" class="valueTable"></td>`;
+            tableHeaders.forEach((headerItem, indexHead) => {
+                if (rowItem.visible) {
+                    let id = rowItem.unit + headerItem.short;
+                    if (indexHead == 0) row += `<td scope="row">${rowItem.name}</td>`;
+                    else row += `<td id="pt_${id}" class="valueTable ${rowItem.source} ${id}"></td>`;
                 }
             });
             row += "</tr>";
@@ -176,128 +354,4 @@ function createTable() {
     });
     body += "</tbody>";
     $("#powerTable").html('<table class="table table-bordered">' + header + body + "</table>");
-}
-
-function meterOk(resp) {
-    $("#gaugeVoltaje").simpleGauge("setValue", resp.vrms.avg);
-    $("#gaugeVoltajeF").simpleGauge("setValue", resp.vvrms.avg);
-    $("#gaugeCorriente").simpleGauge("setValue", resp.irms.avg);
-    $("#gaugePotencia").simpleGauge("setValue", resp.watt.avg);
-
-    $("#cellVR").text(formatNumber(resp.vrms.r, "V"));
-    $("#cellVS").text(formatNumber(resp.vrms.s, "V"));
-    $("#cellVT").text(formatNumber(resp.vrms.t, "V"));
-    $("#cellVavg").text(formatNumber(resp.vrms.avg, "V"));
-    $("#cellVRS").text(formatNumber(resp.vvrms.r, "V"));
-    $("#cellVST").text(formatNumber(resp.vvrms.s, "V"));
-    $("#cellVTR").text(formatNumber(resp.vvrms.t, "V"));
-    $("#cellVVavg").text(formatNumber(resp.vvrms.avg, "V"));
-
-
-
-    $("#cellWattR").text(formatNumber(resp.watt.r, "V"));
-    $("#cellWattS").text(formatNumber(resp.watt.s, "V"));
-    $("#cellWattT").text(formatNumber(resp.watt.t, "V"));
-    $("#cellWattTot").text(formatNumber(resp.watt.tot, "V"));
-    // $("#cellVRS").text(formatNumber(resp.vvrms.r, "V"));
-    // $("#cellVST").text(formatNumber(resp.vvrms.s, "V"));
-    // $("#cellVTR").text(formatNumber(resp.vvrms.t, "V"));
-    // $("#cellVVavg").text(formatNumber(resp.vvrms.avg, "V"));
-
-
-
-
-
-
-    $("#cellIR").text(formatNumber(resp.irms.r, "A"));
-    $("#cellIS").text(formatNumber(resp.irms.s, "A"));
-    $("#cellIT").text(formatNumber(resp.irms.t, "A"));
-    $("#cellIN").text(formatNumber(resp.irms.n, "A"));
-
-    $("#vrmsR").text(formatNumber(resp.vrms.r, "V"));
-    $("#vrmsS").text(formatNumber(resp.vrms.s, "V"));
-    $("#vrmsT").text(formatNumber(resp.vrms.t, "V"));
-    $("#vrmsN").text(formatNumber(resp.vrms.n, "V"));
-    $("#vrmsAvg").text(formatNumber(resp.vrms.avg, "V"));
-
-    $("#irmsR").text(formatNumber(resp.irms.r, "A"));
-    $("#irmsS").text(formatNumber(resp.irms.s, "A"));
-    $("#irmsT").text(formatNumber(resp.irms.t, "A"));
-    $("#irmsN").text(formatNumber(resp.irms.n, "A"));
-
-    $("#wattR").text(formatNumber(resp.watt.r, "W"));
-    $("#wattS").text(formatNumber(resp.watt.s, "W"));
-    $("#wattT").text(formatNumber(resp.watt.t, "W"));
-    $("#wattAvg").text(formatNumber(resp.watt.avg, "W"));
-    $("#wattTot").text(formatNumber(resp.watt.tot, "W"));
-
-    $("#varR").text(formatNumber(resp.var.r, "VAR"));
-    $("#varS").text(formatNumber(resp.var.s, "VAR"));
-    $("#varT").text(formatNumber(resp.var.t, "VAR"));
-    $("#varAvg").text(formatNumber(resp.var.avg, "VAR"));
-    $("#varTot").text(formatNumber(resp.var.tot, "VAR"));
-
-    $("#vaR").text(formatNumber(resp.va.r, "VA"));
-    $("#vaS").text(formatNumber(resp.va.s, "VA"));
-    $("#vaT").text(formatNumber(resp.va.t, "VA"));
-    $("#vaAvg").text(formatNumber(resp.va.avg, "VA"));
-    $("#vaTot").text(formatNumber(resp.va.tot, "VA"));
-
-    $("#freqR").text(formatNumber(resp.freq, "Hz"));
-    $("#freqS").text(formatNumber(resp.freq, "Hz"));
-    $("#freqT").text(formatNumber(resp.freq, "Hz"));
-    $("#freqAvg").text(formatNumber(resp.freq, "Hz"));
-}
-
-function meterFail(response) {}
-
-function energyOk(response) {
-    // let resp = JSON.parse(response); //bug
-    resp = response;
-
-    $("#wattHR").text(formatNumber(resp.wattH.r, "Wh"));
-    $("#wattHS").text(formatNumber(resp.wattH.s, "Wh"));
-    $("#wattHT").text(formatNumber(resp.wattH.t, "Wh"));
-    $("#wattHTot").text(formatNumber(resp.wattH.tot, "Wh"));
-
-    $("#varHR").text(formatNumber(resp.varH.r, "VARh"));
-    $("#varHS").text(formatNumber(resp.varH.s, "VARh"));
-    $("#varHT").text(formatNumber(resp.varH.t, "VARh"));
-    $("#varHTot").text(formatNumber(resp.varH.tot, "VARh"));
-
-    $("#vaHR").text(formatNumber(resp.vaH.r, "VAh"));
-    $("#vaHS").text(formatNumber(resp.vaH.s, "VAh"));
-    $("#vaHT").text(formatNumber(resp.vaH.t, "VAh"));
-    $("#vaHTot").text(formatNumber(resp.vaH.tot, "VAh"));
-}
-
-function energyFail(response) {}
-
-function angleOk(response) {
-    // let resp = JSON.parse(response); //bug
-    resp = response;
-
-    $("#degvR").text(formatNumber(resp.voltage.r, "°"));
-    $("#degvS").text(formatNumber(resp.voltage.s, "°"));
-    $("#degvT").text(formatNumber(resp.voltage.t, "°"));
-
-    $("#degviR").text(formatNumber(resp.vi.r, "°"));
-    $("#degviS").text(formatNumber(resp.vi.s, "°"));
-    $("#degviT").text(formatNumber(resp.vi.t, "°"));
-}
-
-function angleFail(response) {}
-
-function formatNumber(value, unit) {
-    let places = 2;
-    if (unit == "V") places = decimalPlaces.vrms;
-    else if (unit == "A") places = decimalPlaces.irms;
-    else if (unit == "W") places = decimalPlaces.watt;
-    else if (unit == "VAR") places = decimalPlaces.var;
-    else if (unit == "VA") places = decimalPlaces.va;
-    else if (unit == "Wh") places = decimalPlaces.wattH;
-    else if (unit == "°") places = decimalPlaces.degv;
-    else if (unit == "°") places = decimalPlaces.degvi;
-
-    return value.toFixed(places) + " " + unit;
 }

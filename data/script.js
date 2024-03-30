@@ -12,7 +12,7 @@ $(document).ready(function () {
             });
 
             let path = location.pathname.split("/");
-            path = path[path.length-1].split(".")[0];
+            path = path[path.length - 1].split(".")[0];
             path = "#nav" + path;
             $(path).addClass("active");
         }
@@ -21,8 +21,7 @@ $(document).ready(function () {
     $("#divFooter").load("nav.html #codeFooter", function (status) {
         if (status == "error") {
             $("#divFooter").text("Fallo al cargar la barar de estado!");
-        }
-        else {
+        } else {
             updateFooter("loading");
             board.getStateRepeat(
                 (data) => updateFooter(data),
@@ -33,7 +32,6 @@ $(document).ready(function () {
     });
 
     function updateFooter(status) {
-        const spinner = '<span class="spinner-border spinner-border-sm ml-2" role="status" aria-hidden="true"></span>';
         if (status == "loading" || status == "fail") {
             $("#statusWifi").html("Conectado a " + spinner + " | señal: " + spinner);
             $("#statusIP").html("IP: " + spinner);
@@ -53,6 +51,7 @@ $(document).ready(function () {
     initUI();
 });
 
+const spinner = '<span class="spinner-border spinner-border-sm ml-2" role="status" aria-hidden="true"></span>';
 
 //Iconos SVG
 const iconWifiOff =
