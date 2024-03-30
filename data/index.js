@@ -43,33 +43,33 @@ function initUI() {
 
     board.getResponseRepeat("meter?angles", angleOk, angleFail, "slow");
 
-    // board.getResponseRepeat("meter?thd", thdOk, thdFail, "slow");
+    board.getResponseRepeat("meter?thd", thdOk, thdFail, "slow");
 
     $(window).on("resize", function () {
         let width = $(window).width();
         let height = $(window).height();
         let size = 200;
 
-        if (width > height) {   //landscape
+        if (width > height) {
+            //landscape
             size = width / 4.5;
-            if (size > height/1.5) size = height/1.5;
-        }
-        else {
+            if (size > height / 1.5) size = height / 1.5;
+        } else {
             size = height / 2.5;
-            if (size > width/1.5) size = width/1.5;
+            if (size > width / 1.5) size = width / 1.5;
         }
 
         size = Math.round(size / 25.0);
-        size *=25;
+        size *= 25;
         if (size < 180) size = 180;
         if (size > 320) size = 320;
 
         console.log(width, height, size);
-        
-    // $("#gaugeVoltaje").simpleGauge(getGaugeOptions("Voltaje"));
-    // $("#gaugeVoltajeF").simpleGauge(getGaugeOptions("Voltaje Fases"));
-    // $("#gaugeCorriente").simpleGauge(getGaugeOptions("Corriente"));
-    // $("#gaugePotencia").simpleGauge(getGaugeOptions("Potencia"));
+
+        // $("#gaugeVoltaje").simpleGauge(getGaugeOptions("Voltaje"));
+        // $("#gaugeVoltajeF").simpleGauge(getGaugeOptions("Voltaje Fases"));
+        // $("#gaugeCorriente").simpleGauge(getGaugeOptions("Corriente"));
+        // $("#gaugePotencia").simpleGauge(getGaugeOptions("Potencia"));
     });
 }
 
@@ -186,9 +186,19 @@ function angleFail(response) {
     angleOk.fail = true;
 }
 
-function thdOk(response) {
+function thdOk(resp) {
     if (thdOk.fail) $(".thd").removeClass("notLoading");
     thdOk.fail = false;
+
+    $(".thdVR").text(formatNumber(resp.voltageTHD.r, "%"));
+    $(".thdVS").text(formatNumber(resp.voltageTHD.s, "%"));
+    $(".thdVT").text(formatNumber(resp.voltageTHD.t, "%"));
+    $(".thdVAvg").text(formatNumber((resp.voltageTHD.r + resp.voltageTHD.s + resp.voltageTHD.t) / 3.0, "%"));
+
+    $(".thdIR").text(formatNumber(resp.currentTHD.r, "%"));
+    $(".thdIS").text(formatNumber(resp.currentTHD.s, "%"));
+    $(".thdIT").text(formatNumber(resp.currentTHD.t, "%"));
+    $(".thdIAvg").text(formatNumber((resp.currentTHD.r + resp.currentTHD.s + resp.currentTHD.t) / 3.0, "%"));
 }
 
 function thdFail(response) {

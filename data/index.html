@@ -16,24 +16,23 @@
                 <h2>Power Meter ADE9000 - Mediciones en tiempo real</h2>
             </div>
 
-              <ul class="nav nav-tabs" id="myTab" role="tablist">
+            <ul class="nav nav-tabs" id="myTab" role="tablist">
                 <li class="nav-item" role="presentation">
-                  <button class="nav-link active" id="home-tab" data-bs-toggle="tab" data-bs-target="#home" type="button" role="tab" aria-controls="home" aria-selected="true">Resumen</button>
+                    <button class="nav-link active" id="home-tab" data-bs-toggle="tab" data-bs-target="#home" type="button" role="tab" aria-controls="home" aria-selected="true">Resumen</button>
                 </li>
                 <li class="nav-item" role="presentation">
-                  <button class="nav-link" id="events-tab" data-bs-toggle="tab" data-bs-target="#events" type="button" role="tab" aria-controls="profile" aria-selected="false">Eventos</button>
+                    <button class="nav-link" id="events-tab" data-bs-toggle="tab" data-bs-target="#events" type="button" role="tab" aria-controls="profile" aria-selected="false">Eventos</button>
                 </li>
                 <li class="nav-item" role="presentation">
-                  <button class="nav-link" id="allMeasures-tab" data-bs-toggle="tab" data-bs-target="#allMeasures" type="button" role="tab" aria-controls="messages" aria-selected="false">Todas las mediciones</button>
+                    <button class="nav-link" id="allMeasures-tab" data-bs-toggle="tab" data-bs-target="#allMeasures" type="button" role="tab" aria-controls="messages" aria-selected="false">Todas las mediciones</button>
                 </li>
                 <li class="nav-item" role="presentation">
-                  <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings" type="button" role="tab" aria-controls="settings" aria-selected="false">Opciones</button>
+                    <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings" type="button" role="tab" aria-controls="settings" aria-selected="false">Opciones</button>
                 </li>
-              </ul>
-              
-              <div class="tab-content">
-                <div class="tab-pane active" id="home" role="tabpanel" aria-labelledby="home-tab">
+            </ul>
 
+            <div class="tab-content">
+                <div class="tab-pane active" id="home" role="tabpanel" aria-labelledby="home-tab">
                     <div class="row">
                         <div class="col mt-2 mb-2">
                             <div class="d-flex flex-wrap justify-content-center">
@@ -56,7 +55,7 @@
                             </div>
                         </div>
                     </div>
-        
+
                     <div class="row p-2">
                         <div class="col-md-6 col-sm-12">
                             <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
@@ -93,7 +92,7 @@
                                 </tbody>
                             </table>
                         </div>
-        
+
                         <div class="col-md-6 col-sm-12">
                             <table class="table table-responsive powerTable">
                                 <thead>
@@ -155,12 +154,12 @@
                                         <td>Potencia total</td>
                                         <td id="cellWattTot" class="valueTable meter wattTot">0 W</td>
                                         <td id="cellVarTot" class="valueTable meter varTot">0 VAR</td>
-                                        <td id="cellVaTot" class="valueTable meter  vaTot">0 VA</td>
+                                        <td id="cellVaTot" class="valueTable meter vaTot">0 VA</td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
-        
+
                         <div class="col-md-6 col-sm-12">
                             <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
                                 <thead>
@@ -179,7 +178,7 @@
                                         <td>Energía Fase S</td>
                                         <td id="cellWatt_HS" class="valueTable energia wattHS">0 Wh</td>
                                         <td id="cellVar_HS" class="valueTable energia varHS">0 VARh</td>
-                                        <td id="cellVa_HS" class="valueTable energia vaHS" >0 VAh</td>
+                                        <td id="cellVa_HS" class="valueTable energia vaHS">0 VAh</td>
                                     </tr>
                                     <tr>
                                         <td>Energía Fase T</td>
@@ -197,7 +196,7 @@
                             </table>
                         </div>
                     </div>
-        
+
                     <div class="row p-2">
                         <div class="col-md-6 col-sm-12">
                             <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
@@ -234,9 +233,9 @@
                                 </tbody>
                             </table>
                         </div>
-        
+
                         <div class="col-md-6 col-sm-12">
-                            <table class="table table-responsive  powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
+                            <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
                                 <thead>
                                     <tr>
                                         <th colspan="4" class="text-center">Calidad de energía</th>
@@ -245,55 +244,43 @@
                                 <tbody>
                                     <tr>
                                         <td>THD voltaje Fase R</td>
-                                        <td id="cellTHDVR" class="valueTable">0.0 %</td>
+                                        <td id="cellTHDVR" class="valueTable thdVR">0.0 %</td>
                                         <td>THD corriente Fase R</td>
-                                        <td id="cellTHDIR" class="valueTable">0.0 %</td>
+                                        <td id="cellTHDIR" class="valueTable thdIR">0.0 %</td>
                                     </tr>
                                     <tr>
                                         <td>THD voltaje Fase S</td>
-                                        <td id="cellTHDVS" class="valueTable">0.0 %</td>
+                                        <td id="cellTHDVS" class="valueTable thdVS">0.0 %</td>
                                         <td>THD corriente Fase S</td>
-                                        <td id="cellTHDIS" class="valueTable">0.0 %</td>
+                                        <td id="cellTHDIS" class="valueTable thdIS">0.0 %</td>
                                     </tr>
                                     <tr>
                                         <td>THD voltaje Fase T</td>
-                                        <td id="cellTHDVT" class="valueTable">0.0 %</td>
+                                        <td id="cellTHDVT" class="valueTable thdVT">0.0 %</td>
                                         <td>THD corriente Fase T</td>
-                                        <td id="cellTHDIT" class="valueTable">0.0 %</td>
+                                        <td id="cellTHDIT" class="valueTable thdIT">0.0 %</td>
                                     </tr>
                                     <tr>
                                         <td>THD voltaje promedio</td>
-                                        <td id="cellTHDVAvg" class="valueTable">0.0 %</td>
+                                        <td id="cellTHDVAvg" class="valueTable thdVAvg">0.0 %</td>
                                         <td>THD corriente promedio</td>
-                                        <td id="cellTHDIAvg" class="valueTable">0.0 %</td>
+                                        <td id="cellTHDIAvg" class="valueTable thdIAvg">0.0 %</td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
                     </div>
-        
-
                 </div>
-                <div class="tab-pane" id="events" role="tabpanel" aria-labelledby="events-tab">
-
-
-                </div>
+                <div class="tab-pane" id="events" role="tabpanel" aria-labelledby="events-tab"></div>
                 <div class="tab-pane" id="allMeasures" role="tabpanel" aria-labelledby="allMeasures-tab">
-
                     <div class="row p-2">
                         <div class="col divScrollX">
                             <div id="powerTable" class="powerTable"></div>
                         </div>
                     </div>
-
                 </div>
-                <div class="tab-pane" id="settings" role="tabpanel" aria-labelledby="settings-tab">
-                    
-
-                </div>
-              </div>
-
-
+                <div class="tab-pane" id="settings" role="tabpanel" aria-labelledby="settings-tab"></div>
+            </div>
         </div>
         <div id="divFooter"></div>
     </body>

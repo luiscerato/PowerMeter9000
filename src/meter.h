@@ -212,6 +212,15 @@ struct meterValues
 			phaseR.AngleI, phaseS.AngleI, phaseT.AngleI);
 		dest = str;
 	}
+
+	void getJsonTHD(String& dest) {
+		char str[256];
+		snprintf(str, sizeof(str), "{\"voltageTHD\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f},"
+			"\"currentTHD\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f}}",
+			phaseR.Vthd, phaseS.Vthd, phaseT.Vthd,
+			phaseR.Ithd, phaseS.Ithd, phaseT.Ithd);
+		dest = str;
+	}
 };
 
 typedef struct {

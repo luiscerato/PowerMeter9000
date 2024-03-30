@@ -114,6 +114,8 @@ void Init_WebServer()
 				Value = Meter.neutral.getJson();
 			else if (param == "angles")
 				Meter.getJsonAngles(Value);
+			else if (param == "thd")
+				Meter.getJsonTHD(Value);
 			else
 			{
 				request->send(404, "text/plain", "Page Not Found");
