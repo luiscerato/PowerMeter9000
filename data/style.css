@@ -93,11 +93,12 @@ input[type=range][orient=vertical] {
 }
 
 .powerTable {
-	font-family: "Roboto Mono";
+	/* font-family: "Roboto Mono";
 	font-optical-sizing: auto;
 	font-weight: 800;
 	font-style: normal;
-	font-size: x-large;
+	font-size: x-large; */
+	background-color:rgba(177, 145, 250, 0.1);
   }
 
 .valueTable {
@@ -105,7 +106,7 @@ input[type=range][orient=vertical] {
   font-optical-sizing: auto;
   font-weight: 800;
   font-style: normal;
-  font-size: x-large;
+  font-size: 20px;
   color:green;
 }
 
@@ -118,7 +119,7 @@ input[type=range][orient=vertical] {
 }
 
 .valueTableRow {
-	width: fit-content;
+	/* width: fit-content; */
 }
 
 @media only screen and (max-width: 1000px) {
@@ -126,17 +127,23 @@ input[type=range][orient=vertical] {
 		/* width: 30px; */
 		/* padding: 0.2rem !important; */
 	/* } */
-	.valueTable {
+	/* .valueTable {
 		font-size: smaller;
 		padding: 0.2rem !important;
-	}
-	.powerTable {
+	} */
+	/* .powerTable {
 		font-size: smaller;
 		padding: 0.1rem !important;
-	}
+	} */
 }
 
 .divScrollX {
 	scroll-behavior: smooth;
 	overflow-x: scroll;
+}
+
+.gauge {
+	width: 300px;
+	height: 300px;
+	overflow: hidden;
 }

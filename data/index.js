@@ -13,7 +13,6 @@ let tableHeader = [
 
 let decimalPlaces = {};
 
-// tableRows = ["Fase R", "Fase S", "Fase T", "Neutro", "Total", "Promedio"];
 tableRows = [
     {name: "Fase R", short: "R", visible: true},
     {name: "Fase S", short: "S", visible: true},
@@ -23,36 +22,122 @@ tableRows = [
     {name: "Promedio", short: "Avg", visible: true},
 ];
 
-
 function initUI() {
-    
-$.fn.gauge = function(opts) {
-    this.each(function() {
-      var $this = $(this),
-          data = $this.data();
-  
-      if (data.gauge) {
-        data.gauge.stop();
-        delete data.gauge;
-      }
-      if (opts !== false) {
-        data.gauge = new Gauge(this).setOptions(opts);
-      }
-    });
-    return this;
-  };
-  
-
-    $("#gauge1").gauge();
+    $("#gaugeVoltaje").simpleGauge(getGaugeOptions("Voltaje"));
+    $("#gaugeVoltajeF").simpleGauge(getGaugeOptions("Voltaje Fases"));
+    $("#gaugeCorriente").simpleGauge(getGaugeOptions("Corriente"));
+    $("#gaugePotencia").simpleGauge(getGaugeOptions("Potencia"));
 
     createTable();
-
 
     board.getResponseRepeat("meter", meterOk, meterFail, "fast");
 
     board.getResponseRepeat("meter?energy", energyOk, energyFail, "slow");
 
     board.getResponseRepeat("meter?angles", angleOk, angleFail);
+}
+
+function getGaugeOptions(signal) {
+    let options = {
+        min: 0,
+        max: 100,
+        value: 0,
+        type: "analog digital",
+        container: {
+            scale: 95, // scale of gauge, in percent
+            style: "background: #ddd; background: linear-gradient(335deg, #ddd 0%, #fff 30%, #fff 50%, #bbb 100%); border-radius: 1000px; border: 8px solid #bbb;",
+        },
+        title: {
+            text: signal,
+            style: "color: #555; font-size: 20px; padding: 5px;",
+        },
+        digital: {
+            text: "{value.2} V", // value with number of decimals
+            style: "color: auto; font-size: 30px; z-index=10; ",
+        },
+        analog: {
+            minAngle: -150,
+            maxAngle: 150,
+        },
+        labels: {
+            text: "{value}",
+            count: 10,
+            scale: 72,
+            style: "font-size: 20px;",
+        },
+        ticks: {
+            count: 14,
+            scale1: 84,
+            scale2: 93,
+            style: "width: 2px; color: #999;",
+        },
+        subTicks: {
+            count: 5,
+            scale1: 93,
+            scale2: 96,
+            style: "width: 1px; color: #bbb;",
+        },
+        bars: {
+            scale1: 88,
+            scale2: 94,
+        },
+        pointer: {
+            scale: 95,
+            style: "color: #000000; opacity: 0.8; filter: drop-shadow(-3px 3px 2px rgba(0, 0, 0, .7));",
+        },
+    };
+
+    options.title.text = "";
+
+    if (signal.toLowerCase() == "voltaje") {
+        options.digital.text = "{value.1} V";
+        options.min = 180;
+        options.max = 260;
+        options.labels.count = 8;
+        options.ticks.count = 8;
+        options.bars.colors = [
+            [180, "#dd2222", 0, 0],
+            [190, "#ffa500", 0, 0],
+            [200, "#378618", 0, 0],
+            [240, "#ffa500", 0, 0],
+            [250, "#dd2222", 0, 0],
+        ];
+    } else if (signal.toLowerCase() == "voltaje fases") {
+        options.digital.text = "{value.1} V";
+        options.min = 340;
+        options.max = 420;
+        options.labels.count = 8;
+        options.ticks.count = 16;
+        options.bars.colors = [
+            [340, "#dd2222", 0, 0],
+            [350, "#ffa500", 0, 0],
+            [360, "#378618", 0, 0],
+            [400, "#ffa500", 0, 0],
+            [410, "#dd2222", 0, 0],
+        ];
+    } else if (signal.toLowerCase() == "corriente") {
+        options.digital.text = "{value.3} A";
+        options.min = 0;
+        options.max = 100;
+        options.labels.count = 10;
+        options.bars.colors = [
+            [0, "#378618", 0, 0],
+            [70, "#ffa500", 0, 0],
+            [85, "#dd2222", 0, 0],
+        ];
+    } else if (signal.toLowerCase() == "potencia") {
+        options.digital.text = "{value.3} kW";
+        options.min = 0;
+        options.max = 20;
+        options.labels.count = 10;
+        options.bars.colors = [
+            [0, "#378618", 0, 0],
+            [14, "#ffa500", 0, 0],
+            [17, "#dd2222", 0, 0],
+        ];
+    }
+
+    return options;
 }
 
 function createTable() {
@@ -93,9 +178,25 @@ function createTable() {
     $("#powerTable").html('<table class="table table-bordered">' + header + body + "</table>");
 }
 
-function meterOk(response) {
-    // let resp = JSON.parse(response); //bug
-    resp = response;
+function meterOk(resp) {
+    $("#gaugeVoltaje").simpleGauge("setValue", resp.vrms.avg);
+    $("#gaugeVoltajeF").simpleGauge("setValue", resp.vvrms.avg);
+    $("#gaugeCorriente").simpleGauge("setValue", resp.irms.avg);
+    $("#gaugePotencia").simpleGauge("setValue", resp.watt.avg);
+
+    $("#cellVR").text(formatNumber(resp.vrms.r, "V"));
+    $("#cellVS").text(formatNumber(resp.vrms.s, "V"));
+    $("#cellVT").text(formatNumber(resp.vrms.t, "V"));
+    $("#cellVavg").text(formatNumber(resp.vrms.avg, "V"));
+    $("#cellVRS").text(formatNumber(resp.vvrms.r, "V"));
+    $("#cellVST").text(formatNumber(resp.vvrms.s, "V"));
+    $("#cellVTR").text(formatNumber(resp.vvrms.t, "V"));
+    $("#cellVVavg").text(formatNumber(resp.vvrms.avg, "V"));
+
+    $("#cellIR").text(formatNumber(resp.irms.r, "A"));
+    $("#cellIS").text(formatNumber(resp.irms.s, "A"));
+    $("#cellIT").text(formatNumber(resp.irms.t, "A"));
+    $("#cellIN").text(formatNumber(resp.irms.n, "A"));
 
     $("#vrmsR").text(formatNumber(resp.vrms.r, "V"));
     $("#vrmsS").text(formatNumber(resp.vrms.s, "V"));

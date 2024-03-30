@@ -27,6 +27,8 @@ AsyncWebSocket* webServerGetMeterWS()
 void Init_WebServer()
 {
 	debugI("Iniciando servidor web...");
+	server.reset();			//Crear el servidor web desde 0
+
 	scopeWS.onEvent(meterEvents);
 	server.addHandler(&scopeWS);
 	server.addHandler(&remoteScreen);
@@ -70,6 +72,11 @@ void Init_WebServer()
 		request->send(200, "text/plain", "ok");
 		});
 
+	server.on("/reset", HTTP_GET, [](AsyncWebServerRequest* request) {
+		request->send(200, "text/plain", "ok");
+		ESP.restart();
+		});
+
 	server.on("/status", HTTP_GET, [](AsyncWebServerRequest* request) {
 		String status;
 		getStatus(status);
@@ -108,7 +115,10 @@ void Init_WebServer()
 			else if (param == "angles")
 				Meter.getJsonAngles(Value);
 			else
+			{
 				request->send(404, "text/plain", "Page Not Found");
+				return;
+			}
 		}
 		else {
 			Meter.getJsonBasic(Value);

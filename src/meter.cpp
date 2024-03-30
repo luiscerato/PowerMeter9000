@@ -292,18 +292,19 @@ void meterReadRMS()
 	meterVals.phaseR.Vrms = volts.VoltageRMS_A;
 	meterVals.phaseS.Vrms = volts.VoltageRMS_B;
 	meterVals.phaseT.Vrms = volts.VoltageRMS_C;
+
 	meterVals.phaseR.Irms = curr.CurrentRMS_A;
 	meterVals.phaseS.Irms = curr.CurrentRMS_B;
 	meterVals.phaseT.Irms = curr.CurrentRMS_C;
 	meterVals.neutral.Irms = curr.CurrentRMS_N;
-
-	meterVals.average.Vrms = (meterVals.phaseR.Vrms + meterVals.phaseS.Vrms + meterVals.phaseT.Vrms) / 3.0;
-	meterVals.average.Irms = (meterVals.phaseR.Irms + meterVals.phaseS.Irms + meterVals.phaseT.Irms) / 3.0;
-
 	//Calcular voltajes entre fase y fase
 	meterVals.phaseR.VVrms = sumVoltages(meterVals.phaseR.Vrms, 0, meterVals.phaseS.Vrms, meterVals.phaseR.AngleV);
 	meterVals.phaseS.VVrms = sumVoltages(meterVals.phaseS.Vrms, 0, meterVals.phaseT.Vrms, meterVals.phaseS.AngleV);
 	meterVals.phaseT.VVrms = sumVoltages(meterVals.phaseT.Vrms, 0, meterVals.phaseR.Vrms, meterVals.phaseT.AngleV);
+
+	meterVals.average.Vrms = (meterVals.phaseR.Vrms + meterVals.phaseS.Vrms + meterVals.phaseT.Vrms) / 3.0;
+	meterVals.average.VVrms = (meterVals.phaseR.VVrms + meterVals.phaseS.VVrms + meterVals.phaseT.VVrms) / 3.0;
+	meterVals.average.Irms = (meterVals.phaseR.Irms + meterVals.phaseS.Irms + meterVals.phaseT.Irms) / 3.0;
 }
 
 void meterReadHalfRMS()

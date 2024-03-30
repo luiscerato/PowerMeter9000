@@ -6,16 +6,106 @@
         <link rel="icon" type="image/x-icon" href="favicon.ico" />
         <link rel="stylesheet" type="text/css" href="style.css" />
         <link rel="stylesheet" type="text/css" href="lib/bootstrap.min.css" />
+        <link rel="stylesheet" type="text/css" href="lib/jquery.simplegauge.css" />
     </head>
     <body>
         <div id="navbar"></div>
 
         <div class="container nav_sep">
-            <div class="row p-2">
-                <div class="col2">
-                    <div id="gauge1"></div>
+            <div class="row text-center mt-4">
+                <h1>Power Meter ADE9000 - Mediciones en tiempo real</h1>
+            </div>
+            <div class="row">
+                <div class="col mt-2 mb-2">
+                    <div class="d-flex flex-wrap justify-content-center">
+                        <div>
+                            <h3 class="text-center">Voltaje</h3>
+                            <div id="gaugeVoltaje" class="gauge"></div>
+                        </div>
+                        <div>
+                            <h3 class="text-center">Voltaje Fases</h3>
+                            <div id="gaugeVoltajeF" class="gauge"></div>
+                        </div>
+                        <div>
+                            <h3 class="text-center">Corriente</h3>
+                            <div id="gaugeCorriente" class="gauge"></div>
+                        </div>
+                        <div>
+                            <h3 class="text-center">Potencia</h3>
+                            <div id="gaugePotencia" class="gauge"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
+
+            <div class="row p-2">
+                <div class="col-md-6 col-sm-12">
+                    <table class="table table-striped-columns table-responsive" style="background-color: rgba(177, 145, 250, 0.1)">
+                        <thead>
+                            <tr>
+                                <th colspan="4" class="text-center">Mediciones de voltaje</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Voltaje Fase R</td>
+                                <td id="cellVR" class="valueTable">230.00 V</td>
+                                <td>Voltaje Fases RS</td>
+                                <td id="cellVRS" class="valueTable">390.00 V</td>
+                            </tr>
+                            <tr>
+                                <td>Voltaje Fase S</td>
+                                <td id="cellVS" class="valueTable">230.00 V</td>
+                                <td>Voltaje Fases ST</td>
+                                <td id="cellVST" class="valueTable">390.00 V</td>
+                            </tr>
+                            <tr>
+                                <td>Voltaje Fase T</td>
+                                <td id="cellVT" class="valueTable">230.00 V</td>
+                                <td>Voltaje Fases TR</td>
+                                <td id="cellVTR" class="valueTable">390.00 V</td>
+                            </tr>
+                            <tr>
+                                <td>Voltaje promedio</td>
+                                <td id="cellVavg" class="valueTable">230.00 V</td>
+                                <td>Voltaje promedio</td>
+                                <td id="cellVVavg" class="valueTable">390.00 V</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="col-md-6 col-sm-12">
+                    <table class="table table-striped-columns table-responsive powerTable">
+                        <thead>
+                            <tr>
+                                <th colspan="4" class="text-center">Mediciones de corriente</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Corriente Fase R</td>
+                                <td id="cellIR" class="valueTable">0.000 A</td>
+                                <td>Corriente Neutro</td>
+                                <td id="cellIN" class="valueTable">0.000 A</td>
+                            </tr>
+                            <tr>
+                                <td>Corriente Fase S</td>
+                                <td id="cellIS" class="valueTable">0.000 A</td>
+                            </tr>
+                            <tr>
+                                <td>Corriente Fase T</td>
+                                <td id="cellIT" class="valueTable">0.000 A</td>
+                            </tr>
+                            <tr>
+                                <td>Corriente promedio</td>
+                                <td id="cellIavg" class="valueTable">0.000 A</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
             <div class="row p-2">
                 <div class="col divScrollX">
                     <div id="powerTable" class="powerTable"></div>
@@ -25,10 +115,10 @@
         <div id="divFooter"></div>
     </body>
 
-    <script src="lib/jquery-3.6.4.min.js" defer></script>
-    <script src="lib/bootstrap.bundle.min.js" defer></script>
-    <script src="lib/gauge.min.js" defer></script>
-    <script src="board.js" defer></script>
-    <script src="index.js" defer></script>
-    <script src="script.js" defer></script>
+    <script src="lib/jquery-3.6.4.min.js"></script>
+    <script src="lib/bootstrap.bundle.min.js"></script>
+    <script src="lib/jquery.simplegauge.js"></script>
+    <script src="board.js"></script>
+    <script src="index.js"></script>
+    <script src="script.js"></script>
 </html>

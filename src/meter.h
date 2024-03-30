@@ -87,11 +87,11 @@ struct phaseValues
 		if (str == nullptr) return res;
 		//"{\"Zero\":%.0f, \"Conversion\":%.0f, \"Weight\":%.3f, \"CalTemp\": %.2f, \"Date\": %d}"
 
-		snprintf(str, strSize, "{\"name\":\"%s\",\"vrms\":%.4f,\"irms\":%.4f,\"fvrms\":%.4f,\"firms\":%.4f,"
+		snprintf(str, strSize, "{\"name\":\"%s\",\"vrms\":%.4f,\"vvrms\":%.4f,\"irms\":%.4f,\"fvrms\":%.4f,\"firms\":%.4f,"
 			"\"freq\":%.2f,\"pf\":%.4f,\"angle\":%.2f,\"vthd\":%.2f,\"ithd\":%.2f,"
 			"\"watt\":%.4f,\"var\":%.4f,\"va\":%.4f,"
 			"\"watth\":%.4f,\"varh\":%.4f,\"vah\":%.4f}",
-			Name, Vrms, Irms, FastVrms, FastIrms,
+			Name, Vrms, VVrms, Irms, FastVrms, FastIrms,
 			Freq, PowerFactor, AngleVI, Vthd, Ithd,
 			Watt, VAR, VA,
 			Watt_H, VAR_H, VA_H);
@@ -121,6 +121,7 @@ struct meterValues
 	struct {
 		float Irms;			//Voltaje RMS promedio de todas las fases
 		float Vrms;			//Corriente RMS promedio de todas las fases
+		float VVrms;			//Corriente RMS promedio de todas las fases
 		float FastVrms;		//Voltaje RMS rápida promedio de todas las fases
 		float FastIrms;		//Corriente RMS rápida promedio de todas las fases
 		float Watt;			//Potencia Activa promedio de todas las fases
@@ -164,12 +165,14 @@ struct meterValues
 		};
 
 		snprintf(str, strSize, "{\"vrms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f,\"avg\":%.3f},"
+			"\"vvrms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f},"
 			"\"irms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f,\"avg\":%.3f},"
 			"\"watt\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
 			"\"var\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
 			"\"va\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
 			"\"wattH\":%.3f,\"varH\":%.3f,\"vaH\":%.3f,\"freq\":%.2f}",
 			phaseR.Vrms, phaseS.Vrms, phaseT.Vrms, neutral.Vrms, average.Vrms,
+			phaseR.VVrms, phaseS.VVrms, phaseT.VVrms, average.VVrms,
 			phaseR.Irms, phaseS.Irms, phaseT.Irms, neutral.Irms, average.Irms,
 			phaseR.Watt, phaseS.Watt, phaseT.Watt, average.Watt, power.Watt,
 			phaseR.VAR, phaseS.VAR, phaseT.VAR, average.VAR, power.VAR,
