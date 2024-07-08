@@ -77,10 +77,37 @@ struct _propFont
   uint8_t minDigitWd;
 };
 
+class windowPos {
+public:
+  uint32_t x;
+  uint32_t y;
+  uint32_t w;
+  uint32_t h;
+
+  void set(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+  {
+    this->x = x;
+    this->y = y;
+    this->w = w;
+    this->h = h;
+  };
+};
+
 // ---------------------------------
 class ST7920_SPI {
 public:
   ST7920_SPI(int8_t cs, int8_t sclk = -1, int8_t mosi = -1, int8_t miso = -1);
+  int32_t getScreenWidth() { return SCR_WD; };
+  int32_t getScreenHeight() { return SCR_HT; };
+
+  int32_t getWidth() { return winW; };
+  int32_t getHeight() { return winH; };
+
+  bool setWindow(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+  void setFullScreen() { setWindow(0, 0, SCR_WD, SCR_HT); };
+  bool isFullScreen() { return winX == 0 && winY == 0 && winW == SCR_WD && winH == SCR_HT; };
+  void backupWindow(windowPos* data) { if (data) data->set(winX, winY, winW, winH); };
+  void restoreWindow(windowPos* data) { if (data) setWindow(data->x, data->y, data->w, data->h); };
 
   void init();
   void sendCmd(byte b);
@@ -96,6 +123,9 @@ public:
   void printTxt(uint8_t pos, uint16_t* signs);
 
   void cls();
+  void clear() { fillRect(0, 0, winW, winH, 0); };
+  void fillScreen(uint32_t color) { fillRect(0, 0, winW, winH, color); };
+  void fillScreen(uint32_t color, uint32_t dither) { setDither(dither); fillRectD(0, 0, winW, winH, color); };
   void drawPixel(uint8_t x, uint8_t y, uint8_t col);
   void drawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t col);
   void drawLineH(uint8_t x0, uint8_t x1, uint8_t y, uint8_t col);
@@ -112,8 +142,8 @@ public:
   void fillCircle(uint8_t x0, uint8_t y0, uint8_t r, uint8_t col);
   void fillCircleD(uint8_t x0, uint8_t y0, uint8_t r, uint8_t col);
   void setDither(uint8_t s);
-  int drawBitmap(const uint8_t* bmp, int x, uint8_t y, uint8_t w, uint8_t h);
-  int drawBitmap(const uint8_t* bmp, int x, uint8_t y);
+  int drawBitmap(const uint8_t* bmp, uint8_t x, uint8_t y, uint8_t w, uint8_t h);
+  int drawBitmap(const uint8_t* bmp, uint8_t x, uint8_t y);
 
   void setFont(const uint8_t* f);
   void setCR(uint8_t _cr) { cr = _cr; }
@@ -133,12 +163,14 @@ public:
 
 public:
   byte scr[SCR_WD * SCR_HT / 8];
-  byte scrWd = 128 / 8;
-  byte scrHt = 64;
+  uint32_t scrWd = 128 / 8;
+  uint32_t scrHt = 64;
   int8_t csPin = 5;  //Chip Select
   int8_t sclkPin = 18; //Serial Clock
   int8_t misoPin = 19;  //Master In Slave Out SDI (Serial Data In)
   int8_t mosiPin = 23;   //Master Out Slave In SDO (Serial Data Out)
+
+  uint32_t winX = 0, winY = 0, winW = SCR_WD, winH = SCR_HT;
 
   static byte xstab[8];
   static byte xetab[8];

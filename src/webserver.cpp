@@ -26,12 +26,14 @@ AsyncWebSocket* webServerGetMeterWS()
 
 void Init_WebServer()
 {
+	static bool CORS = false;
+
 	debugI("Iniciando servidor web...");
 	server.reset();			//Crear el servidor web desde 0
 
 	scopeWS.onEvent(meterEvents);
 	server.addHandler(&scopeWS);
-	server.addHandler(&remoteScreen);
+	// server.addHandler(&remoteScreen);
 
 	// Web Server Root URL
 	server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -149,10 +151,14 @@ void Init_WebServer()
 
 	server.serveStatic("/", SPIFFS, "/").setCacheControl("max-age=31536000");
 
+
 	// Para habilitar CORS. Al simular desde un servidor local no se puede llamar a la API. Con esto se soluciona.
-	DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-	DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT");
-	DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
+	if (!CORS) {
+		CORS = true;	//Solo agregarlos una vez
+		DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+		DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT");
+		DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
+	}
 
 	server.onNotFound([](AsyncWebServerRequest* request) {
 		request->send(404, "text/plain", "Page Not Found");
