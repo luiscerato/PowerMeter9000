@@ -2,9 +2,9 @@
 
 static volatile KeyTiming Timings;
 /*
-	Clase button: clase que se encarga de la lógica de detección de los pulsos de cada botón. Esta clase 
+	Clase button: clase que se encarga de la lógica de detección de los pulsos de cada botón. Esta clase
 	es la encargada de devolver un código cuando se detecte una pulsación.
-	
+
 	Un botón tiene algunas propiedades y métodos:
 		El pin donde está conectado y su polaridad
 		Su modo de funcionamiento.
@@ -16,8 +16,8 @@ static volatile KeyTiming Timings;
 	Cuando un botón está bloqueado se ignora el estado del mismo y no devuelve ningún evento.
 
 	Clase Keyboard: permite instalar un teclado con algunos botones y simplificar su funcionamiento.
-	Los botones son agregados u eliminados de la clase y son escaneados automáticamente, cada vez que 
-	se detecta una 	pulsación, los códigos asociados son cargados en una lista de eventos, para luego 
+	Los botones son agregados u eliminados de la clase y son escaneados automáticamente, cada vez que
+	se detecta una 	pulsación, los códigos asociados son cargados en una lista de eventos, para luego
 	ser leídos por la aplicación del usuario.
 	También se permite la generación de eventos, como ser cuando se pulsa o suelta un botón, o cuando un botón
 	genera un nuevo evento.
@@ -48,7 +48,7 @@ void keyboard::scan()
 
 	unsigned long time = micros();
 	for (int32_t i = 0; i < Keyboard_MaxButtons; i++) {
-		Keys Code;
+		Keys Code = Keys::None;
 		if (buttons[i]) {
 			Code = buttons[i]->Update();
 			if (Code != Keys::None) {
@@ -59,10 +59,10 @@ void keyboard::scan()
 	//Serial.printf("Time: %u us\n", micros() - time);
 }
 
-/*	
+/*
 	Agrega un botón a la lista de botones
 */
-bool keyboard::AddButton(button * data)
+bool keyboard::AddButton(button* data)
 {
 	if (data == nullptr)
 		return false;
@@ -78,7 +78,7 @@ bool keyboard::AddButton(button * data)
 /*
 	Elimina un botón de la lista de botones
 */
-bool keyboard::RemoveButton(button * data)
+bool keyboard::RemoveButton(button* data)
 {
 	for (int32_t i = 0; i < Keyboard_MaxButtons; i++) {
 		if (buttons[i] == data)
@@ -127,7 +127,7 @@ bool keyboard::isKeyDown(Keys Code)
 
 
 /*
-	Determina si la tecla está apretada 
+	Determina si la tecla está apretada
 */
 bool keyboard::isKeyDown(int32_t Index)
 {
@@ -241,7 +241,7 @@ Keys keyboard::PopKey()
 		if (KeyCodes[Index] == Keys::None)
 			break;
 	}
-	KeyCodes[Index-1] = Keys::None;
+	KeyCodes[Index - 1] = Keys::None;
 	return res;
 }
 

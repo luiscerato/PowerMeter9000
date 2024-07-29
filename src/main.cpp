@@ -4,33 +4,35 @@
 #include "ESPAsyncWebServer.h"
 #include "SPIFFS.h"
 #include "Freenove_WS2812_Lib_for_ESP32.h"
-#include "ST7920_SPI.h"
+// #include "ST7920_SPI.h"
 #include "pins.h"
-#include "fonts/fonts.h"
 #include "battery.h"
 #include "meter.h"
-#include "keyboard.h"
+// #include "ui/keyboard.h"
 #include "webserver.h"
-#include "SPIFFS.h"
 #include "AsyncMqttClient.h"
+#include "ui/lcd_ui.h"
 
 
 TactSwitch BtnEnter, BtnUp, BtnDown, BtnEsc, BtnNext; // Interfase de 5 botones
 keyboard Keyboard;                           // Interfase de teclado
 
 ST7920_SPI lcd(pinLcdSS, pinSpiClk, pinSpiSdo);
-//ST7920_SPI(int8_t cs, int8_t sclk = -1, int8_t mosi = -1, int8_t miso = -1);
 
-Freenove_ESP32_WS2812 strip = Freenove_ESP32_WS2812(5, pinPixelLed, 1);
-
-AngleRegs angles;
+lcd_ui ui(lcd, Keyboard, pinBuzzer);
 
 boardButtons_t readButtons();
 
+Freenove_ESP32_WS2812 strip(5, pinPixelLed, 1);
 
+bool drawWindow(lcd_ui* parent, UI_Window* win);
+void drawWindowTitle(lcd_ui* parent, UI_Window* win);
+void drawWindowStatus(lcd_ui* parent, UI_Window* win);
+void drawWindowBorder(lcd_ui* parent, UI_Window* win);
+
+bool Draw_Main(lcd_ui* ui, UI_Action action);
 
 void Draw_Window(const char* Title, const char* Status);
-void Draw_Main();
 void Draw_Title(const char* Title);
 void Draw_Status(const char* Status);
 void Draw_Fase();
@@ -40,6 +42,7 @@ void Draw_Battery();
 void Draw_CalibrateCorriente();
 void UI();
 boardButtons_t getButtons();
+
 
 
 void testFormat()
@@ -66,6 +69,7 @@ void setup(void)
   Serial.begin(115200);
 
   UtilsInitSettings();
+
   UtilsLoadDeafultSettings();
   DebugStart();
 
@@ -95,12 +99,20 @@ void setup(void)
   Keyboard.AddButton(&BtnEsc);
   Keyboard.AddButton(&BtnNext);
 
-  ledcSetup(4, 1000, 10);
-  ledcAttachPin(pinBuzzer, 4);
+  // ledcSetup(4, 1000, 10);
+  // ledcAttachPin(pinBuzzer, 4);
 
   lcd.init();
   lcd.cls();
   lcd.display(0);
+
+  ui.begin();
+  ui.Add_UI(ui.getNewID(), "main", &Draw_Main);
+  ui.SetUpdateTime(100);
+  // ui.setMainScreen("main");
+  ui.setBackgroundDrawer(drawWindow);
+
+  ui.Show("main");
 
   WifiStart();
   TimeStart();
@@ -135,19 +147,34 @@ uint8_t color = 0;
 void loop(void)
 {
 
-  Keyboard.scan();
+  // Keyboard.scan();
 
+  uint32_t time;
+
+  time = millis();
   Batt.Loop();
+  time = millis() - time;
+  // if (time > 9) debugW("BatLoop: %u ms", time);
 
+  time = millis();
   UtilsLoop();
+  time = millis() - time;
+  // if (time > 9) debugW("UtilsLoop: %u ms", time);
 
+  time = millis();
   MeterLoop();
+  time = millis() - time;
+  // if (time > 9)  debugW("MeterLoop: %u ms", time);
 
-  UI();
-
+  time = millis();
+  ui.Run();
+  time = millis() - time;
+  // if (time > 9)  debugW("uiLoop: %u ms", time);
 
   if (millis() - send > 999) {
     send = millis();
+    // debugI("Loop counter: %d", counter);
+    counter = 0;
 
     if (mqtt.connected()) {
       static String data;
@@ -193,157 +220,131 @@ void loop(void)
   }
 
 
-  if (millis() - lastTime > 199) {
-    lastTime = millis();
-    static uint32_t p = 0, sum = 0, total;
-
-    uint32_t update = micros();
-
-    //lcd.display(0, p);
-    update = micros() - update;
-
-    sum += update;
-    p++;
-    if (p > 7) { p = 0;  total = sum;  sum = 0; };
-    // Serial.printf("Velocidad de dibujo: %uus, total: %uus, p:%d , heap: %d\n", update, total, p, ESP.getFreeHeap());
-
-    counter = 0;
-    bytes = 0;
+  if (millis() - lastTime > 15) {
+    debugW("Loop to long: %u ms", millis() - lastTime);
   }
+  lastTime = millis();
 
-
-
+  counter++;
 }
 
 
-uint32_t indexUI = 0;
 
-void UI()
+bool Draw_Main(lcd_ui* ui, UI_Action action)
 {
-  if (indexUI == 0)
-    Draw_Main();
-  else if (indexUI == 1)
-    Draw_Fase();
-  else if (indexUI == 2)
-    Draw_Angulos();
-  else if (indexUI == 3)
-    Draw_CalibrarFase();
-  else if (indexUI == 4)
-    Draw_CalibrateCorriente();
-}
-
-
-void Draw_Main()
-{
-  const uint32_t c1 = 3, c2 = 48, c3 = 87, c4 = 125;
-  const uint32_t l1 = 9, l2 = 19, l3 = 29, l4 = 39, l5 = 49;
+  const uint32_t c1 = 1, c2 = 46, c3 = 85, c4 = 123;
+  const uint32_t l1 = 1, l2 = 10, l3 = 19, l4 = 28, l5 = 37;
 
   static uint32_t update = 0;
   static int32_t index = 0, mode = 0;
   char str[128];
 
-  if (millis() - update > 333) {
-    update = millis();
+  UI_Window* win = ui->getWindow();
+  win->setPosAndSize(40, 20, 80, 40);
+  win->setWindowMode(UI_Window_Mode::Normal);
 
+  ui->lcd.setFont(Small5x7PLBold);
 
-    switch (index) {
-    case 0:         //Dibujar la pantalla principal
-      Draw_Window("MAIN", "Next");
-      lcd.setFont(Small5x7PLBold);
+  switch (index) {
+  case 0:         //Dibujar la pantalla principal
+    if (mode)
+      win->Title = "Principal FF";
+    else
+      win->Title = "Principal FN";
 
-      lcd.printStr(c1, l1, "R:");
-      if (mode)
-        lcd.printStr(c2, l1, ade.format(Meter.phaseR.VVrms, 5, "V").c_str(), TextAling::TopRight);
-      else
-        lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 5, "V").c_str(), TextAling::TopRight);
-      lcd.printStr(c3, l1, ade.format(Meter.phaseR.Irms, 5, "A").c_str(), TextAling::TopRight);
-      lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt, 4, "W").c_str(), TextAling::TopRight);
+    lcd.printStr(c1, l1, "R:");
+    if (mode)
+      lcd.printStr(c2, l1, ade.format(Meter.phaseR.VVrms, 5, "V").c_str(), TextAling::TopRight);
+    else
+      lcd.printStr(c2, l1, ade.format(Meter.phaseR.Vrms, 5, "V").c_str(), TextAling::TopRight);
+    lcd.printStr(c3, l1, ade.format(Meter.phaseR.Irms, 5, "A").c_str(), TextAling::TopRight);
+    lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt, 4, "W").c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l2, "S:");
-      if (mode)
-        lcd.printStr(c2, l2, ade.format(Meter.phaseS.VVrms, 5, "V").c_str(), TextAling::TopRight);
-      else
-        lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 5, "V").c_str(), TextAling::TopRight);
-      lcd.printStr(c3, l2, ade.format(Meter.phaseS.Irms, 5, "A").c_str(), TextAling::TopRight);
-      lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt, 4, "W").c_str(), TextAling::TopRight);
+    lcd.printStr(c1, l2, "S:");
+    if (mode)
+      lcd.printStr(c2, l2, ade.format(Meter.phaseS.VVrms, 5, "V").c_str(), TextAling::TopRight);
+    else
+      lcd.printStr(c2, l2, ade.format(Meter.phaseS.Vrms, 5, "V").c_str(), TextAling::TopRight);
+    lcd.printStr(c3, l2, ade.format(Meter.phaseS.Irms, 5, "A").c_str(), TextAling::TopRight);
+    lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt, 4, "W").c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l3, "T:");
-      if (mode)
-        lcd.printStr(c2, l3, ade.format(Meter.phaseT.VVrms, 5, "V", 1).c_str(), TextAling::TopRight);
-      else
-        lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 5, "V", 1).c_str(), TextAling::TopRight);
-      lcd.printStr(c3, l3, ade.format(Meter.phaseT.Irms, 5, "A", 1).c_str(), TextAling::TopRight);
-      lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt, 4, "W").c_str(), TextAling::TopRight);
+    lcd.printStr(c1, l3, "T:");
+    if (mode)
+      lcd.printStr(c2, l3, ade.format(Meter.phaseT.VVrms, 5, "V", 1).c_str(), TextAling::TopRight);
+    else
+      lcd.printStr(c2, l3, ade.format(Meter.phaseT.Vrms, 5, "V", 1).c_str(), TextAling::TopRight);
+    lcd.printStr(c3, l3, ade.format(Meter.phaseT.Irms, 5, "A", 1).c_str(), TextAling::TopRight);
+    lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt, 4, "W").c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l4, "N:");
-      lcd.printStr(c2, l4, ade.format(Meter.neutral.Vrms, 5, "V", 1).c_str(), TextAling::TopRight);
-      lcd.printStr(c3, l4, ade.format(Meter.neutral.Irms, 5, "A", 1).c_str(), TextAling::TopRight);
+    lcd.printStr(c1, l4, "N:");
+    lcd.printStr(c2, l4, ade.format(Meter.neutral.Vrms, 5, "V", 1).c_str(), TextAling::TopRight);
+    lcd.printStr(c3, l4, ade.format(Meter.neutral.Irms, 5, "A", 1).c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l5, "E:");
-      lcd.printStr(c2 + 10, l5, ade.format(Meter.energy.Watt_H, 5, "Wh", 1).c_str(), TextAling::TopRight);
-      lcd.printStr(c3, l5, "Pt:", TextAling::TopRight);
-      lcd.printStr(c4, l5, ade.format(Meter.power.Watt, 5, "W", 1).c_str(), TextAling::TopRight);
-      break;
+    lcd.printStr(c1, l5, "E:");
+    lcd.printStr(c2 + 10, l5, ade.format(Meter.energy.Watt_H, 5, "Wh", 1).c_str(), TextAling::TopRight);
+    lcd.printStr(c3, l5, "Pt:", TextAling::TopRight);
+    lcd.printStr(c4, l5, ade.format(Meter.power.Watt, 5, "W", 1).c_str(), TextAling::TopRight);
+    break;
 
-    case 1:     ///Pantalla energía
-      Draw_Window("ENERGIA", "Next");
-      lcd.setFont(Small5x7PLBold);
-      lcd.printStr(c1, l1, "R:");
-      lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+  case 1:     ///Pantalla energía
+    win->Title = "Energia";
+    lcd.printStr(c1, l1, "R:");
+    lcd.printStr(c4, l1, ade.format(Meter.phaseR.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l2, "S:");
-      lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+    lcd.printStr(c1, l2, "S:");
+    lcd.printStr(c4, l2, ade.format(Meter.phaseS.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l3, "T:");
-      lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
+    lcd.printStr(c1, l3, "T:");
+    lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt_H, 6, "Wh").c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l5, "TOTAL:");
-      lcd.printStr(c4, l5, ade.format(Meter.energy.Watt_H, 6, "Wh", 1).c_str(), TextAling::TopRight);
-      break;
+    lcd.printStr(c1, l5, "TOTAL:");
+    lcd.printStr(c4, l5, ade.format(Meter.energy.Watt_H, 6, "Wh", 1).c_str(), TextAling::TopRight);
+    break;
 
-    case 2:     ///Pantalla angulos
-      Draw_Window("ANGULOS", "Next");
-      lcd.setFont(Small5x7PLBold);
+  case 2:     ///Pantalla angulos
+    win->Title = "Angulos fases";
+    lcd.printStr(c2, l1, "Volt", TextAling::TopRight);
+    lcd.printStr(c3, l1, "VI", TextAling::TopRight);
+    lcd.printStr(c4, l1, "Corr", TextAling::TopRight);
 
-      lcd.printStr(c2, l1, "Volt", TextAling::TopRight);
-      lcd.printStr(c3, l1, "VI", TextAling::TopRight);
-      lcd.printStr(c4, l1, "Corr", TextAling::TopRight);
+    lcd.printStr(c1, l2, "R:");
+    lcd.printStr(c2, l2, ade.format(Meter.phaseR.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+    lcd.printStr(c3, l2, ade.format(Meter.phaseR.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+    lcd.printStr(c4, l2, ade.format(Meter.phaseR.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l2, "R:");
-      lcd.printStr(c2, l2, ade.format(Meter.phaseR.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-      lcd.printStr(c3, l2, ade.format(Meter.phaseR.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-      lcd.printStr(c4, l2, ade.format(Meter.phaseR.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+    lcd.printStr(c1, l3, "S:");
+    lcd.printStr(c2, l3, ade.format(Meter.phaseS.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+    lcd.printStr(c3, l3, ade.format(Meter.phaseS.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+    lcd.printStr(c4, l3, ade.format(Meter.phaseS.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
 
-      lcd.printStr(c1, l3, "S:");
-      lcd.printStr(c2, l3, ade.format(Meter.phaseS.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-      lcd.printStr(c3, l3, ade.format(Meter.phaseS.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-      lcd.printStr(c4, l3, ade.format(Meter.phaseS.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-
-      lcd.printStr(c1, l4, "T:");
-      lcd.printStr(c2, l4, ade.format(Meter.phaseT.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-      lcd.printStr(c3, l4, ade.format(Meter.phaseT.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-      lcd.printStr(c4, l4, ade.format(Meter.phaseT.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-      break;
-    }
-
-    lcd.display(0);
+    lcd.printStr(c1, l4, "T:");
+    lcd.printStr(c2, l4, ade.format(Meter.phaseT.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+    lcd.printStr(c3, l4, ade.format(Meter.phaseT.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+    lcd.printStr(c4, l4, ade.format(Meter.phaseT.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+    break;
   }
+
+
   Keys key = Keyboard.getNextKey();
 
   if (key == Keys::Esc)
-    ;
+    ui->Home();
   else if (key == Keys::Enter)
     ;
   else if (key == Keys::Next)
     mode++;
-  else if (key == Keys::Up)
+  else if (key == Keys::Up) {
     index++;
-  else if (key == Keys::Down)
+  }
+  else if (key == Keys::Down) {
     index--;
+  }
 
   if (index > 2) index = 0;
   else if (index < 0) index = 2;
   if (mode > 1) mode = 0;
+
+  return true;
 }
 
 void Draw_Fase()
@@ -393,8 +394,7 @@ void Draw_Fase()
 
   Keys key = Keyboard.getNextKey();
 
-  if (key == Keys::Esc)
-    indexUI = 0;
+  if (key == Keys::Esc);
   else if (key == Keys::Up) {
     fase++;
     if (fase > 3)
@@ -405,44 +405,6 @@ void Draw_Fase()
     if (fase < 0)
       fase = 3;
   }
-}
-
-
-
-void Draw_Angulos()
-{
-  if (millis() - update > 199) {
-    update = millis();
-
-
-    char str[128];
-    lcd.fillRect(0, 0, 128, 64, 0);
-
-    Draw_Window("ANGULOS", "");
-
-    AngleRegs angles;
-    // ade.readAngleRegsnValues(&angles);
-
-    lcd.setFont(Small5x7PLBold);
-    snprintf(str, sizeof(str), "R: %3.2f S:%3.2f T:%3.2f", angles.AngleValue_VA_IA, angles.AngleValue_VB_IB, angles.AngleValue_VC_IC);
-    lcd.printStr(1, 10, str);
-
-    snprintf(str, sizeof(str), "VRS:%3.2f  VRT:%3.2f", angles.AngleValue_VA_VB, angles.AngleValue_VA_VC);
-    lcd.printStr(1, 19, str);
-
-    snprintf(str, sizeof(str), "VST:%3.2f", angles.AngleValue_VB_VC);
-    lcd.printStr(1, 28, str);
-
-    snprintf(str, sizeof(str), "IRS:%3.2f  IRT:%3.2f", angles.AngleValue_IA_IB, angles.AngleValue_IA_IC);
-    lcd.printStr(1, 37, str);
-
-    snprintf(str, sizeof(str), "IST:%3.2f", angles.AngleValue_IB_IC);
-    lcd.printStr(1, 46, str);
-
-    lcd.display(0);
-  }
-  if (Keyboard.getNextKey() == Keys::Esc)
-    indexUI = 0;
 }
 
 
@@ -492,11 +454,10 @@ void Draw_CalibrarFase()
 
   Keys key = Keyboard.getNextKey();
 
-  if (key == Keys::Esc)
-    indexUI = 0;
+  if (key == Keys::Esc);
   else if (key == Keys::Enter) {
     Serial.printf("Calibracion de fases: R:%.2f [0x%X], S:%.2f [0x%X], T:%.2f [0x%X], N:%.2f [0x%X]\n", r.angle, r.factor, s.angle, s.factor, t.angle, t.factor, n.angle, n.factor);
-    indexUI = 0;
+
   }
 }
 
@@ -607,7 +568,7 @@ void Draw_CalibrateCorriente()
   Keys key = Keyboard.getNextKey();
 
   if (key == Keys::Esc) {
-    indexUI = 0;
+    // indexUI = 0;
     if (running)
       ade.endCalibration(false);
     running = false;
@@ -641,13 +602,13 @@ void Draw_CalibrateCorriente()
         ade.startCalibration(type, true, true, true, true);
       }
       else {
-        indexUI = 0;
+        // indexUI = 0;
         running = false;
       }
     }
     else {
       ade.endCalibration(true);
-      indexUI = 0;
+      // indexUI = 0;
       running = false;
     }
   }
@@ -670,6 +631,178 @@ const uint8_t icon_wifi_2[] = { 8, 5, 0x00, 0x10, 0x00, 0x18, 0x00, 0x00, 0x00, 
 const uint8_t icon_wifi_3[] = { 8, 5, 0x00, 0x10, 0x00, 0x18, 0x00, 0x1E, 0x00, 0x00 };
 const uint8_t icon_wifi_4[] = { 8, 5, 0x00, 0x10, 0x00, 0x18, 0x00, 0x1E, 0x00, 0x1F };
 const uint8_t icon_plug[] = { 8, 5, 0x0E, 0x0E, 0x0E, 0x0E, 0x1F, 0x1F, 0x0A, 0x0A };
+
+float offset = 0, incOffset = 2;
+
+bool drawWindow(lcd_ui* parent, UI_Window* win)
+{
+  int32_t posX = (int32_t)offset, posY = (int32_t)offset / 2, winW = 128 - (int32_t)offset * 2, winH = 64 - (int32_t)offset;
+  bool isBlack = false;
+
+  // parent->lcd.setFullScreen();
+  // parent->lcd.fillScreen(1, 8);
+
+  // win->setWindowMode(UI_Window_Mode::Normal);
+  // if (win->Title.startsWith("LCD")) {
+  //   isBlack = true;
+  //   posX = posY = 0;
+  //   winW = 128;
+  //   winH = 64;
+  //   win->setPosAndSize(posX, posY, winW, winH);
+  // }
+  // else {
+  //   win->setPosAndSize(posX, posY, winW, winH);
+
+  // }
+
+  drawWindowTitle(parent, win);
+
+  drawWindowStatus(parent, win);
+
+  drawWindowBorder(parent, win);
+
+  UI_Point pos = win->getUserWindowPos(), size = win->getUserWindowSize();
+  parent->lcd.setWindow(pos.x, pos.y, size.x, size.y);
+  parent->lcd.clear();
+
+  // if (!isBlack) {
+  //   offset += incOffset;
+  //   if (offset >= 25) incOffset = -2;  //debugI("incOffset: %.2f, offset: %.2f", incOffset, offset); }
+  //   else if (offset >= 1.0 && (incOffset < 0.2 && incOffset > 0.0))  incOffset = 2;// debugI("incOffset: %.2f, offset: %.2f", incOffset, offset); }
+  //   else if (offset <= 0.0) { incOffset = 0.1;  offset = 0.0; }// debugI("incOffset: %.2f, offset: %.2f", incOffset, offset); }
+  // }
+
+  return true;
+}
+
+
+void drawWindowTitle(lcd_ui* parent, UI_Window* win)
+{
+  if (win->titleSize == 0) return;
+
+  UI_Point pos = win->getTitlePos(), size = win->getTitleSize();
+  parent->lcd.setWindow(pos.x, pos.y, size.x, size.y);
+  parent->lcd.clear();
+
+  if (win->mode == UI_Window_Mode::Normal || win->mode == UI_Window_Mode::Small) {
+    parent->lcd.setFont(Small5x7PLBold);
+    parent->lcd.printStr(1, 2, win->Title.c_str());
+  }
+  else {
+    parent->lcd.setFont(Small5x6PL);
+    parent->lcd.printStr(1, 0, win->Title.c_str());
+  }
+  parent->lcd.fillScreen(2);
+}
+
+void drawWindowStatus(lcd_ui* parent, UI_Window* win)
+{
+  if (win->statusSize == 0) return;
+  char str[64];
+  uint32_t posX = 1, posY = 1;
+  struct tm time = getTime();
+
+  UI_Point pos = win->getStatusPos(), size = win->getStatusSize();
+  parent->lcd.setWindow(pos.x, pos.y, size.x, size.y);
+
+  parent->lcd.clear();
+
+  lcd.setFont(Small4x5PL);
+
+  //Icono Wifi
+  parent->lcd.printChar(posX, posY, 'W');
+  posX = 5;
+  if (WiFi.isConnected()) {
+    char rssi = getWiFiRSSICode();
+    if (rssi == WiFiChar_RSSI_1)
+      parent->lcd.drawBitmap(icon_wifi_1, posX, posY);
+    else if (rssi == WiFiChar_RSSI_2)
+      parent->lcd.drawBitmap(icon_wifi_2, posX, posY);
+    else if (rssi == WiFiChar_RSSI_3)
+      parent->lcd.drawBitmap(icon_wifi_3, posX, posY);
+    else if (rssi == WiFiChar_RSSI_4)
+      parent->lcd.drawBitmap(icon_wifi_4, posX, posY);
+  }
+  else {
+    parent->lcd.drawBitmap(icon_wifi_1, posX, posY);
+    parent->lcd.drawBitmap(icon_cross, posX + 3, posY);
+  }
+  posX += 10; //Ancho del icono
+
+  //Icono alimentación
+  if (Batt.getSource() != PowerSource::Battery) {
+    parent->lcd.drawBitmap(icon_plug, posX, posY);
+    posX += 10;
+  }
+  else {
+    parent->lcd.drawBitmap(icon_plug, posX, posY);
+    parent->lcd.drawBitmap(icon_cross, posX + 9, posY);
+    posX += 13;
+  }
+
+  //Icono batería
+  if (!Batt.isBatteryPresent()) {
+    parent->lcd.drawBitmap(icon_batt_empty, posX, posY);
+    parent->lcd.drawBitmap(icon_warn, posX + 9, posY);
+    posX += 3;
+  }
+  else if (Batt.getFault() == BatteryFault::None || Batt.isCharging()) {
+    static int32_t porcent = 0;
+    if (Batt.isCharging()) {
+      porcent += 10;
+      if (porcent > 100) porcent = 0;
+    }
+    else
+      porcent = Batt.getPercent();
+
+    if (porcent < 10)
+      parent->lcd.drawBitmap(icon_batt_empty, posX, posY);
+    else if (porcent < 30)
+      parent->lcd.drawBitmap(icon_batt_1, posX, posY);
+    else if (porcent < 50)
+      parent->lcd.drawBitmap(icon_batt_2, posX, posY);
+    else if (porcent < 70)
+      parent->lcd.drawBitmap(icon_batt_3, posX, posY);
+    else if (porcent < 90)
+      parent->lcd.drawBitmap(icon_batt_4, posX, posY);
+    else
+      parent->lcd.drawBitmap(icon_batt_full, posX, posY);
+  }
+  else {
+    parent->lcd.drawBitmap(icon_batt_empty, posX, posY);
+    parent->lcd.drawBitmap(icon_cross, posX + 9, posY);
+    posX += 3;
+  }
+  posX += 10;
+
+  //Icono MQTT
+  if (mqtt.connected())
+    lcd.printStr(posX, posY, "MT");
+  else
+    lcd.printStr(posX, posY, "..");
+
+  snprintf(str, sizeof(str), "%02d:%02d:%02d", time.tm_hour, time.tm_min, time.tm_sec);
+  parent->lcd.printStr(parent->lcd.getWidth() - 2, 1, str, TextAling::TopRight);
+  parent->lcd.fillScreen(2);
+}
+
+void drawWindowBorder(lcd_ui* parent, UI_Window* win)
+{
+  if (win->borderSize == 0) return;
+
+  parent->lcd.setWindow(win->posX, win->posY, win->width, win->height);
+  // debugI("drawWindowBorder: %d, %d, %d, %d", pos.x, pos.y, size.x, size.y);
+  // debugI("win->border: %d -> %d, %d, %d, %d", win->borderSize, win->posX, win->posY, win->width, win->height);
+
+  if (win->borderSize == 3) { //Sombra
+    parent->lcd.drawRect(0, 0, win->width - 1, win->height - 1, 1);
+    parent->lcd.drawLineVfast(win->width - 1, 1, win->height - 1, 0); //Right
+    parent->lcd.drawLineHfast(1, win->width - 1, win->height - 1, 0);  //Bottom
+  }
+  else
+    parent->lcd.drawRect(0, 0, win->width, win->height, 1);
+}
+
 
 
 void Draw_Window(const char* Title, const char* Status)
@@ -694,7 +827,6 @@ void Draw_Window(const char* Title, const char* Status)
 
 void Draw_Title(const char* Title)
 {
-
   char str[128];
   int32_t posX = 0, posY = 0, lenLeft, lenRight, width;
   bool Invert = false;
@@ -783,13 +915,6 @@ void Draw_Title(const char* Title)
     lcd.drawBitmap(icon_cross, posX + 9, posY);
   }
 
-  // if (!Invert) lcd.drawLineHfast(0, 127, 6, 1);
-  // else lcd.fillRect(0, 0, 128, 7, 2);
-
-
-  // snprintf(str, sizeof(str), "%02d/%02d/%02d", time.tm_mday, time.tm_mon + 1, time.tm_year - 100);
-  // width = lcd.strWidth(str);
-  // lcd.printStr(127 - width, 0, str);
 }
 
 void Draw_Status(const char* Status)
@@ -811,8 +936,6 @@ void Draw_Status(const char* Status)
   width = lcd.strWidth(str);
   lcd.printStr(128 - width, posY, str);
 
-  // lcd.drawLineHfast(0, 127, 57, 1);
-  // lcd.fillRect(0, 57, 128, 7, 2);
 }
 
 

@@ -127,6 +127,7 @@ void ST7920_SPI::display(int buf)
 void ST7920_SPI::display(int buf, int part)
 {
 	byte i, j, b;
+	part &= 0x7;	//Solo 8 partes
 	for (j = part * 4;j < ((part + 1) * 4);j++) {
 		gotoXY(0, j + buf * 64);
 		SPI.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
@@ -167,14 +168,26 @@ void ST7920_SPI::copy(uint8_t x16, uint8_t y, uint8_t w16, uint8_t h, uint8_t bu
 // ----------------------------------------------------------------
 void ST7920_SPI::cls()
 {
-	//for(int i=0;i<scrWd*scrHt;i++) scr[i]=0;
-	//memset(scr,0,scrWd*scrHt);
 	memset(scr, 0, SCR_WD * SCR_HT / 8);
 }
+
+bool ST7920_SPI::setWindow(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+	if (x >= SCR_WD || y >= SCR_HT) return false;
+	if (x + w > SCR_WD) w = SCR_WD - x;
+	if (y + h > SCR_HT) h = SCR_HT - y;
+	winX = x;
+	winY = y;
+	winW = w;
+	winH = h;
+	return true;
+}
+
 // ----------------------------------------------------------------
 void ST7920_SPI::drawPixel(uint8_t x, uint8_t y, uint8_t col)
 {
-	if (x >= SCR_WD || y >= SCR_HT) return;
+	x += winX; y += winY;							//Trasladar coordenadas
+	if (x >= winW || y >= winH) return; 			//X o Y fuera de ventana
 	switch (col) {
 	case 1: scr[y * scrWd + x / 8] |= (0x80 >> (x & 7)); break;
 	case 0: scr[y * scrWd + x / 8] &= ~(0x80 >> (x & 7)); break;
@@ -184,61 +197,95 @@ void ST7920_SPI::drawPixel(uint8_t x, uint8_t y, uint8_t col)
 // ----------------------------------------------------------------
 void ST7920_SPI::drawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t col)
 {
-	int dx = abs(x1 - x0);
-	int dy = abs(y1 - y0);
-	int sx = (x0 < x1) ? 1 : -1;
-	int sy = (y0 < y1) ? 1 : -1;
+
+	if (x1 < x0) { int x = x0;  x0 = x1; x1 = x; }	//Invertir coordenadas
+	if (y1 < y0) { int y = y0;  y0 = y1; y1 = y; }	//Invertir coordenadas
+	if (x0 >= winW || y0 >= winH) return; 			//X o Y fuera de ventana
+	int dx = x1 - x0;
+	int dy = y1 - y0;
 	int err = dx - dy;
+	int32_t xMax = winX + winW;
+	int32_t yMax = winY + winH;
 
 	while (1) {
 		drawPixel(x0, y0, col);
 		if (x0 == x1 && y0 == y1) return;
 		int err2 = err + err;
-		if (err2 > -dy) { err -= dy; x0 += sx; }
-		if (err2 < dx) { err += dx; y0 += sy; }
+		if (err2 > -dy) { err -= dy; x0++; }
+		if (err2 < dx) { err += dx; y0++; }
+		if (x0 >= winW || y0 >= winH) return;		//Terminar de dibujar si se sale de la ventana o la pantalla
 	}
 }
 // ----------------------------------------------------------------
 void ST7920_SPI::drawLineH(uint8_t x0, uint8_t x1, uint8_t y, uint8_t col)
 {
-	if (x1 > x0) for (uint8_t x = x0; x <= x1; x++) drawPixel(x, y, col);
-	else      for (uint8_t x = x1; x <= x0; x++) drawPixel(x, y, col);
+	if (x1 < x0) { int x = x0;  x0 = x1; x1 = x; }	//Invertir coordenadas X
+	if (x0 >= winW || y >= winH) return; 			//X o Y fuera de ventana
+	if (x1 > (winX + winW)) x1 = winX + winW - 1;			//Limitar el largo de la línea
+
+	for (uint8_t x = x0; x <= x1; x++)
+		drawPixel(x, y, col);
 }
 // ----------------------------------------------------------------
 void ST7920_SPI::drawLineV(uint8_t x, uint8_t y0, uint8_t y1, uint8_t col)
 {
-	if (y1 > y0) for (uint8_t y = y0; y <= y1; y++) drawPixel(x, y, col);
-	else      for (uint8_t y = y1; y <= y0; y++) drawPixel(x, y, col);
+	if (y1 < y0) { int y = y0;  y0 = y1; y1 = y; }	//Invertir coordenadas Y
+	if (x >= winW || y0 >= winH) return; 			//X o Y fuera de ventana
+	if (y1 > (winY + winH)) y1 = winY + winH - 1;			//Limitar el largo de la línea
+
+	for (uint8_t y = y0; y <= y1; y++)
+		drawPixel(x, y, col);
 }
 // ----------------------------------------------------------------
 // about 4x faster than regular drawLineV
 void ST7920_SPI::drawLineVfast(uint8_t x, uint8_t y0, uint8_t y1, uint8_t col)
 {
+	// Serial.printf("drawLineVfast:   %d, %d, %d\n", x, y0, y1);
+	if (y1 < y0) { int y = y0; y0 = y1; y1 = y; }	//Invertir coordenadas Y
+	if (x >= winW || y0 >= winH) return; 			//X o Y fuera de ventana
+	x += winX; y0 += winY; y1 += winY;				//Trasladar coordenadas
+	if (y1 >= (winY + winH)) y1 = winY + winH - 1;			//Limitar el largo de la línea
+
 	uint8_t mask = 0x80 >> (x & 7);
-	if (y1 < y0) {
-		mask = y0; y0 = y1; y1 = mask; // swap
-	}
-	mask = 0x80 >> (x & 7);
 	switch (col) {
-	case 1: for (int y = y0; y <= y1; y++) scr[y * scrWd + x / 8] |= mask;   break;
-	case 0: for (int y = y0; y <= y1; y++) scr[y * scrWd + x / 8] &= ~mask;  break;
-	case 2: for (int y = y0; y <= y1; y++) scr[y * scrWd + x / 8] ^= mask;   break;
+	case 1:
+		for (int y = y0; y <= y1; y++)
+			scr[y * scrWd + x / 8] |= mask;
+		break;
+	case 0:
+		for (int y = y0; y <= y1; y++)
+			scr[y * scrWd + x / 8] &= ~mask;
+		break;
+	case 2:
+		for (int y = y0; y <= y1; y++)
+			scr[y * scrWd + x / 8] ^= mask;
+		break;
 	}
 }
 // ----------------------------------------------------------------
 // limited to pattern #8
 void ST7920_SPI::drawLineVfastD(uint8_t x, uint8_t y0, uint8_t y1, uint8_t col)
 {
+	if (y1 < y0) { int y = y0; y0 = y1; y1 = y; }	//Invertir coordenadas Y
+	if (x >= winW || y0 >= winH) return; 			//X o Y fuera de ventana
+	x += winX; y0 += winY; y1 += winY;				//Trasladar coordenadas
+	if (y1 >= (winX + winW)) y1 = winY + winH - 1;			//Limitar el largo de la línea
+
 	uint8_t mask = 0x80 >> (x & 7);
-	if (y1 < y0) {
-		mask = y0; y0 = y1; y1 = mask; // swap
-	}
 	if (((x & 1) == 1 && (y0 & 1) == 0) || ((x & 1) == 0 && (y0 & 1) == 1)) y0++;
-	mask = 0x80 >> (x & 7);
 	switch (col) {
-	case 1: for (int y = y0; y <= y1; y += 2) scr[y * scrWd + x / 8] |= mask;   break;
-	case 0: for (int y = y0; y <= y1; y += 2) scr[y * scrWd + x / 8] &= ~mask;  break;
-	case 2: for (int y = y0; y <= y1; y += 2) scr[y * scrWd + x / 8] ^= mask;   break;
+	case 1:
+		for (int y = y0; y <= y1; y += 2)
+			scr[y * scrWd + x / 8] |= mask;
+		break;
+	case 0:
+		for (int y = y0; y <= y1; y += 2)
+			scr[y * scrWd + x / 8] &= ~mask;
+		break;
+	case 2:
+		for (int y = y0; y <= y1; y += 2)
+			scr[y * scrWd + x / 8] ^= mask;
+		break;
 	}
 }
 // ----------------------------------------------------------------
@@ -248,17 +295,13 @@ byte ST7920_SPI::pattern[4] = { 0xaa,0x55,0xaa,0x55 };
 // about 40x faster than regular drawLineH
 void ST7920_SPI::drawLineHfast(uint8_t x0, uint8_t x1, uint8_t y, uint8_t col)
 {
+	if (x1 < x0) { int x = x0;  x0 = x1; x1 = x; }	//Invertir coordenadas X
+	if (x0 >= winW || y >= winH) return; 			//X o Y fuera de ventana
+	x0 += winX; x1 += winX; y += winY;				//Trasladar coordenadas
+	if (x1 >= (winX + winW)) x1 = winX + winW - 1;			//Limitar el largo de la línea
+
 	int yadd = y * scrWd;
-	int x8s, x8e;
-	if (x1 >= x0) {
-		x8s = x0 / 8;
-		x8e = x1 / 8;
-	}
-	else {
-		x8s = x1; x1 = x0; x0 = x8s; // swap
-		x8s = x1 / 8;
-		x8e = x0 / 8;
-	}
+	int x8s = x0 / 8, x8e = x1 / 8;
 	switch (col) {
 	case 1:
 		if (x8s == x8e) scr[yadd + x8s] |= (xstab[x0 & 7] & xetab[x1 & 7]);
@@ -271,9 +314,14 @@ void ST7920_SPI::drawLineHfast(uint8_t x0, uint8_t x1, uint8_t y, uint8_t col)
 		for (int x = x8s + 1; x < x8e; x++) scr[yadd + x] = 0x00;
 		break;
 	case 2:
-		if (x8s == x8e) scr[yadd + x8s] ^= (xstab[x0 & 7] & xetab[x1 & 7]);
-		else { scr[yadd + x8s] ^= xstab[x0 & 7]; scr[yadd + x8e] ^= xetab[x1 & 7]; }
-		for (int x = x8s + 1; x < x8e; x++) scr[yadd + x] ^= 0xff;
+		if (x8s == x8e)
+			scr[yadd + x8s] ^= (xstab[x0 & 7] & xetab[x1 & 7]);
+		else {
+			scr[yadd + x8s] ^= xstab[x0 & 7];
+			scr[yadd + x8e] ^= xetab[x1 & 7];
+		}
+		for (int x = x8s + 1; x < x8e; x++)
+			scr[yadd + x] ^= 0xff;
 		break;
 	}
 }
@@ -281,17 +329,13 @@ void ST7920_SPI::drawLineHfast(uint8_t x0, uint8_t x1, uint8_t y, uint8_t col)
 // dithered version
 void ST7920_SPI::drawLineHfastD(uint8_t x0, uint8_t x1, uint8_t y, uint8_t col)
 {
+	if (x1 < x0) { int x = x0;  x0 = x1; x1 = x; }	//Invertir coordenadas X
+	if (x0 >= winW || y >= winH) return; 			//X o Y fuera de ventana
+	x0 += winX; x1 += winX; y += winY;				//Trasladar coordenadas
+	if (x1 >= (winX + winW)) x1 = winX + winW - 1;			//Limitar el largo de la línea
+
 	int yadd = y * scrWd;
-	int x8s, x8e;
-	if (x1 >= x0) {
-		x8s = x0 / 8;
-		x8e = x1 / 8;
-	}
-	else {
-		x8s = x1; x1 = x0; x0 = x8s; // swap
-		x8s = x1 / 8;
-		x8e = x0 / 8;
-	}
+	int x8s = x0 / 8, x8e = x1 / 8;
 	switch (col) {
 	case 1:
 		if (x8s == x8e) scr[yadd + x8s] |= (xstab[x0 & 7] & xetab[x1 & 7] & pattern[y & 3]);
@@ -313,47 +357,47 @@ void ST7920_SPI::drawLineHfastD(uint8_t x0, uint8_t x1, uint8_t y, uint8_t col)
 // ----------------------------------------------------------------
 void ST7920_SPI::drawRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t col)
 {
-	if (x >= SCR_WD || y >= SCR_HT) return;
-	byte drawVright = 1;
-	if (x + w > SCR_WD) { w = SCR_WD - x; drawVright = 0; }
-	if (y + h > SCR_HT) h = SCR_HT - y; else drawLineHfast(x, x + w - 1, y + h - 1, col);
-	drawLineHfast(x, x + w - 1, y, col);
-	drawLineVfast(x, y + 1, y + h - 2, col);
-	if (drawVright) drawLineVfast(x + w - 1, y + 1, y + h - 2, col);
+	if (x >= winW || y >= winH) return; 		//X o Y fuera de ventana
+	drawLineHfast(x, x + w - 1, y, col);								//Top line
+	drawLineVfast(x, y + 1, y + h - 1, col);							//Left line
+	if (h <= winH) drawLineHfast(x + 1, x + w - 2, y + h - 1, col);		//Bottom line
+	if (w <= winW) drawLineVfast(x + w - 1, y + 1, y + h - 1, col);		//Right line
 }
 // ----------------------------------------------------------------
 // dithered version (50% of brightness)
 void ST7920_SPI::drawRectD(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t col)
 {
-	if (x >= SCR_WD || y >= SCR_HT) return;
-	byte drawVright = 1;
-	if (x + w > SCR_WD) { w = SCR_WD - x; drawVright = 0; }
-	if (y + h > SCR_HT) h = SCR_HT - y; else drawLineHfastD(x, x + w - 1, y + h - 1, col);
-	drawLineHfastD(x, x + w - 1, y, col);
-	drawLineVfastD(x, y + 1, y + h - 2, col);
-	if (drawVright) drawLineVfastD(x + w - 1, y + 1, y + h - 2, col);
+	if (x >= winW || y >= winH) return; 		//X o Y fuera de ventana
+	setDither(8);
+	drawLineHfastD(x, x + w - 1, y, col);								//Top line
+	drawLineVfastD(x, y + 1, y + h - 1, col);							//Left line
+	if (h <= winH) drawLineHfastD(x + 1, x + w - 2, y + h - 1, col);		//Bottom line
+	if (w <= winW) drawLineVfastD(x + w - 1, y + 1, y + h - 1, col);		//Right line
 }
 // ----------------------------------------------------------------
 void ST7920_SPI::fillRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t col)
 {
-	if (x >= SCR_WD || y >= SCR_HT) return;
-	if (x + w > SCR_WD) w = SCR_WD - x;
-	if (y + h > SCR_HT) h = SCR_HT - y;
-	for (int i = y;i < y + h;i++) drawLineHfast(x, x + w - 1, i, col);
+	if (x >= winW || y >= winH) return; 		//X o Y fuera de ventana
+	if (x + w > winW) w = winW - x;
+	if (y + h > winH) h = winH - y;
+	for (int i = y;i < y + h;i++)
+		drawLineHfast(x, x + w - 1, i, col);
 }
 // ----------------------------------------------------------------
 // dithered version (50% of brightness)
 void ST7920_SPI::fillRectD(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t col)
 {
-	if (x >= SCR_WD || y >= SCR_HT) return;
-	if (x + w >= SCR_WD) w = SCR_WD - x;
-	if (y + h >= SCR_HT) h = SCR_HT - y;
-	for (int i = y;i < y + h;i++) drawLineHfastD(x, x + w - 1, i, col);
+	if (x >= winW || y >= winH) return; 		//X o Y fuera de ventana
+	if (x + w > winW) w = winW - x;
+	if (y + h > winH) h = winH - y;
+	for (int i = y;i < y + h;i++)
+		drawLineHfastD(x, x + w - 1, i, col);
 }
 // ----------------------------------------------------------------
 // circle
 void ST7920_SPI::drawCircle(uint8_t x0, uint8_t y0, uint8_t radius, uint8_t col)
 {
+	if ((int)x0 - (int)radius >= winW || (int)y0 - (int)radius >= winH) return; 		//X o Y fuera de ventana
 	int f = 1 - (int)radius;
 	int ddF_x = 1;
 	int ddF_y = -2 * (int)radius;
@@ -383,6 +427,7 @@ void ST7920_SPI::drawCircle(uint8_t x0, uint8_t y0, uint8_t radius, uint8_t col)
 // ----------------------------------------------------------------
 void ST7920_SPI::fillCircle(uint8_t x0, uint8_t y0, uint8_t r, uint8_t col)
 {
+	if ((int)x0 - (int)r >= winW || (int)y0 - (int)r >= winH) return; 		//X o Y fuera de ventana
 	drawLineHfast(x0 - r, x0 - r + 2 * r + 1, y0, col);
 	int16_t f = 1 - r;
 	int16_t ddF_x = 1;
@@ -409,6 +454,7 @@ void ST7920_SPI::fillCircle(uint8_t x0, uint8_t y0, uint8_t r, uint8_t col)
 // dithered version (50% of brightness)
 void ST7920_SPI::fillCircleD(uint8_t x0, uint8_t y0, uint8_t r, uint8_t col)
 {
+	if ((int)x0 - (int)r >= winW || (int)y0 - (int)r >= winH) return; 		//X o Y fuera de ventana
 	drawLineHfastD(x0 - r, x0 - r + 2 * r + 1, y0, col);
 	int16_t f = 1 - r;
 	int16_t ddF_x = 1;
@@ -466,19 +512,16 @@ void ST7920_SPI::setDither(uint8_t s)
 	pattern[3] = pgm_read_byte(ditherTab + s * 4 + 3);
 }
 // ----------------------------------------------------------------
-#define ALIGNMENT \
-  if(x==-1) x = SCR_WD-w; \
-  else if(x<0) x = (SCR_WD-w)/2; \
-  if(x<0) x=0; \
-  if(x>=SCR_WD || y>=SCR_HT) return 0; \
-  if(x+w>SCR_WD) w = SCR_WD-x; \
-  if(y+h>SCR_HT) h = SCR_HT-y
-// ----------------------------------------------------------------
 
-int ST7920_SPI::drawBitmap(const uint8_t* bmp, int x, uint8_t y, uint8_t w, uint8_t h)
+int ST7920_SPI::drawBitmap(const uint8_t* bmp, uint8_t x, uint8_t y, uint8_t w, uint8_t h)
 {
 	uint8_t wdb = w;
-	ALIGNMENT;
+
+	if (x >= winW || y >= winH) return 0; 		//X o Y fuera de ventana
+	x += winX; y += winY;						//Trasladar coordenadas
+	if (w > winW) w = winW;						//Limitar tamaño dentro de la ventada disponible
+	if (h > winH) h = winH;
+
 	byte i, j8, d, b, ht8 = (h + 7) / 8;
 	for (j8 = 0; j8 < ht8; j8++) {
 		for (i = 0; i < w; i++) {
@@ -495,7 +538,7 @@ int ST7920_SPI::drawBitmap(const uint8_t* bmp, int x, uint8_t y, uint8_t w, uint
 	return x + w;
 }
 // ----------------------------------------------------------------
-int ST7920_SPI::drawBitmap(const uint8_t* bmp, int x, uint8_t y)
+int ST7920_SPI::drawBitmap(const uint8_t* bmp, uint8_t x, uint8_t y)
 {
 	uint8_t w = pgm_read_byte(bmp + 0);
 	uint8_t h = pgm_read_byte(bmp + 1);
@@ -552,7 +595,7 @@ int ST7920_SPI::strWidth(const char* str)
 // ----------------------------------------------------------------
 int ST7920_SPI::printChar(int xpos, int ypos, unsigned char c)
 {
-	if (xpos >= SCR_WD || ypos >= SCR_HT)  return 0;
+	if (xpos >= winW || ypos >= winH)  return 0; 		//X o Y fuera de ventana
 	int fht8 = (cfont.ySize + 7) / 8, wd, fwd = cfont.xSize;
 	if (fwd < 0)  fwd = -fwd;
 
@@ -574,10 +617,12 @@ int ST7920_SPI::printChar(int xpos, int ypos, unsigned char c)
 			wdL = (cfont.minCharWd - wd) / 2;
 			wdR += (cfont.minCharWd - wd - wdL);
 		}
-	if (xpos + wd + wdL + wdR > SCR_WD) wdR = max(SCR_WD - xpos - wdL - wd, 0);
-	if (xpos + wd + wdL + wdR > SCR_WD) wd = max(SCR_WD - xpos - wdL, 0);
-	if (xpos + wd + wdL + wdR > SCR_WD) wdL = max(SCR_WD - xpos, 0);
+	if (xpos + wd + wdL + wdR > winW) wdR = max((int)winW - xpos - wdL - wd, 0);
+	if (xpos + wd + wdL + wdR > winW) wd = max((int)winW - xpos - wdL, 0);
+	if (xpos + wd + wdL + wdR > winW) wdL = max((int)winW - xpos, 0);
+	xpos += winX; ypos += winY;							//Trasladar coordenadas
 
+	int32_t yMax = winY + winH;	//Posición máxima en Y
 	for (x = 0; x < wd; x++) {
 		byte mask = 0x80 >> ((xpos + x + wdL) & 7);
 		for (y8 = 0; y8 < fht8; y8++) {
@@ -585,7 +630,8 @@ int ST7920_SPI::printChar(int xpos, int ypos, unsigned char c)
 			int lastbit = cfont.ySize - y8 * 8;
 			if (lastbit > 8) lastbit = 8;
 			for (b = 0; b < lastbit; b++) {
-				if (d & 1) scr[(ypos + y8 * 8 + b) * scrWd + (xpos + x + wdL) / 8] |= mask;  //drawPixel(xpos+x, ypos+y8*8+b, 1);
+				int32_t y = ypos + y8 * 8 + b;	//Posición Y absoluta en la pantalla
+				if ((d & 1) && (y < yMax)) scr[y * scrWd + (xpos + x + wdL) / 8] |= mask;  //drawPixel(xpos+x, ypos+y8*8+b, 1);
 				d >>= 1;
 			}
 		}
@@ -633,17 +679,18 @@ int ST7920_SPI::printStr(int xpos, int ypos, const char* str, TextAling aling, b
 	ht = cfont.ySize;
 
 	if (aling == TextAling::TopCenter || aling == TextAling::MiddleCenter || aling == TextAling::BottomCenter)	//Alineacion al centro
-		x = x - (wd / 2)+1;
+		x = x - (wd / 2) + 1;
 	else if (aling == TextAling::TopRight || aling == TextAling::MiddleRight || aling == TextAling::BottomRight)	//Alineacion a la derecha
-		x = x - wd+1;
+		x = x - wd + 1;
 
 	if (aling == TextAling::MiddleLeft || aling == TextAling::MiddleCenter || aling == TextAling::MiddleRight)	//Alineacion al medio
-		y = y - (ht / 2)+1;
+		y = y - (ht / 2) + 1;
 	else if (aling == TextAling::BottomLeft || aling == TextAling::BottomCenter || aling == TextAling::BottomRight)	//Alineacion abajo
-		y = y - ht+1;
+		y = y - ht + 1;
 
-	if (x < 0 || y < 0) return 0;
-	if (x > (SCR_WD-1) || y > (SCR_HT-1)) return 0 ;
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	if (x > (SCR_WD - 1) || y > (SCR_HT - 1)) return 0;
 
 	xpos = x;
 	if (clearBG) fillRect(x, y, wd, ht + 1, 0);
