@@ -123,6 +123,13 @@ public:
         return (width == maxW && height == maxH);
     };
 
+    void setFullScreen() {
+        posX = 0;
+        posY = 0;
+        width = maxW;
+        height =maxH;
+    };
+
     bool setPosAndSize(int32_t x, int32_t y, int32_t w, int32_t h) {
         if (x >= maxW || y >= maxH) return false;
         posX = x;
@@ -611,7 +618,10 @@ class lcd_ui
     uint64_t LastTime;                         //�ltima vez que se actualiz�
     uint32_t UpdateTime = 250;                 // Tiempo de actualizaci�n de UI
     uint32_t UpdateStep = 0;                    //Paso de actualización
+    uint32_t UpdateScreenIndex;                //Pantalla siendo actualizada
+    uint32_t UpdateLcdStep;                     //Parte del LCD siendo actualizada
     static const uint32_t DftUpdateTime = 100; // Tiempo de actualizaci�n por defecto
+    UI_Window*  uiWindow;                      //Puntero a la ventana actual
 
     void ResetUpdateTime();
     bool GoBack = false;
@@ -776,6 +786,8 @@ public:
     bool UI_Black(lcd_ui* ui, UI_Action action);
 
     UI_Window* getWindow();
+
+    bool isTopScreen();
 };
 
 

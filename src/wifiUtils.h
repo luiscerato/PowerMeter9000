@@ -6,6 +6,7 @@
 #include <RemoteDebug.h>
 #include <AsyncMqttClient.h>
 #include "esp_sntp.h"
+#include <WiFiMulti.h>
 
 extern RemoteDebug Debug;	//Acceso a las funciones de debugger remoto
 extern AsyncMqttClient mqtt;

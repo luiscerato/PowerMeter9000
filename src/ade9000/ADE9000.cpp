@@ -202,6 +202,69 @@ void ADE9000::loadCalibration()
     SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
 }
 
+void ADE9000::printCalibration()
+{
+    preferences.begin("ADE9000", false);
+
+    Serial.printf("ADDR_APHCAL0: 0x%x\n", preferences.getInt("APHCAL0", 0));
+    Serial.printf("ADDR_BPHCAL0: 0x%x\n", preferences.getInt("BPHCAL0", 0));
+    Serial.printf("ADDR_CPHCAL0: 0x%x\n", preferences.getInt("CPHCAL0", 0));
+    Serial.printf("ADDR_NPHCAL: 0x%x\n", preferences.getInt("NPHCAL", 0));
+
+    //Cargar current gain
+    Serial.printf("ADDR_AIGAIN: 0x%x\n", preferences.getInt("AIGAIN", 0));
+    Serial.printf("ADDR_BIGAIN: 0x%x\n", preferences.getInt("BIGAIN", 0));
+    Serial.printf("ADDR_CIGAIN: 0x%x\n", preferences.getInt("CIGAIN", 0));
+    Serial.printf("ADDR_NIGAIN: 0x%x\n", preferences.getInt("NIGAIN", 0));
+    //Cargar voltage gain
+    Serial.printf("ADDR_AVGAIN: 0x%x\n", preferences.getInt("AVGAIN", 0));
+    Serial.printf("ADDR_BVGAIN: 0x%x\n", preferences.getInt("BVGAIN", 0));
+    Serial.printf("ADDR_CVGAIN: 0x%x\n", preferences.getInt("CVGAIN", 0));
+
+    //Current offset
+    Serial.printf("ADDR_AIRMSOS: 0x%x\n", preferences.getInt("AIRMSOS", 0));
+    Serial.printf("ADDR_BIRMSOS: 0x%x\n", preferences.getInt("BIRMSOS", 0));
+    Serial.printf("ADDR_CIRMSOS: 0x%x\n", preferences.getInt("CIRMSOS", 0));
+    Serial.printf("ADDR_NIRMSOS: 0x%x\n", preferences.getInt("NIRMSOS", 0));
+    //Voltage offset
+    Serial.printf("ADDR_AVRMSOS: 0x%x\n", preferences.getInt("AVRMSOS", 0));
+    Serial.printf("ADDR_BVRMSOS: 0x%x\n", preferences.getInt("BVRMSOS", 0));
+    Serial.printf("ADDR_CVRMSOS: 0x%x\n", preferences.getInt("CVRMSOS", 0));
+
+    //Offset Fundamental
+    Serial.printf("ADDR_AIFRMSOS: 0x%x\n", preferences.getInt("AIFRMSOS", 0));
+    Serial.printf("ADDR_BIFRMSOS: 0x%x\n", preferences.getInt("BIFRMSOS", 0));
+    Serial.printf("ADDR_CIFRMSOS: 0x%x\n", preferences.getInt("CIFRMSOS", 0));
+
+    Serial.printf("ADDR_AVFRMSOS: 0x%x\n", preferences.getInt("AVFRMSOS", 0));
+    Serial.printf("ADDR_BVFRMSOS: 0x%x\n", preferences.getInt("BVFRMSOS", 0));
+    Serial.printf("ADDR_CVFRMSOS: 0x%x\n", preferences.getInt("CVFRMSOS", 0));
+
+    //Offsets one cicle
+    Serial.printf("ADDR_AIRMSONEOS: 0x%x\n", preferences.getInt("AIRMSONEOS", 0));
+    Serial.printf("ADDR_BIRMSONEOS: 0x%x\n", preferences.getInt("BIRMSONEOS", 0));
+    Serial.printf("ADDR_CIRMSONEOS: 0x%x\n", preferences.getInt("CIRMSONEOS", 0));
+    Serial.printf("ADDR_NIRMSONEOS: 0x%x\n", preferences.getInt("NIRMSONEOS", 0));
+
+    Serial.printf("ADDR_AVRMSONEOS: 0x%x\n", preferences.getInt("AVRMSONEOS", 0));
+    Serial.printf("ADDR_BVRMSONEOS: 0x%x\n", preferences.getInt("BVRMSONEOS", 0));
+    Serial.printf("ADDR_CVRMSONEOS: 0x%x\n", preferences.getInt("CVRMSONEOS", 0));
+
+    //Offsets 1012 cicles
+    Serial.printf("ADDR_AIRMS1012OS: 0x%x\n", preferences.getInt("AIRMS1012OS", 0));
+    Serial.printf("ADDR_BIRMS1012OS: 0x%x\n", preferences.getInt("BIRMS1012OS", 0));
+    Serial.printf("ADDR_CIRMS1012OS: 0x%x\n", preferences.getInt("CIRMS1012OS", 0));
+    Serial.printf("ADDR_NIRMS1012OS: 0x%x\n", preferences.getInt("NIRMS1012OS", 0));
+
+    Serial.printf("ADDR_AVRMS1012OS: 0x%x\n", preferences.getInt("AVRMS1012OS", 0));
+    Serial.printf("ADDR_BVRMS1012OS: 0x%x\n", preferences.getInt("BVRMS1012OS", 0));
+    Serial.printf("ADDR_CVRMS1012OS: 0x%x\n", preferences.getInt("CVRMS1012OS", 0));
+
+
+    preferences.end();
+
+}
+
 void ADE9000::resetADE9000(uint8_t ADE9000_RESET_PIN)
 {
     digitalWrite(ADE9000_RESET_PIN, LOW);
@@ -577,6 +640,16 @@ uint32_t ADE9000::readPeriodRegsnValues(PeriodRegs* Data)
 }
 
 
+
+float ADE9000::limitAngle(float angle, float min, float max, float cutOff)
+{
+    if (angle < (min + cutOff))
+        angle = min;
+    else if (angle > (max - cutOff))
+        angle = max;
+    return angle;
+}
+
 uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
 {
     uint32_t tempReg;
@@ -599,49 +672,52 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VB));            //Fase R    (rango 0° a 360°)
     Data->AngleReg_VA_VB = tempReg;
     tempValue = tempReg * mulConstant; // Calculate Angle in degrees
-    Data->AngleValue_VA_VB = constrain(tempValue, 0, 360);  //Valor normal 120°
+    Data->AngleValue_VA_VB = limitAngle(0.0, 360.0, 1.0);       //Valor normal 120°
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_VC));            //Fase S    (rango 0° a 360°)
     Data->AngleReg_VB_VC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_VB_VC = constrain(tempValue, 0, 360);  //Valor normal 120°
+    Data->AngleValue_VB_VC = limitAngle(0.0, 360.0, 1.0);       //Valor normal 120°
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VC));            //Fase T    (rango 0° a 360°)
     Data->AngleReg_VA_VC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_VA_VC = constrain(tempValue, 0, 360);  //Valor normal 240°
+    Data->AngleValue_VA_VC = limitAngle(0.0, 360.0, 1.0);       //Valor normal 240°
+    //Cuando se pone la misma fase en las 3 entradas fase A y fase B 360° y fase C 0°, poner todas en 0
+    if (Data->AngleValue_VA_VB > 355.0 && Data->AngleValue_VB_VC > 355.0 && Data->AngleValue_VA_VC < 5.0)
+        Data->AngleValue_VA_VB = Data->AngleValue_VB_VC = Data->AngleValue_VA_VC = 0.0;
 
     //Mediciones de angulos entre voltaje y corriente por fase
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_IA));            //Fase R    (rango -180° a 180°)
     Data->AngleReg_VA_IA = tempReg;
     tempValue = tempReg * mulConstant;
-    tempValue = constrain(tempValue, 0, 360);
-    if (tempValue > 180) tempValue -= 360;
+    tempValue = limitAngle(0.0, 360.0, 1.0); 
+    if (tempValue > 180.0) tempValue -= 360.0;
     Data->AngleValue_VA_IA = tempValue;
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_IB));            //Fase S    (rango -180° a 180°)
     Data->AngleReg_VB_IB = tempReg;
     tempValue = tempReg * mulConstant;
-    tempValue = constrain(tempValue, 0, 360);
-    if (tempValue > 180) tempValue -= 360;
+    tempValue = limitAngle(0.0, 360.0, 1.0); 
+    if (tempValue > 180.0) tempValue -= 360.0;
     Data->AngleValue_VB_IB = tempValue;
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VC_IC));            //Fase T    (rango -180° a 180°)
     Data->AngleReg_VC_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    tempValue = constrain(tempValue, 0, 360);
-    if (tempValue > 180) tempValue -= 360;
+    tempValue = limitAngle(0.0, 360.0, 1.0); 
+    if (tempValue > 180.0) tempValue -= 360.0;
     Data->AngleValue_VC_IC = tempValue;
 
     //Mediciones entre fases de corriente
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IB));            //Fase R    (rango 0° a 360°)
     Data->AngleReg_IA_IB = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IB = constrain(tempValue, 0, 360);
+    Data->AngleValue_IA_IB = limitAngle(0.0, 360.0, 1.0); 
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IB_IC));            //Fase S    (rango 0° a 360°)
     Data->AngleReg_IB_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IB_IC = constrain(tempValue, 0, 360);
+    Data->AngleValue_IB_IC = limitAngle(0.0, 360.0, 1.0); 
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IC));            //Fase T    (rango 0° a 360°)
     Data->AngleReg_IA_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IC = constrain(tempValue, 0, 360);
+    Data->AngleValue_IA_IC = limitAngle(0.0, 360.0, 1.0); 
     return micros() - time;
 }
 uint32_t ADE9000::ReadVoltageTHDRegsnValues(VoltageTHDRegs* Data)
@@ -876,12 +952,28 @@ void ADE9000::readAccEnergyRegister(TotalEnergyVals* energy, TotalEnergyVals* fu
     }
 }
 
+ADE_MASK0_t mask0;
+
+bool ADE9000::isCalibrating()
+{
+    return (calInfo.function != calNone);
+}
+
+
+bool ADE9000::isCalibrating(calibrationStep_t function)
+{
+    return (calInfo.function == function);
+}
+
 
 bool ADE9000::startCalibration(calibrationStep_t function, bool phaseA, bool phaseB, bool phaseC, bool neutral)
 {
     Serial.printf("Iniciando calibracion: %s!\n", calibrationStepString(function));
     if (calInfo.function != calNone) return false;
     if (function <= calNone || function >= calLastItem) return false;
+
+    Serial.printf("Calibracion actual\n");
+    printCalibration();
 
     calInfo.function = function;
     if (!calInfo.isCalibratingCurrent()) neutral = false;
@@ -926,6 +1018,11 @@ bool ADE9000::startCalibration(calibrationStep_t function, bool phaseA, bool pha
         if (calInfo.calB) { SPI_Write_32(ADDR_BPHCAL0, 0); };
         if (calInfo.calC) { SPI_Write_32(ADDR_CPHCAL0, 0); };
         if (calInfo.calN) { SPI_Write_32(ADDR_NPHCAL, 0); };
+
+        mask0.raw = SPI_Read_32(ADDR_MASK0);
+        ADE_MASK0_t mask = mask0;
+        mask.EGYRDY = 0;
+        SPI_Write_32(ADDR_MASK0, mask.raw);
 
         // SPI_Write_32(ADDR_EP_CFG, 0x0011); /* Enable energy accumulation, accumulate samples at 8ksps, latch energy accumulation after EGYRDY and don't reset registers*/
         // SPI_Write_32(ADDR_EGY_TIME, 7999); /* Accumulate 8000 samples */
@@ -1212,11 +1309,18 @@ bool ADE9000::endCalibration(bool save)
         if (calInfo.calB) { SPI_Write_32(ADDR_BPHCAL0, (int32_t)calInfo.regs.B);  preferences.putInt("BPHCAL0", (int32_t)calInfo.regs.B); };
         if (calInfo.calC) { SPI_Write_32(ADDR_CPHCAL0, (int32_t)calInfo.regs.C);  preferences.putInt("CPHCAL0", (int32_t)calInfo.regs.C); };
         if (calInfo.calN) { SPI_Write_32(ADDR_NPHCAL, (int32_t)calInfo.regs.N);  preferences.putInt("NPHCAL", (int32_t)calInfo.regs.N); };
+
+        SPI_Write_32(ADDR_MASK0, mask0.raw);
     }
     calInfo.function = calNone;
     preferences.end();
 
     if (!save) loadCalibration();
+
+
+    Serial.printf("Calibracion nueva:\n");
+    printCalibration();
+
     return result;
 }
 
@@ -1289,8 +1393,8 @@ void ADE9000::readDipLevels(struct VoltageRMSRegs* Data)
 
 void ADE9000::setSwellDetectionLevels(float level, uint32_t cycles)
 {
-    // if (level < 0 || level > getMaxInputVoltage()) return;
-    // if (cycles < 2 || cycles > 100) return;
+    if (level < 0 || level > getMaxInputVoltage()) return;
+    if (cycles < 2 || cycles > 100) return;
 
     int32_t value = level * (float)ONE_MILLION / (CAL_VRMS_CC) * 0.03125;  //DIP_LVL = xVRMSONE*2^−5
     Serial.printf("setSwellDetectionLevels: %.2fV -> SWELLLVL=%d, SWELLCYC=%d\n", level, value, cycles);

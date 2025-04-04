@@ -501,6 +501,7 @@ protected:
 	};
 
 	void calculatePromAcc() {
+		if (samples==0) samples = 1;
 		acc.A = acc.A / samples;
 		acc.B = acc.B / samples;
 		acc.C = acc.C / samples;
@@ -752,6 +753,13 @@ public:
 
 	bool startCalibration(calibrationStep_t step, bool phaseA, bool phaseB, bool phaseC, bool neutral);
 
+	/*
+		Devuelve true si se está calibrando el medidor
+	*/
+    bool isCalibrating();
+
+    bool isCalibrating(calibrationStep_t function);
+
 
 
 	int32_t updateCalibration(float realValue, calibrationInfo* info);
@@ -875,6 +883,10 @@ public:
 private:
 	Preferences preferences;		//Configuracion desde flash
 	void loadCalibration();			//Carga la calibracion guardada en la memoria flash
+
+    void printCalibration();
+
+	float limitAngle(float angle, float min, float max, float cutOff = 0.0);
 
 	float noVoltageCutoff;			//Cortes por bajo niveles. Si es menor a estos umbrales se toma como 0
 	float noCurrentCutoff;			//Corte por baja corriente

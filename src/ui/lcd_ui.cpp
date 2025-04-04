@@ -2,12 +2,14 @@
 #include "arduino.h"
 #include <stdlib.h>
 #include <time.h>
+#include <RemoteDebug.h>
 
-// #define LOG_LOCAL_LEVEL ESP_LOGI
-#include <esp_log.h>
-static const char* TAG = "ui";
+// #define LOG_LOCAL_LEVEL ESP_LOGD
+// #include <esp_log.h>
+// static const char* TAG = "ui";
 
 using namespace std;
+extern RemoteDebug Debug;	//Acceso a las funciones de debugger remoto
 
 
 int32_t UI_Window::maxW = SCR_WD;  //Ancho máximo de la pantalla
@@ -20,13 +22,14 @@ void lcd_ui::ResetUpdateTime()
 
 lcd_ui::lcd_ui(ST7920_SPI& screen, keyboard& key, int8_t SoundPin) : lcd(screen), keys(key)
 {
-    ESP_LOGI(TAG, "");
+    debugI( "");
     LCD.Widht = lcd.getWidth();
     LCD.Height = lcd.getHeight();
 
     for (int32_t i = 0; i < UI_Max_Screens; i++) {
         Screens[i].init();
         Screens[i].window.setPosAndSize(0, 0, lcd.getWidth(), lcd.getHeight());
+
     }
     for (int32_t i = 0; i < UI_Max_Levels; i++)
         Screen_Stack[i] = 0;
@@ -34,17 +37,17 @@ lcd_ui::lcd_ui(ST7920_SPI& screen, keyboard& key, int8_t SoundPin) : lcd(screen)
     if (SoundPin > 0)
         Speaker.Init(SoundPin);
 
-    ESP_LOGI(TAG, "LCD Widht: %d, Height: %d", LCD.Widht, LCD.Height);
+    debugI( "LCD Widht: %d, Height: %d", LCD.Widht, LCD.Height);
 }
 
 lcd_ui::~lcd_ui()
 {
-    ESP_LOGI(TAG, "");
+    debugI( "");
 }
 
 void lcd_ui::begin()
 {
-    ESP_LOGI(TAG, "");
+    debugI( "");
 
     // Agregar las ui del sistema
     Add_UI(ID_UI_Black, "@ui_black", &lcd_ui::UI_Black);
@@ -80,9 +83,17 @@ bool UI_Screen_t::Execute(lcd_ui* ui, UI_Action action)
 
 UI_Window* lcd_ui::getWindow()
 {
-    int32_t screen = Screen_Stack[Screen_Index];
-    if (!Screens[screen].isEmpty()) return &Screens[screen].window;
-    return nullptr;
+    // int32_t screen;
+    // if (InFunct) 
+    //     screen = Screen_Stack[UpdateScreenIndex];
+    // else 
+    //     screen = Screen_Stack[Screen_Index];
+    // return &Screens[screen].window;
+    if (uiWindow == nullptr) {
+        int32_t screen = Screen_Stack[Screen_Index];
+        uiWindow = &Screens[screen].window;
+    }
+    return uiWindow;
 }
 
 uint32_t tBack, tUpdate, tScreen, tReal, tClear;
@@ -107,67 +118,44 @@ void lcd_ui::Run()
         tClear = micros();
         lcd.cls();
         tClear = micros() - tClear;
-        UpdateStep++;
-
-        //Buscar la primer pantalla full scrren
-        int32_t fullScreen = Screen_Index;
-        int32_t screen = Screen_Stack[Screen_Index];
-        for (int scr = Screen_Index; scr >= 0; scr--) {
-            if (!Screens[scr].isEmpty()) {
-                if (Screens[scr].window.isFullScreen()) fullScreen = scr;
-                Serial.printf("%s.isFullScreen(): %s\n", Screens[scr].Name, Screens[scr].window.isFullScreen() ? "true" : "false");
-            }
+        UpdateLcdStep = 0;
+        //Buscar la primer pantalla fullscreen
+        for (UpdateScreenIndex = Screen_Index; UpdateScreenIndex > 0; UpdateScreenIndex--) {
+            int32_t screen = Screen_Stack[UpdateScreenIndex];
+            if (Screens[screen].window.isFullScreen())  break;  //Si la pantalla es fullscreen, terminar de buscar.
         }
-        if (Screen_Index - fullScreen > 4) fullScreen = Screen_Index - 4;   //Limitar solo a 4 niveles
-        UpdateStep = 5 - (Screen_Index - fullScreen);
-        Serial.printf("UpdateStep: %d, fullScreen: %d\n", UpdateStep, fullScreen);
+        UpdateStep++;
     }
-    else if (UpdateStep < 10) {
-        int32_t screen = Screen_Stack[Screen_Index - (5 - UpdateStep)];
-        if (!Screens[screen].isEmpty()){
+    else if (UpdateStep == 1) {
+        int32_t screen = Screen_Stack[UpdateScreenIndex];
+        if (!Screens[screen].isEmpty()) {
             tBack = micros();
             if (backgroundDrawer) backgroundDrawer(this, &Screens[screen].window);
             tBack = micros() - tBack;
 
             tUpdate = micros();
             InFunct = true;
+            uiWindow = &Screens[screen].window; //Apuntar a la ventana actual
             Screens[screen].Execute(this, UI_Action::Run);
             InFunct = false;
             tUpdate = micros() - tUpdate;
-            Serial.printf("UpdateWindow: %d, name: %s\n", UpdateStep, Screens[screen].Name);
+            // Serial.printf("UpdateWindow: %d, name: %s\n", UpdateScreenIndex, Screens[screen].Name);
         }
-        if (UpdateStep++ == 5) UpdateStep = 10;
+        if (UpdateScreenIndex < Screen_Index)
+            UpdateScreenIndex++;
+        else {
+            UpdateStep++;
+        }
         tReal = 0;
     }
-    // else if (UpdateStep == 1) { //  Dibujar lo que requiere la app en el LCD
-    //     tBack = micros();
-    //     int32_t screen = Screen_Stack[Screen_Index];
-    //     if (!Screens[screen].isEmpty())
-    //         if (backgroundDrawer) backgroundDrawer(this, &Screens[screen].window);
-    //     tBack = micros() - tBack;
-    //     UpdateStep++;
-    // }
-    // else if (UpdateStep == 2) { //  Dibujar lo que requiere la app en el LCD
-    //     tUpdate = micros();
-    //     int32_t screen = Screen_Stack[Screen_Index];
-    //     if (!Screens[screen].isEmpty()) {
-    //         InFunct = true;
-    //         Screens[screen].Execute(this, UI_Action::Run);
-    //         InFunct = false;
-    //     }
-    //     tUpdate = micros() - tUpdate;
-    //     UpdateStep = 10;
-    //     tScreen = micros();
-    //     tReal = 0;
-    // }
     else { //Actualizar LCD
-        if ((UpdateStep - 10) < 8) {
+        if (UpdateLcdStep < 8) {
             uint32_t time = micros();
-            lcd.display(0, UpdateStep - 10);
+            lcd.display(0, UpdateLcdStep);
             time = micros() - time;
             tReal += time;
-            // if (UpdateStep == 5 ) Serial.printf("Tiempo de actualizacion: %d us\n", time);
-            UpdateStep++;
+            // if (UpdateLcdStep == 7 ) Serial.printf("Tiempo de actualizacion: %d us\n", time);
+            UpdateLcdStep++;
         }
         else {
             UpdateStep = 0;
@@ -202,9 +190,9 @@ void lcd_ui::Run()
 
 bool lcd_ui::ShowByIndex(int32_t Index)
 {
-    ESP_LOGI(TAG, "UI: %i", Index);
+    debugI( "UI: %i", Index);
     if (Index < 0 || Index >= UI_Max_Screens) {
-        ESP_LOGI(TAG, "Error -> Index %i fuera de rango [%i..%i]", Index, 0, UI_Max_Screens);
+        debugI( "Error -> Index %i fuera de rango [%i..%i]", Index, 0, UI_Max_Screens);
         return false;
     }
 
@@ -213,26 +201,28 @@ bool lcd_ui::ShowByIndex(int32_t Index)
         lcd.cls(); // Limpiar el lcd antes de mostrar la nueva pantalla
     }
     keys.ClearKeys();
+    SoundType = UI_Sound::Enter;
 
     Screen_Index++;
     Screen_Stack[Screen_Index] = Index;
-
-    SoundType = UI_Sound::Enter;
+    UI_Window*  prevWindow = uiWindow;
+    uiWindow = &Screens[Index].window;
     Screens[Index].Execute(this, UI_Action::Init);
+    uiWindow = prevWindow;
 
     return true;
 }
 
 bool lcd_ui::Show(const char* UI)
 {
-    ESP_LOGI(TAG, "UI: %s", UI);
+    debugI( "UI: %s", UI);
     int32_t Index;
     if (UI == nullptr) {
-        ESP_LOGI(TAG, "Error -> nullpointer");
+        debugI( "Error -> nullpointer");
         return false;
     }
     if (Screen_Index == (UI_Max_Levels - 1)) {
-        ESP_LOGI(TAG, "Error -> no hay espacio para mas pantallas [max: %i]", UI_Max_Levels);
+        debugI( "Error -> no hay espacio para mas pantallas [max: %i]", UI_Max_Levels);
         return false;
     }
 
@@ -244,7 +234,7 @@ bool lcd_ui::Show(const char* UI)
         }
     }
     if (Index == UI_Max_Screens) {
-        ESP_LOGI(TAG, "Error -> no se encuentra pantalla '%s'", UI);
+        debugI( "Error -> no se encuentra pantalla '%s'", UI);
         return false;
     }
     return false;
@@ -252,11 +242,11 @@ bool lcd_ui::Show(const char* UI)
 
 bool lcd_ui::Show(int32_t UI_ID)
 {
-    ESP_LOGI(TAG, "UI: 0x%0.8X", UI_ID);
+    debugI( "UI: 0x%0.8X", UI_ID);
     int32_t Index;
 
     if (Screen_Index == (UI_Max_Levels - 1)) {
-        ESP_LOGI(TAG, "Error -> no hay espacio para mas pantallas [max: %i]", UI_Max_Levels);
+        debugI( "Error -> no hay espacio para mas pantallas [max: %i]", UI_Max_Levels);
         return false;
     }
 
@@ -267,7 +257,7 @@ bool lcd_ui::Show(int32_t UI_ID)
         }
     }
     if (Index == UI_Max_Screens) {
-        ESP_LOGI(TAG, "Error -> no se encuentra pantalla ID: %i", UI_ID);
+        debugI( "Error -> no se encuentra pantalla ID: %i", UI_ID);
         return false;
     }
     return false;
@@ -281,8 +271,9 @@ int32_t lcd_ui::GetScreenIndex()
 bool lcd_ui::Close(UI_DialogResult result)
 {
     bool res = false;
-    ESP_LOGI(TAG, "Index: %i, result: %u", Screen_Index, result);
+    debugI( "Index: %i, result: %u", Screen_Index, result);
     Result = result; // Cargar el estado actual
+    UI_Window*  prevWindow = uiWindow;
 
     if (InFunct) { // Cuando se la llama desde una funci�n UI
         GoBack = true;
@@ -300,6 +291,7 @@ bool lcd_ui::Close(UI_DialogResult result)
         int32_t lastIndex = Screen_Index; // Guardar el �ndice actual de la pantalla
 
         if (!Screens[screen].isEmpty()) { // LLamar a la pantalla que se est� cerrando
+            uiWindow = &Screens[screen].window;
             res = Screens[screen].Execute(this, UI_Action::Closing);
         }
         keys.ClearKeys(); // Limpiar teclado
@@ -311,19 +303,21 @@ bool lcd_ui::Close(UI_DialogResult result)
         if (lastIndex == Screen_Index) {         // Si el �ndice cambi� es porque se abri� una pantalla mientras se cerraba la actual
             screen = Screen_Stack[Screen_Index]; // Pedir a la anterior que recupere el entorno
             if (!Screens[screen].isEmpty()) {
+                uiWindow = &Screens[screen].window;
                 res = Screens[screen].Execute(this, UI_Action::Restore);
             }
         }
+        uiWindow = prevWindow;
     }
     return res;
 }
 
 bool lcd_ui::setMainScreen(const char* UI)
 {
-    ESP_LOGI(TAG, "UI: %s", UI);
+    debugI( "UI: %s", UI);
     int32_t Index;
     if (UI == nullptr) {
-        ESP_LOGI(TAG, "Error -> nullpointer");
+        debugI( "Error -> nullpointer");
         return false;
     }
 
@@ -336,7 +330,7 @@ bool lcd_ui::setMainScreen(const char* UI)
         }
     }
     if (Index == UI_Max_Screens) {
-        ESP_LOGI(TAG, "Error -> no se encuentra pantalla '%s'", UI);
+        debugI( "Error -> no se encuentra pantalla '%s'", UI);
         return false;
     }
     Home();
@@ -367,6 +361,10 @@ void lcd_ui::SetUpdateTime(uint32_t Ms)
 Keys lcd_ui::GetKeys()
 {
     static Keys LastKey = Keys::None;
+    // debugI( "isTopScreen(): %d", isTopScreen());
+
+    if (!isTopScreen()) {return Keys::None;}  //Solo la patalla superior puede leer eventos del teclado
+
     Keys key = keys.getNextKey();
 
     // if (key != Keys::None)
@@ -403,13 +401,13 @@ Keys lcd_ui::GetKeys()
 
 void lcd_ui::PrintText(const char* Text, TextPos Pos, int32_t Widht)
 {
-    // ESP_LOGI(TAG, "LCD Widht: %d, Height: %d", LCD.Widht, LCD.Height);
+    // debugI( "LCD Widht: %d, Height: %d", LCD.Widht, LCD.Height);
     if (Widht < 1 || Widht > LCD.Widht)
         Widht = LCD.Widht;
 
     // if (Pos == TextPos::Left) {
     //     lcd->printf("%-*.*s", Widht, Widht, Text);
-    //     // ESP_LOGI(TAG, "PrintText: W=%d -> '%-*.*s'", Widht, Widht, Widht, Text);
+    //     // debugI( "PrintText: W=%d -> '%-*.*s'", Widht, Widht, Widht, Text);
     // } else { // if (Pos == TextPos::Center) {
     //     int32_t len = strlen(Text), esp, count;
     //     if (len > Widht)
@@ -433,27 +431,27 @@ int32_t lcd_ui::Add_UI(int32_t ID, const char* Name, bool (lcd_ui::* member)(lcd
 {
     int32_t Index;
     if (member == nullptr || Name == nullptr || ID >= 0) {
-        ESP_LOGI(TAG, "Error -> nullpointer or ID > 0");
+        debugI( "Error -> nullpointer or ID > 0");
         return -2;
     }
-    ESP_LOGI(TAG, "Sys ui name: %s, ID:0x%0.8X at 0x%0.8X", Name, ID, member);
+    debugI( "Sys ui name: %s, ID:0x%0.8X at 0x%0.8X", Name, ID, member);
 
     for (Index = 0; Index < UI_Max_Screens; Index++) {
         if (Screens[Index].isEmpty())
             break;
         else {
             if (strcmp(Name, Screens[Index].Name) == 0) {
-                ESP_LOGI(TAG, "Error -> pantalla '%s' ya existe", Name);
+                debugI( "Error -> pantalla '%s' ya existe", Name);
                 return -3;
             }
             else if (ID == Screens[Index].ID) {
-                ESP_LOGI(TAG, "Error -> pantalla ID=%i ya existe", ID);
+                debugI( "Error -> pantalla ID=%i ya existe", ID);
                 return -4;
             }
         }
     }
     if (Index == UI_Max_Screens) {
-        ESP_LOGI(TAG, "Error -> no se pueden agregar mas pantallas [max=%i]", UI_Max_Screens);
+        debugI( "Error -> no se pueden agregar mas pantallas [max=%i]", UI_Max_Screens);
         return -1;
     }
     Screens[Index].Name = Name;
@@ -466,27 +464,27 @@ int32_t lcd_ui::Add_UI(int32_t ID, const char* Name, bool (*func)(lcd_ui*, UI_Ac
 {
     int32_t Index;
     if (func == nullptr || Name == nullptr || ID < 0) {
-        ESP_LOGI(TAG, "Error -> nullpointer or ID < 0");
+        debugI( "Error -> nullpointer or ID < 0");
         return -2;
     }
-    ESP_LOGI(TAG, "Name: %s, ID:0x%0.8X at 0x%0.8X", Name, ID, func);
+    debugI( "Name: %s, ID:0x%0.8X at 0x%0.8X", Name, ID, func);
 
     for (Index = 0; Index < UI_Max_Screens; Index++) {
         if (Screens[Index].isEmpty())
             break;
         else {
             if (strcmp(Name, Screens[Index].Name) == 0) {
-                ESP_LOGI(TAG, "Error -> pantalla '%s' ya existe", Name);
+                debugI( "Error -> pantalla '%s' ya existe", Name);
                 return -3;
             }
             else if (ID == Screens[Index].ID) {
-                ESP_LOGI(TAG, "Error -> pantalla ID=%i ya existe", ID);
+                debugI( "Error -> pantalla ID=%i ya existe", ID);
                 return -4;
             }
         }
     }
     if (Index == UI_Max_Screens) {
-        ESP_LOGI(TAG, "Error -> no se pueden agregar mas pantallas [max=%i]", UI_Max_Screens);
+        debugI( "Error -> no se pueden agregar mas pantallas [max=%i]", UI_Max_Screens);
         return -1;
     }
     Screens[Index].Name = Name;
@@ -499,28 +497,28 @@ int32_t lcd_ui::Add_UI(int32_t ID, const char* Name, lcd_ui_screen& ui_screen)
 {
     int32_t Index;
     if (Name == nullptr || ID <= 0) {
-        ESP_LOGI(TAG, "Error -> nullpointer or ID <= 0");
+        debugI( "Error -> nullpointer or ID <= 0");
         return -2;
     }
 
-    ESP_LOGI(TAG, "lcd_ui_screen: %s, ID:0x%0.8X at 0x%0.8X", Name, ID, ui_screen);
+    debugI( "lcd_ui_screen: %s, ID:0x%0.8X at 0x%0.8X", Name, ID, ui_screen);
 
     for (Index = 0; Index < UI_Max_Screens; Index++) {
         if (Screens[Index].isEmpty())
             break;
         else {
             if (strcmp(Name, Screens[Index].Name) == 0) {
-                ESP_LOGI(TAG, "Error -> pantalla '%s' ya existe", Name);
+                debugI( "Error -> pantalla '%s' ya existe", Name);
                 return -3;
             }
             else if (ID == Screens[Index].ID) {
-                ESP_LOGI(TAG, "Error -> pantalla ID=%i ya existe", ID);
+                debugI( "Error -> pantalla ID=%i ya existe", ID);
                 return -4;
             }
         }
     }
     if (Index == UI_Max_Screens) {
-        ESP_LOGI(TAG, "Error -> no se pueden agregar mas pantallas [max=%i]", UI_Max_Screens);
+        debugI( "Error -> no se pueden agregar mas pantallas [max=%i]", UI_Max_Screens);
         return -1;
     }
     Screens[Index].Name = Name;
@@ -532,7 +530,7 @@ int32_t lcd_ui::Add_UI(int32_t ID, const char* Name, lcd_ui_screen& ui_screen)
 int32_t lcd_ui::Remove_UI(const char* Name)
 {
     if (Name == nullptr) {
-        ESP_LOGI(TAG, "Error -> nullpointer");
+        debugI( "Error -> nullpointer");
         return -2;
     }
 
@@ -544,7 +542,7 @@ int32_t lcd_ui::Remove_UI(const char* Name)
             }
         }
     }
-    ESP_LOGI(TAG, "Error -> no se encuentra pantalla '%s'", Name);
+    debugI( "Error -> no se encuentra pantalla '%s'", Name);
     return -1;
 }
 
@@ -561,7 +559,7 @@ int32_t lcd_ui::Remove_UI(int32_t ID)
             }
         }
     }
-    ESP_LOGI(TAG, "Error -> no se encuentra pantalla ID='%i'", ID);
+    debugI( "Error -> no se encuentra pantalla ID='%i'", ID);
     return -1;
 }
 
@@ -570,8 +568,8 @@ void lcd_ui::PrintState()
     Serial.printf("UI screen index: %u\n", Screen_Index);
     Serial.printf("Screen stack:\n", Screen_Index);
     for (int32_t i = Screen_Index; i >= 0; i--) {
-        Serial.printf("Pos: %.2X, ID:0x%0.4X, Func:0x%0.8X, Name: %s\n",
-            i, Screens[Screen_Stack[i]].ID, Screens[Screen_Stack[i]].function, Screens[Screen_Stack[i]].Name);
+        Serial.printf("Pos: %.2X, ID:0x%0.4X, Func:0x%0.8X, Name: %s, Title: %s\n",
+            i, Screens[Screen_Stack[i]].ID, Screens[Screen_Stack[i]].function, Screens[Screen_Stack[i]].Name, Screens[Screen_Stack[i]].window.Title.c_str());
     }
 }
 
@@ -590,16 +588,21 @@ void lcd_ui::PrintScreenList()
         Serial.printf("La pantalla principal es '%s'\n", Screens[Screen_Stack[0]].Name);
 }
 
+bool lcd_ui::isTopScreen() {
+    // debugI( "UpdateScreenIndex: %d, Screen_Index: %d",UpdateScreenIndex, Screen_Index);
+    return UpdateScreenIndex == Screen_Index;
+};
+
 
 bool lcd_ui::UI_Black(lcd_ui* ui, UI_Action action)
 {
     UI_Window* win = getWindow();
     if (action == UI_Action::Init) {
-        ESP_LOGI(TAG, "UI_Action::Init");
+        debugI( "UI_Action::Init");
         return true;
     }
     else if (action == UI_Action::Closing) {
-        ESP_LOGI(TAG, "UI_Action::Closing");
+        debugI( "UI_Action::Closing");
         return true;
     }
     else if (action == UI_Action::Run) {
@@ -607,7 +610,7 @@ bool lcd_ui::UI_Black(lcd_ui* ui, UI_Action action)
 
         win->setPosAndSize(0, 0, 128, 64);
         win->setWindowMode(UI_Window_Mode::Small);
-        
+
         char str[64];
         time_t rawtime;
         struct tm timeinfo;
@@ -624,14 +627,29 @@ bool lcd_ui::UI_Black(lcd_ui* ui, UI_Action action)
         snprintf(str, sizeof(str), "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
         lcd.printStr(size.x / 2, 2, str, TextAling::TopCenter);
 
+        // Keys key = getNextKey();
+
+        // if (key == Keys::Esc)
+        //     ui->Home();
+        // else if (key == Keys::Enter)
+        //     ;
+        // else if (key == Keys::Next)
+        //     mode++;
+        // else if (key == Keys::Up) {
+        //     index++;
+        // }
+        // else if (key == Keys::Down) {
+        //     index--;
+        // }
+
         return true;
     }
     else if (action == UI_Action::Restore) {
-        ESP_LOGI(TAG, "UI_Action::Restore");
+        debugI( "UI_Action::Restore");
         lcd.clear();
         return true;
     }
-    ESP_LOGI(TAG, "UI_Action::Unknown -> %i", action);
+    debugI( "UI_Action::Unknown -> %i", action);
     return false;
 }
 
@@ -641,13 +659,13 @@ bool lcd_ui::UI_Black(lcd_ui* ui, UI_Action action)
 */
 lcd_ui_screen::lcd_ui_screen()
 {
-    ESP_LOGI(TAG, "");
+    debugI( "");
     MyID = 20000;
 }
 
 lcd_ui_screen::~lcd_ui_screen()
 {
-    ESP_LOGI(TAG, "");
+    debugI( "");
 }
 
 /**/
@@ -665,7 +683,7 @@ bool lcd_ui_screen::Show()
 
 bool lcd_ui_screen::Close(UI_DialogResult Result)
 {
-    ESP_LOGI(TAG, "Result: %u", Result);
+    debugI( "Result: %u", Result);
     if (ui == nullptr)
         return false;
     return ui->Close(Result);
@@ -673,11 +691,11 @@ bool lcd_ui_screen::Close(UI_DialogResult Result)
 
 bool lcd_ui_screen::begin(lcd_ui* main_ui, const char* Name, int32_t ID)
 {
-    ESP_LOGI(TAG, "%p", main_ui);
+    debugI( "%p", main_ui);
     ui = main_ui;
     MyID = ID;
     if (ui == nullptr) {
-        ESP_LOGI(TAG, "No se puede iniciar con ui==null");
+        debugI( "No se puede iniciar con ui==null");
         return false;
     }
 

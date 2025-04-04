@@ -1,12 +1,199 @@
 #include "ade9000/ADE9000.h"
 #include "AsyncWebSocket.h"
 #include "time.h"
+#include "wifiUtils.h"
+
+#define fastDataSamplesCount 200
 
 typedef struct {
-	bool active;
-	float value;
+	uint16_t timeStamp;		//Ms de la muestra
+	uint16_t VrmsR;			//Voltaje rms de fase R con 2 decimales (rango 0-655.35Vac)
+	uint16_t VrmsS;			//Voltaje rms de fase S con 2 decimales (rango 0-655.35Vac)
+	uint16_t VrmsT;			//Voltaje rms de fase T con 2 decimales (rango 0-655.35Vac)
+	uint16_t IrmsR;			//Corriente rms de fase R con 2 decimales (rango 0-655.35A)
+	uint16_t IrmsS;			//Corriente rms de fase S con 2 decimales (rango 0-655.35A)
+	uint16_t IrmsT;			//Corriente rms de fase T con 2 decimales (rango 0-655.35A)
+	uint16_t IrmsN;			//Corriente rms de neutro con 2 decimales (rango 0-655.35A)
+} fastRMSData_t;
+
+class capturedEvent {
+	fastRMSData_t* data;
+	uint32_t maxSamples;
+	uint32_t sampleCount;
+	String events;
+	uint32_t eventCounter;
+	uint32_t prevSampleQty;				//Cantidad de muestras previas
+	bool capturing, canDownload, canStart;
+	timeval startDate, endDate;
+
+	void init(uint32_t maxSamples) {
+		data = nullptr;
+		this->maxSamples = maxSamples;
+		sampleCount = 0;
+		events = "";
+		capturing = false;
+		canDownload = false;
+		canStart = true;
+		eventCounter = 0;
+	};
+
+public:
+
+	capturedEvent(uint16_t maxSamples){ init(maxSamples);};
+
+	~capturedEvent() {
+		if (data) free(data);
+		events.~String();
+	}
+
+	const char *getBuffer() {if (data) return (const char*)data; return nullptr; };
+
+	bool isCapturing() {return capturing;};
+
+	uint32_t getSampleCount() {return sampleCount;};
+
+	bool isSampleBufferFull() {return sampleCount == (maxSamples-1);};
+
+	// Iniciar la clase para emperzar a capturar datos. Inicia el buffer según la cantidad de muestras máximas a guardar.
+	bool startCapture(uint32_t prevSampleQty) {
+		uint32_t size = sizeof(fastRMSData_t) * maxSamples;
+		if (capturing || (data != nullptr) || !canStart ) {debugE("Captura en curso!"); return false;};
+		data = (fastRMSData_t*)malloc(size);
+		if (data == nullptr) {debugE("Fallo al intentar asignar %d bytes", size); return false;};
+		debugI("Iniciando captura... Asignados %u bytes para %u samples", size, maxSamples);
+		memset(data, 0, size);	//Iniciar todo a 0
+		sampleCount = 0;
+		events = "";	//Crear un array Json para los eventos de texto
+		capturing = true;
+		canDownload = canStart = false;
+		eventCounter++;		//Incrementar contador de evento
+		gettimeofday(&startDate, nullptr);
+		this->prevSampleQty = prevSampleQty;
+		return true;
+	};
+
+	bool isDataReady() {return canDownload; };
+
+	void stopCapture() {
+		if (!capturing) return;
+		debugI("Terminando captura... %d samples capturadas", sampleCount);
+		capturing = false;
+		canDownload = true;
+		canStart = false;
+		gettimeofday(&endDate, nullptr);
+	};
+
+	void reset() {
+		if (capturing) stopCapture();
+		if (data) free(data);
+		data = nullptr;
+		events = "";
+		canDownload = false;
+		canStart = true;
+ 	};
+
+	void printSamples(uint32_t start, uint32_t end) {
+		if (!canDownload) return;
+		if (start > end) return;
+		if (start >= sampleCount) return;
+		if (end > (sampleCount-1)) end = sampleCount-1;
+ 
+		for (uint32_t i = start; i < end; i++) {
+			fastRMSData_t sample = data[i];
+			debugI("[%03d] %6d -> %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f", i, sample.timeStamp,
+			(float)sample.VrmsR*0.01, (float)sample.VrmsS*0.01,(float)sample.VrmsT*0.01,
+			(float)sample.IrmsR*0.01, (float)sample.IrmsS*0.01, (float)sample.IrmsT*0.01, (float)sample.IrmsN*0.01);
+		}
+	};
+
+	//[[123, 225.05, 225.05, 225.05, 15.05, 10.08, 9.86, 10.02],]
+
+	bool getEvents(String &event) {
+		if (!canDownload) return false;
+
+		char info[300];
+		snprintf(info, 128, "{\"event\": %d, \"sampleCount\": %d, \"triggerSample\": %d, \"start\": %u%u, \"end\": %u%u, \"list\":", 
+			eventCounter, sampleCount, prevSampleQty, startDate.tv_sec, startDate.tv_usec/1000, startDate.tv_sec, startDate.tv_usec/1000);
+		
+		event.reserve(events.length() + 300);
+		event = info;
+		event += "[" + events + "]}";
+		return true;
+	};
+
+	uint32_t pushSamples(fastRMSData_t* samples) {
+		if (!capturing) return 0;
+		if (sampleCount >= maxSamples) return 0;
+		if (data == nullptr) return 0;
+
+		data[sampleCount++] = *samples;
+		return 1;
+	};
+
+	uint32_t pushSamples(fastRMSData_t* samples, uint32_t count) {
+		if (!capturing) return 0;
+		if (data == nullptr || samples == nullptr) return 0;
+		uint32_t i = 0;
+		for (i = 0; i < count; i++) {
+			if (sampleCount >= maxSamples) return i;
+			*data++ = *samples++;
+			sampleCount++;
+		}
+		return i;
+	};
+
+	void pushEvent(const char * event) {
+		if (!capturing) return;
+		debugI("Evento: %s", event);
+		if (events.length() ) events += ", ";
+		events += event;
+	};
+};
+
+enum class eventType {
+	voltageDip,
+	voltageDwell,
+	overCurrent
+};
+
+enum class phaseName {
+	phaseR,
+	phaseS,
+	phaseT,
+	neutral
+};
+
+class phaseEvent_t {
+public:
+	bool active = false;
+	float value = 0.0;
 	timeval start;
 	timeval end;
+	phaseName name = phaseName::phaseR;
+	eventType type = eventType::voltageDip;
+
+	void setProperties(phaseName phaseName, eventType eventType) {
+		name = phaseName;
+		type = eventType;
+	};
+
+	static const char* eventType2String(eventType event) {
+		if (event == eventType::voltageDip)
+			return "Dip";
+		else if (event == eventType::voltageDwell)
+			return "Dwell";
+		return "Overcurrent";
+	};
+
+	static const char* phaseName2String(phaseName phase) {
+		if (phase == phaseName::phaseR)
+			return "Fase R";
+		else if (phase == phaseName::phaseS)
+			return "Fase S";
+		else if (phase == phaseName::phaseT)
+			return "Fase T";
+		return "Neutro";
+	};
 
 	void inline setStatus(bool status) {
 		lastActive = active;
@@ -20,27 +207,46 @@ typedef struct {
 
 	void inline setStatus(bool status, float level) {
 		setStatus(status);
-		value = level;
+		if (hasChanged() && status) value = level;	//Actualizar el valor solo cuando entra 
 	};
 
 	bool inline hasChanged() {
 		return lastActive != active;
 	}
 
-	void printEvent(const char* Event, const char* phase) {
+	String getJson() {
+		char str[128];
+		timeval timeStamp;
+		const char *action;
 		if (active) {
-			Serial.printf("Evento %s en fase %s iniciado a %d.%d, value: %.2f\n", Event, phase, start.tv_sec, start.tv_usec / 1000, value);
+			timeStamp = start;
+			action = "start";
 		}
 		else {
-			uint64_t s = (uint64_t)start.tv_sec * 1000 + start.tv_usec / 1000;
-			uint64_t e = (uint64_t)end.tv_sec * 1000 + end.tv_usec / 1000;
-			Serial.printf("Evento %s en fase %s terminado a %d.%d, last value: %.2f, duracion: %d ms\n", Event, phase, end.tv_sec, end.tv_usec / 1000, value, e - s);
+			timeStamp = end;
+			action = "end";
 		}
-	}
+
+		snprintf(str, 128, "{\"phase\": \"%s\", \"type\": \"%s\",\"action\": \"%s\", \"time\": %d%d, \"val\": %.2f}", 
+			phaseName2String(name), eventType2String(type), action, timeStamp.tv_sec, timeStamp.tv_usec / 1000, value);
+		return String(str);
+	};
+
+	void printEvent() {
+		// debugI("now: %d, last:%d, changed?: %d", active, lastActive, hasChanged());
+		// if (active) {
+		// 	debugI("Evento %s en fase %s iniciado a %d%d, value: %.2f", eventType2String(type), phaseName2String(name), start.tv_sec, start.tv_usec / 1000, value);
+		// }
+		// else {
+		// 	uint64_t s = (uint64_t)start.tv_sec * 1000 + start.tv_usec / 1000;
+		// 	uint64_t e = (uint64_t)end.tv_sec * 1000 + end.tv_usec / 1000;
+		// 	debugI("Evento %s en %s terminado a %d%d, last value: %.2f, duracion: %d ms", eventType2String(type), phaseName2String(name), end.tv_sec, end.tv_usec / 1000, value, e - s);
+		// }
+	};
 
 private:
-	bool lastActive;
-} phaseEvent_t;
+	bool lastActive = false;
+};
 
 struct phaseValues
 {
@@ -65,6 +271,10 @@ struct phaseValues
 	float VAR_H;		//Energía reactiva
 	float VA_H;			//Energía aparente
 
+	phaseEvent_t voltageDip;
+	phaseEvent_t voltageSwell;
+	phaseEvent_t overCurrent;
+
 	phaseValues() {
 		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = AngleV = AngleI = 0.0;
 		Name[0] = 0;
@@ -72,20 +282,40 @@ struct phaseValues
 
 	phaseValues(const char* name) {
 		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = 0.0;
-		strncpy(Name, name, 7);
+		strncpy(Name, name, sizeof(Name) - 1);
 		Name[7] = 0;
-	};
 
-	phaseEvent_t voltageDip;
-	phaseEvent_t voltageSwell;
-	phaseEvent_t overCurrent;
+		//Buscar en el nombre de la fase la letra que la identifica y asignarla las propiedades a los eventos
+		phaseName phase;
+		for (int32_t i = (strlen(Name)-1); i >= 0; i--) {
+			char f = toUpperCase(Name[i]);
+			if (f == 'R') {
+				phase = phaseName::phaseR;
+				break;
+			}
+			else if (f == 'S') {
+				phase = phaseName::phaseS;
+				break;
+			}
+			else if (f == 'T') {
+				phase = phaseName::phaseT;
+				break;
+			}
+			else if (f == 'N') {
+				phase = phaseName::neutral;
+				break;
+			}
+		};
+		voltageDip.setProperties(phase, eventType::voltageDip);
+		voltageSwell.setProperties(phase, eventType::voltageDwell);
+		overCurrent.setProperties(phase, eventType::overCurrent);
+	};
 
 	String getJson() {
 		const uint32_t strSize = 1024;
 		String res;
 		char* str = (char*)malloc(strSize);
 		if (str == nullptr) return res;
-		//"{\"Zero\":%.0f, \"Conversion\":%.0f, \"Weight\":%.3f, \"CalTemp\": %.2f, \"Date\": %d}"
 
 		snprintf(str, strSize, "{\"name\":\"%s\",\"vrms\":%.4f,\"vvrms\":%.4f,\"irms\":%.4f,\"fvrms\":%.4f,\"firms\":%.4f,"
 			"\"freq\":%.2f,\"pf\":%.4f,\"angle\":%.2f,\"vthd\":%.2f,\"ithd\":%.2f,"
@@ -133,8 +363,20 @@ struct meterValues
 		float Freq;			//Frecuencia de fase promedio de todas las fases
 	} average;
 
+	ADE_OISTATUS_t currentEvents;		//Estado de los eventos de corriente
+	ADE_EVENT_STATUS_t voltageEvents;	//Estado de los eventos de voltaje
+
+
 	meterValues() : phaseR("FASE R"), phaseS("FASE S"), phaseT("FASE T"), neutral("NEUTRO") {
 		power.Watt = power.VAR = power.VA = 0;
+	};
+
+	bool isVoltageEventsActive() {
+		return voltageEvents.DIPA || voltageEvents.DIPB || voltageEvents.DIPC || voltageEvents.SWELLA || voltageEvents.SWELLB || voltageEvents.SWELLC;
+	};
+
+	bool isCurrentEventsActive() {
+		return currentEvents.OIPHASE;
 	};
 
 	String getJson() {
@@ -160,7 +402,7 @@ struct meterValues
 		const uint32_t strSize = 1280;
 		char* str = (char*)malloc(strSize);
 		if (str == nullptr) {
-			dest = "";
+			dest = "{}";
 			return;
 		};
 
@@ -236,7 +478,8 @@ typedef struct {
 
 void MeterInit();
 
-void MeterLoop();
+
+void MeterLoadOptions();
 
 void MeterLoop();
 
@@ -251,6 +494,18 @@ void compressWaveBuffer12(int32_t* waveBufferRaw, uint8_t* waveBuffer, uint16_t 
 
 void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len);
 
+
+void acEventsWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len);
+
+
+void meterCheckEvents();
+
+void meterFastDataSamplePush();
+
+uint16_t meterFastDataSampleGetIndex();
+
+
+fastRMSData_t *meterGetFastDataSample(uint32_t sample);
 
 void meterReadWaveBuffer();
 
@@ -272,9 +527,9 @@ void meterReadAngles();
 
 void meterReadEnergy();
 
-void meterReadDipSwell();
+ADE_EVENT_STATUS_t meterReadDipSwell();
 
-void meterReadOverCurrent();
+ADE_OISTATUS_t meterReadOverCurrent();
 
 float sumVoltages(float v1, float deg1, float v2, float deg2);
 

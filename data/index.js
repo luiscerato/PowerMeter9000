@@ -81,7 +81,7 @@ function meterOk(resp) {
     $("#gaugeVoltaje").simpleGauge("setValue", resp.vrms.avg);
     $("#gaugeVoltajeF").simpleGauge("setValue", resp.vvrms.avg);
     $("#gaugeCorriente").simpleGauge("setValue", resp.irms.avg);
-    $("#gaugePotencia").simpleGauge("setValue", resp.watt.avg);
+    $("#gaugePotencia").simpleGauge("setValue", (resp.watt.avg/1000).toFixed(1));
 
     // //Llenar las celdas de voltaje
     $(".vvrmsR").text(formatNumber(resp.vvrms.r, "V"));
@@ -100,6 +100,7 @@ function meterOk(resp) {
     $(".irmsS").text(formatNumber(resp.irms.s, "A"));
     $(".irmsT").text(formatNumber(resp.irms.t, "A"));
     $(".irmsN").text(formatNumber(resp.irms.n, "A"));
+    $(".irmsAvg").text(formatNumber(resp.irms.avg, "A"));
 
     // //Potencia activa
     $(".wattR").text(formatNumber(resp.watt.r, "W"));

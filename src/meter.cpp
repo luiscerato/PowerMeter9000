@@ -5,6 +5,17 @@
 #include "freertos/task.h"
 #include "webserver.h"
 
+/*
+	Eventos de fases:
+	Pico alto de voltaje
+	Pico bajo de voltaje
+	Pico de corriente
+	Pérdida de fase
+
+	Eventos generales:
+	Corte de energía
+*/
+
 
 ADE9000 ade(15000000, pinAdeSS, VSPI);
 
@@ -25,11 +36,19 @@ struct TotalEnergyVals MeterEnergy;
 TaskHandle_t meterHandle = NULL;
 
 WFBFixedDataRate_t readBuffer[WFB_SAMPLES_PER_CHANNEL / 2];		//Buffer temporal para leer los datos del wavebuffer (7ch*128 samples)
-uint8_t outputSamples[8064];	//Buffer para 96ms de datos de 12 bits. 96ms ->768 samples por canal. 768*7*(12/8) => 8064 bytes
+uint8_t outputSamples[8064];			//Buffer para 96ms de datos de 12 bits. 96ms ->768 samples por canal. 768*7*(12/8) => 8064 bytes
+fastRMSData_t halfCycleSamples[200];	//Buffer para 2 segundos de datos half
+uint16_t halfCycleSamplesIndex = 0;		//Indice de buffer de muestras rápidas
+uint16_t halfCycleSamplesCount = 0;		//Cantidad de muestras rápidas del buffer
+uint16_t eventsDataPrevSamples = 100;	//Cantidad de muestras a guardar antes del evento
+uint16_t eventsDataPostSamples = 100; 	//Cantodad de muestras a guardar después del úlitmo evento
+uint16_t eventsDataMaxSamples = 300;	//Cantidad máximas de muestras a guardar durante un evento.
 
 scopeInfo_t scopeInfo;
 uint32_t meterUpdated = 0;
 portMUX_TYPE meterMutex = portMUX_INITIALIZER_UNLOCKED;
+
+Preferences meterOptions;
 
 
 void MeterInit()
@@ -46,11 +65,16 @@ void MeterInit()
 	ade.setupADE9000();              // Initialize ADE9000 registers according to values in ADE9000API.h
 	//5 vueltas de cable por cada trafo
 	ade.setNoPowerCutoff(0.5);		//0.5mA es 0A
+	// ade.setNoCurrentCutoff(0.01);
 
 	scopeInfo.currentScale = 1.0;
 	scopeInfo.voltageScale = 1.0;
 	scopeInfo.sampleFreq = 8000;
-	webServerSetMeterEvents(scopeWSevents);
+	webServerSetMeterEvents(scopeWSevents);		//Callback para eventos del websocket del scope
+	webServerSetAcEvents(acEventsWSevents);		//Callback para eventos del websocket de los eventos
+
+
+	MeterLoadOptions();
 
 	xTaskCreatePinnedToCore(MeterTask, "meterTask", 8192, NULL, 10, &meterHandle, APP_CPU_NUM);
 
@@ -59,7 +83,8 @@ void MeterInit()
 	*/
 
 	//Interrupción 0 se va a encargar de desbloquear por eventos de medición
-	ade.setupInterruption0(ADE_MASK0_BITS_EGYRDY | ADE_MASK0_BITS_PAGE_FULL | ADE_MASK0_BITS_RMSONERDY);
+	ade.setupInterruption0(ADE_MASK0_BITS_EGYRDY | ADE_MASK0_BITS_PAGE_FULL | ADE_MASK0_BITS_RMSONERDY 
+		| ADE_MASK0_BITS_RMS1012RDY | ADE_MASK0_BITS_THD_PF_RDY);
 
 	attachInterrupt(pinAdeInt0, []() {
 		BaseType_t switchToMeterTask = pdFALSE; //
@@ -68,11 +93,8 @@ void MeterInit()
 		}, FALLING);
 	ade.clearStatusBit0();
 
+	
 
-	//Configurar los niveles de disparo de los eventos en las señales
-	ade.setDipDetectionLevels(210.0, 5);
-	ade.setSwellDetectionLevels(238.0, 5);
-	ade.enableOverCurrentDetection(5.0);
 
 	//Interrupcion 1 va a desbloquear por eventos en las señales medidas
 	ade.setupInterruption1(ADE_MASK1_BITS_DIPA | ADE_MASK1_BITS_DIPB | ADE_MASK1_BITS_DIPC |
@@ -87,16 +109,24 @@ void MeterInit()
 
 	ade.clearStatusBit1();	//Limpiar flags de interrupciones
 
+	memset(halfCycleSamples, 0, sizeof(halfCycleSamples));	//Poner en 0  buffer de muestras rápidas
+
 	Serial.println("Meter inicializado!");
 }
 
+capturedEvent EventsData(400);
 
 void MeterTask(void* arg)
 {
 	uint32_t waitingTime = 0, runningTime = 0, startTime = 0, stopTime = 0, realTime = 0;
-	ADE_EVENT_STATUS_t lastEvent, event;
+	// ADE_EVENT_STATUS_t lastEvent, event;
 	ADE_OISTATUS_t lastOI, oi;
 	uint32_t EventsCount;
+
+	uint32_t firstEventMs = 0, lastEventMs = 0;
+	uint32_t lastEvent, newEvent;
+	bool recording = false;
+
 
 	while (millis() < 250)
 		vTaskDelay(25 / portTICK_RATE_MS);	//Esperar que todo esté listo
@@ -119,7 +149,7 @@ void MeterTask(void* arg)
 		}
 
 		if (EventsCount == 0)
-			Serial.println("Algo ha ocurrido y no se recibieron interrupciones dentro los 50ms de espera!");
+			debugI("Algo ha ocurrido y no se recibieron interrupciones dentro los 50ms de espera!");
 
 		/*
 			Usar un bloque while para leer los flags de las interrupciones porque se da el caso de que se produce una nueva interrupcion
@@ -128,16 +158,24 @@ void MeterTask(void* arg)
 		*/
 		while (digitalRead(pinAdeInt0) == 0) {		//Leer que causó la interrupcion
 			ADE_STATUS0_t status0 = ade.readStatus0();
+
+			if (ade.isCalibrating(calPhaseGain)) status0.EGYRDY = 0;	//Si está calibrando no se puede leer la energía.
+
 			ade.clearStatusBit0(status0.raw);
 			// if (EventsCount == 0) Serial.printf("Status0=0x%x\n", status0.raw);
-
 			// Serial.printf("Status 0= 0x%X. time: %uus\n", status0, t);
-			if (status0.PAGE_FULL) {
-				meterReadWaveBuffer();
-				meterUpdated++;
-			}
+
 			if (status0.RMSONERDY) {
 				meterReadHalfRMS();
+				meterFastDataSamplePush();	//Meter los datos rápidos en el buffer
+				if (EventsData.isCapturing()) {
+					if (EventsData.isSampleBufferFull())
+						EventsData.stopCapture();
+					else if (millis() - lastEventMs >= 1000)
+						EventsData.stopCapture();
+					else
+						EventsData.pushSamples(&halfCycleSamples[halfCycleSamplesIndex]);
+				}
 				meterUpdated++;
 			}
 			if (status0.RMS1012RDY) {
@@ -157,18 +195,200 @@ void MeterTask(void* arg)
 				meterReadEnergy();
 				meterUpdated++;
 			}
+			if (status0.PAGE_FULL) {
+				meterReadWaveBuffer();
+				meterUpdated++;
+			}
 		}
 
 		while (digitalRead(pinAdeInt1) == 0) {		//Leer que causó la interrupcion
 			ADE_STATUS1_t status1 = ade.readStatus1();
 			if (status1.raw) ade.clearStatusBit1(status1.raw);
 
-			meterReadDipSwell();
+			debugI("status1:0x%x", status1.raw);
+
+			ADE_EVENT_STATUS_t ds = meterReadDipSwell();
 			meterReadOverCurrent();
+			// debugI("DipR:%c, DipS:%c, DipT:%c, SwellR:%c, SwellR:%c, SwellT:%c",
+			// 	ds.DIPA ? '1' : ' ', ds.DIPB ? '1' : ' ', ds.DIPC ? '1' : ' ', ds.SWELLA ? '1' : ' ', ds.SWELLB ? '1' : ' ', ds.SWELLC ? '1' : ' ');
+
+			bool saveEvent = false;
+
+			if (!EventsData.isCapturing()) {
+				lastEventMs = firstEventMs = millis();
+				EventsData.startCapture(eventsDataPrevSamples);
+				//Guardar datos actuales en la primer parte del buffer e iniciar la grabación
+				for (int32_t i = (eventsDataPrevSamples - 1); i >= 0; i--) {
+					EventsData.pushSamples(meterGetFastDataSample(i));
+				}
+				saveEvent = true;
+			}
+			else {
+				lastEventMs = millis();
+				saveEvent = true;
+			}
+
+			//Guardar el evento en el registro
+			if (saveEvent) {
+				if (meterVals.phaseR.voltageDip.hasChanged()) EventsData.pushEvent(meterVals.phaseR.voltageDip.getJson().c_str());
+				if (meterVals.phaseS.voltageDip.hasChanged()) EventsData.pushEvent(meterVals.phaseS.voltageDip.getJson().c_str());
+				if (meterVals.phaseT.voltageDip.hasChanged()) EventsData.pushEvent(meterVals.phaseT.voltageDip.getJson().c_str());
+
+				if (meterVals.phaseR.voltageSwell.hasChanged()) EventsData.pushEvent(meterVals.phaseR.voltageSwell.getJson().c_str());
+				if (meterVals.phaseS.voltageSwell.hasChanged()) EventsData.pushEvent(meterVals.phaseS.voltageSwell.getJson().c_str());
+				if (meterVals.phaseT.voltageSwell.hasChanged()) EventsData.pushEvent(meterVals.phaseT.voltageSwell.getJson().c_str());
+
+				if (meterVals.phaseR.overCurrent.hasChanged()) EventsData.pushEvent(meterVals.phaseR.overCurrent.getJson().c_str());
+				if (meterVals.phaseS.overCurrent.hasChanged()) EventsData.pushEvent(meterVals.phaseS.overCurrent.getJson().c_str());
+				if (meterVals.phaseT.overCurrent.hasChanged()) EventsData.pushEvent(meterVals.phaseT.overCurrent.getJson().c_str());
+				if (meterVals.neutral.overCurrent.hasChanged()) EventsData.pushEvent(meterVals.neutral.overCurrent.getJson().c_str());
+			}
 			meterUpdated++;
 		}
 	}
 }
+
+
+void MeterLoadOptions()
+{
+	debugI("Cargando configuracion de meter");
+	bool dipEnabled, swellEnabled, ocEnabled;
+	float dipVoltage, swellVoltage, ocCurrent;
+	int dipCycles, swellCycles;
+
+    //Cargar valores de deteccion de eventos. TODO: reemplazar por opciones en otro lado
+    meterOptions.begin("meter", false);
+
+	if (!meterOptions.isKey("ready")) {
+		meterOptions.putBool("ready", true);
+		meterOptions.putBool("dipEnabled", true);
+		meterOptions.putFloat("dipVoltage", 200.0);
+		meterOptions.putInt("dipCicles", 5);
+		meterOptions.putBool("swellEnabled", true);
+		meterOptions.putFloat("swellVoltage", 255.0);
+		meterOptions.putInt("swellCicles", 5);
+		meterOptions.putBool("overcurrent", true);
+		meterOptions.putFloat("ocCurrent", 85.0);
+	}
+
+	dipEnabled = meterOptions.getBool("dipEnabled", true);
+	dipVoltage = meterOptions.getFloat("dipVoltage", 0.0);
+	dipCycles = meterOptions.getInt("dipCicles", 5);
+
+	swellEnabled = meterOptions.getBool("swellEnabled", true);
+	swellVoltage = meterOptions.getFloat("swellVoltage", ade.getMaxInputVoltage());
+	swellCycles = meterOptions.getInt("swellCicles", 5);
+
+	ocEnabled = meterOptions.getBool("overcurrent", true);
+	ocCurrent = meterOptions.getFloat("ocCurrent", ade.getMaxInputCurrent());
+	
+
+    meterOptions.end();
+
+	if (!dipEnabled) dipVoltage = 0.0;
+	if (!swellEnabled) swellVoltage = ade.getMaxInputVoltage();
+	if (!ocEnabled) ocCurrent = ade.getMaxInputCurrent();
+
+	debugI("dipEnabled: %s, dipVoltage: %.2f, dipCycles: %d", dipEnabled ? "True" : "False", dipVoltage, dipCycles);
+	debugI("swellEnabled: %s, swellVoltage: %.2f, swellCycles: %d", swellEnabled ? "True" : "False", swellVoltage, swellCycles);
+	debugI("ocEnabled: %s, ocCurrent: %.2f", ocEnabled ? "True" : "False", ocCurrent);
+
+	//Configurar los niveles de disparo de los eventos en las señales
+	// taskENTER_CRITICAL(&meterMutex);
+	// 	taskEXIT_CRITICAL(&meterMutex);
+	ade.setDipDetectionLevels(dipVoltage, dipCycles);
+	ade.setSwellDetectionLevels(swellVoltage, swellCycles);
+	ade.enableOverCurrentDetection(ocCurrent);		//No poner un valor bajo porque se genera un evento cad avez que se produce el overcurrent y se traba el loop del meter task
+
+}
+
+/*
+	Guardar cada nueva muestra en el buffer de lecturas rápidas
+*/
+void meterFastDataSamplePush()
+{
+	halfCycleSamplesIndex++;
+	if (halfCycleSamplesIndex > (fastDataSamplesCount - 1))halfCycleSamplesIndex = 0;
+	timeval stamp;
+	gettimeofday(&stamp, nullptr);
+
+	halfCycleSamples[halfCycleSamplesIndex].timeStamp = (stamp.tv_sec * 1000) + (stamp.tv_usec / 1000);
+	halfCycleSamples[halfCycleSamplesIndex].VrmsR = meterVals.phaseR.FastVrms * 100.0;
+	halfCycleSamples[halfCycleSamplesIndex].VrmsS = meterVals.phaseS.FastVrms * 100.0;
+	halfCycleSamples[halfCycleSamplesIndex].VrmsT = meterVals.phaseT.FastVrms * 100.0;
+	halfCycleSamples[halfCycleSamplesIndex].IrmsR = meterVals.phaseR.FastIrms * 100.0;
+	halfCycleSamples[halfCycleSamplesIndex].IrmsS = meterVals.phaseS.FastIrms * 100.0;
+	halfCycleSamples[halfCycleSamplesIndex].IrmsT = meterVals.phaseT.FastIrms * 100.0;
+	halfCycleSamples[halfCycleSamplesIndex].IrmsN = meterVals.neutral.FastIrms * 100.0;
+
+	halfCycleSamplesCount++;
+	if (halfCycleSamplesCount > (fastDataSamplesCount))halfCycleSamplesCount = fastDataSamplesCount;
+}
+
+/*
+	Devolver la dirección de la muestra indicada en sample
+	Tener en cuenta que 0 es la muestra mas reciente y cuando más alto el numero más antigua es la muestra.
+*/
+fastRMSData_t* meterGetFastDataSample(uint32_t sample)
+{
+	if (sample > halfCycleSamplesCount) return nullptr;
+	int32_t pos = (int32_t)halfCycleSamplesIndex - (int32_t)sample;
+	if (pos < 0) pos += (fastDataSamplesCount - 1);	//Si es negativo es porque hay que empezar por el final
+	return &halfCycleSamples[pos];
+}
+
+uint16_t meterFastDataSampleGetIndex()
+{
+	return halfCycleSamplesIndex;
+}
+
+
+
+void acEventsWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len)
+{
+	if (type == WS_EVT_CONNECT) {
+		Serial.printf("ws[%s][%u] connect\n", server->url(), client->id());
+		client->ping();
+		server->textAll("");
+	}
+	else if (type == WS_EVT_DISCONNECT) {
+		Serial.printf("ws[%s][%u] disconnect\n", server->url(), client->id());
+	}
+	else if (type == WS_EVT_ERROR) {
+		Serial.printf("ws[%s][%u] error(%u): %s\n", server->url(), client->id(), *((uint16_t*)arg), (char*)data);
+	}
+	else if (type == WS_EVT_PONG) {
+		Serial.printf("ws[%s][%u] pong[%u]: %s\n", server->url(), client->id(), len, (len) ? (char*)data : "");
+	}
+	else if (type == WS_EVT_DATA) {
+		AwsFrameInfo* info = (AwsFrameInfo*)arg;
+		String msg = "";
+		if (info->final && info->index == 0 && info->len == len) {
+			Serial.printf("ws[%s][%u] %s-message[%llu]: ", server->url(), client->id(), (info->opcode == WS_TEXT) ? "text" : "binary", info->len);
+
+			if (info->opcode == WS_TEXT) {
+				for (size_t i = 0; i < info->len; i++) {
+					msg += (char)data[i];
+				}
+			}
+			Serial.printf("%s\n", msg.c_str());
+			//Buscar informacion en el mensaje
+			float value;
+
+			if (sscanf((const char*)data, "scaleVoltage=%f", &value) == 1) {
+				if (value > 0.0 && value < 100.0) scopeInfo.voltageScale = value;
+				Serial.printf("Cambiando escala de voltaje a %.3f V/bit\n", value);
+			}
+			else if (sscanf((const char*)data, "scaleCurrent=%f", &value) == 1) {
+				if (value > 0.0 && value < 100.0) scopeInfo.currentScale = value;
+				Serial.printf("Cambiando escala de corriente a %.3f A/bit\n", value);
+			}
+		}
+	}
+}
+
+
+
 
 
 void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len)
@@ -218,38 +438,37 @@ void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEven
 
 void MeterLoop()
 {
-	static uint32_t fast = 0, rms = 0, power = 0, thd = 0, angles = 0, energy_time = 0;
+	static uint32_t index = 0;
+	bool dataReady = false;
 
 	if (meterUpdated) {
 		taskENTER_CRITICAL(&meterMutex);
 		meterUpdated = 0;
 		Meter = meterVals;
+		if (EventsData.isDataReady()) dataReady = true;
 		taskEXIT_CRITICAL(&meterMutex);
 	}
 
-	if (millis() - rms > 199) {
-		rms = millis();
-	}
+	//Una vez capturados los eventos, enviarlos por el web socket
+	if (dataReady) {
+		String events;
+		EventsData.getEvents(events);
+		acEventsWS.textAll(events);		//Enviar eventos 
+		if (mqtt.connected()) {
+			mqtt.publish("PowerMeter9000/events", 0, false, events.c_str());
+		}
+		acEventsWS.binaryAll(EventsData.getBuffer(), EventsData.getSampleCount() * sizeof(fastRMSData_t));	//Enviar array de datos
+		
+		EventsData.reset();
+		debugI("Datos de evento enviado por web socket!");
 
-	if (millis() - fast > 39) {	//Actualizar lecturas rms rápidas 
-		fast = millis();
+		// EventsData.printSamples(index, index+10);
+		// index+=10;
+		// if (index >= EventsData.getSampleCount() ) {
+		// 	EventsData.reset();
+		// }
 	}
-
-	if (millis() - power > 499) {
-		power = millis();
-	}
-
-	if (millis() - thd > 1023) {
-		thd = millis();
-	}
-
-	if (millis() - angles > 499) {
-		angles = millis();
-	}
-
-	if (millis() - energy_time > 499) {
-		energy_time = millis();
-	}
+	else index = 0;
 }
 
 
@@ -451,39 +670,46 @@ void meterReadEnergy()
 	meterVals.energy.VA_H = MeterEnergy.PhaseR.VA_H + MeterEnergy.PhaseS.VA_H + MeterEnergy.PhaseT.VA_H;
 }
 
-void meterReadDipSwell()
+ADE_EVENT_STATUS_t meterReadDipSwell()
 {
 	ADE_EVENT_STATUS_t event;
 	struct VoltageRMSRegs volts;
 
 	event = ade.readEventStatus();
+	event.raw &= 0x3f;		//Enmascarar solo los eventos de voltajes dip y swell
+	meterVals.voltageEvents = event;
+
 	if (event.DIPA || event.DIPB || event.DIPC) ade.readDipLevels(&volts);	//Leer solo si hay un evento activo
 
 	meterVals.phaseR.voltageDip.setStatus(event.DIPA, volts.VoltageRMS_A);
 	meterVals.phaseS.voltageDip.setStatus(event.DIPB, volts.VoltageRMS_B);
 	meterVals.phaseT.voltageDip.setStatus(event.DIPC, volts.VoltageRMS_C);
 
-	if (meterVals.phaseR.voltageDip.hasChanged()) meterVals.phaseR.voltageDip.printEvent("dip", "R");
-	if (meterVals.phaseS.voltageDip.hasChanged()) meterVals.phaseS.voltageDip.printEvent("dip", "S");
-	if (meterVals.phaseT.voltageDip.hasChanged()) meterVals.phaseT.voltageDip.printEvent("dip", "T");
+	if (meterVals.phaseR.voltageDip.hasChanged()) meterVals.phaseR.voltageDip.printEvent();
+	if (meterVals.phaseS.voltageDip.hasChanged()) meterVals.phaseS.voltageDip.printEvent();
+	if (meterVals.phaseT.voltageDip.hasChanged()) meterVals.phaseT.voltageDip.printEvent();
 
 	if (event.SWELLA || event.SWELLB || event.SWELLC) ade.readSwellLevels(&volts);	//Leer solo si hay un evento activo
 	meterVals.phaseR.voltageSwell.setStatus(event.SWELLA, volts.VoltageRMS_A);
 	meterVals.phaseS.voltageSwell.setStatus(event.SWELLB, volts.VoltageRMS_B);
 	meterVals.phaseT.voltageSwell.setStatus(event.SWELLC, volts.VoltageRMS_C);
 
-	if (meterVals.phaseR.voltageSwell.hasChanged()) meterVals.phaseR.voltageSwell.printEvent("swell", "R");
-	if (meterVals.phaseS.voltageSwell.hasChanged()) meterVals.phaseS.voltageSwell.printEvent("swell", "S");
-	if (meterVals.phaseT.voltageSwell.hasChanged()) meterVals.phaseT.voltageSwell.printEvent("swell", "T");
+	if (meterVals.phaseR.voltageSwell.hasChanged()) meterVals.phaseR.voltageSwell.printEvent();
+	if (meterVals.phaseS.voltageSwell.hasChanged()) meterVals.phaseS.voltageSwell.printEvent();
+	if (meterVals.phaseT.voltageSwell.hasChanged()) meterVals.phaseT.voltageSwell.printEvent();
+
+	return event;
 }
 
 
-void meterReadOverCurrent()
+ADE_OISTATUS_t meterReadOverCurrent()
 {
 	ADE_OISTATUS_t status;
 	struct CurrentRMSRegs current;
 
 	status = ade.checkOverCurrentStatus();
+	status.raw &= 0xf;		//Enmascarar solo los eventos de corriente
+	meterVals.currentEvents = status;
 	if (status.OIPHASE) ade.readOverCurrentLevels(&current);	//Leer solo si hay un evento activo
 
 	meterVals.phaseR.overCurrent.setStatus(status.OIPHASEA, current.CurrentRMS_A);
@@ -491,10 +717,12 @@ void meterReadOverCurrent()
 	meterVals.phaseT.overCurrent.setStatus(status.OIPHASEC, current.CurrentRMS_C);
 	meterVals.neutral.overCurrent.setStatus(status.OIPHASEN, current.CurrentRMS_N);
 
-	if (meterVals.phaseR.overCurrent.hasChanged()) meterVals.phaseR.overCurrent.printEvent("overCurrent", "R");
-	if (meterVals.phaseS.overCurrent.hasChanged()) meterVals.phaseS.overCurrent.printEvent("overCurrent", "S");
-	if (meterVals.phaseT.overCurrent.hasChanged()) meterVals.phaseT.overCurrent.printEvent("overCurrent", "T");
-	if (meterVals.neutral.overCurrent.hasChanged()) meterVals.neutral.overCurrent.printEvent("overCurrent", "N");
+	if (meterVals.phaseR.overCurrent.hasChanged()) meterVals.phaseR.overCurrent.printEvent();
+	if (meterVals.phaseS.overCurrent.hasChanged()) meterVals.phaseS.overCurrent.printEvent();
+	if (meterVals.phaseT.overCurrent.hasChanged()) meterVals.phaseT.overCurrent.printEvent();
+	if (meterVals.neutral.overCurrent.hasChanged()) meterVals.neutral.overCurrent.printEvent();
+
+	return status;
 }
 
 
@@ -576,5 +804,8 @@ float sumVoltages(float v1, float deg1, float v2, float deg2)
 	deg2 -= deg1;		//Diferencia en grados entre cada fase
 	//c2 = a^2 + b^2 − 2 a b cos(θ)
 	float sum = v1 * v1 + v2 * v2 - 2 * v1 * v2 * cosf(radians(deg2));
-	return sqrtf(sum);
+	sum = sqrtf(sum);
+	if (isnanf(sum)) sum = 0.0;
+	return sum;
 }
+

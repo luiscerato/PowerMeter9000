@@ -603,7 +603,7 @@ typedef union {
     unsigned PWRRDY : 1;          // PWRRDY: Power values update ready
     unsigned RMSONERDY : 1;       // RMSONERDY: Fast rms½ rms values update
     unsigned RMS1012RDY : 1;      // RMS1012RDY: 10 cycle rms/12 cycle rms values update
-    unsigned THD_PF_RDY : 1;     // THD_PF_RDY: THD and power factor measurements update
+    unsigned THD_PF_RDY : 1;      // THD_PF_RDY: THD and power factor measurements update
     unsigned WFB_TRIG : 1;        // WFB_TRIG: Waveform buffer trigger
     unsigned COH_WFB_FULL : 1;    // COH_WFB_FULL: Waveform buffer full with resampled data
     unsigned MISMTCH : 1;         // MISMTCH: Relationship change between ISUMRMS and ISUMLVL
@@ -665,6 +665,7 @@ typedef union {
     unsigned ZXIA : 1;          // Zero crossing detected on Phase A current
     unsigned ZXIB : 1;          // Zero crossing detected on Phase B current
     unsigned ZXIC : 1;          // Zero crossing detected on Phase C current
+    
     unsigned RSTDONE : 1;       // IC finished power-up sequence after reset or changing modes
     unsigned OI : 1;            // Overcurrent event occurred on one of the phases
     unsigned SEQERR : 1;        // Phase sequence error on Phase voltage zero crossings

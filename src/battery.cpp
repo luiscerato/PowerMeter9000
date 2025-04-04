@@ -60,7 +60,7 @@ void Battery::Loop()
 			change2OTG = false;
 			if (battery.getVBUS() > 4.9)
 				powerSource = PowerSource::Line;
-			else if (battery.getVBUS() > 4.5)
+			else if (battery.getVBUS() > 4.2)
 				powerSource = PowerSource::USB;
 		}
 

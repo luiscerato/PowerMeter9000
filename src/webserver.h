@@ -4,6 +4,7 @@
 
 extern  AsyncWebServer server;
 extern  AsyncWebSocket scopeWS;
+extern  AsyncWebSocket acEventsWS;
 extern  AsyncWebSocket remoteScreen;
 
 
@@ -11,6 +12,12 @@ typedef void (*WSeventFunctionCallback)(AsyncWebSocket* server, AsyncWebSocketCl
 
 void webServerSetMeterEvents(WSeventFunctionCallback func);
 AsyncWebSocket* webServerGetMeterWS();
+
+
+
+void webServerSetAcEvents(WSeventFunctionCallback func);
+
+AsyncWebSocket* webServerGetAcWS();
 
 void Init_WebServer();
 

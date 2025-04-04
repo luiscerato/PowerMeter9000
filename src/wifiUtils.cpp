@@ -5,6 +5,8 @@
 #include "AsyncMqttClient.h"
 #include "ST7920_SPI.h"
 
+WiFiMulti wifiMulti;
+
 Preferences Settings;
 const char* settingsName = "wifi-stuff";
 
@@ -50,6 +52,10 @@ void UtilsLoop()
 	static uint32_t timerWifi, timerMQTT;
 
 	if (WiFi.isConnected()) {
+		wifiMulti.run(50);
+	}
+
+	if (WiFi.isConnected()) {
 		timerWifi = millis();
 		if (usingMQTT) {
 			if (mqtt.connected())
@@ -66,7 +72,8 @@ void UtilsLoop()
 	else {
 		if (millis() - timerWifi > 9999) {
 			timerWifi = millis();
-			WifiReconnect();
+			wifiMulti.run(300);
+			// WifiReconnect();
 		}
 		timerMQTT = millis();
 	}
@@ -190,8 +197,8 @@ void WifiStart()
 	IPAddress ip, mask, gateway, dns1, dns2;
 	bool StaticIP = Settings.getBool("staticIp", false);
 	ip.fromString(Settings.getString("sta-ip", "192.168.1.90"));
-	mask.fromString(Settings.getString("sta-mask", "255.255.255.0"));
-	gateway.fromString(Settings.getString("sta-gw", "192.168.1.1"));
+	mask.fromString(Settings.getString("sta-mask", "255.255.254.0"));
+	gateway.fromString(Settings.getString("sta-gw", "192.168.0.1"));
 	dns1.fromString(Settings.getString("sta-dns1", "8.8.8.8"));
 	dns2.fromString(Settings.getString("sta-dns2", "4.4.4.4"));
 
@@ -211,6 +218,16 @@ void WifiStart()
 
 	String ssid = Settings.getString("sta-ssid", "");
 	String pass = Settings.getString("sta-pass", "");
+	String ssid1 = Settings.getString("sta-ssid1", "");
+	String pass1 = Settings.getString("sta-pass1", "");
+
+	// wifiMulti.setStrictMode(false);  // Default is true.  Library will disconnect and forget currently connected AP if it's not in the AP list.
+	// wifiMulti.setAllowOpenAP(true);  // Default is false.  True adds open APs to the AP list.
+
+	wifiMulti.addAP(ssid.c_str(), pass.length() > 0 ? pass.c_str() : nullptr);
+	wifiMulti.addAP(ssid1.c_str(), pass1.length() > 0 ? pass1.c_str() : nullptr);
+	wifiMulti.addAP("Wifi-Casa", nullptr);
+
 
 	debugI("Intentando conectar a: %s...", ssid);
 	if (WiFi.begin(ssid.c_str(), pass.c_str()))
@@ -485,8 +502,8 @@ bool UtilsLoadDeafultSettings()
 	Settings.putString("sta-pass", "");
 	Settings.putBool("staticIp", true);
 	Settings.putString("sta-ip", "192.168.1.90");
-	Settings.putString("sta-mask", "255.255.255.0");
-	Settings.putString("sta-gw", "192.168.1.1");
+	Settings.putString("sta-mask", "255.255.254.0");
+	Settings.putString("sta-gw", "192.168.0.1");
 	Settings.putString("sta-dns1", "8.8.8.8");
 	Settings.putString("sta-dns2", "4.4.4.4");
 

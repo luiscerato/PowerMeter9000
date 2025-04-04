@@ -10,9 +10,12 @@
 AsyncWebServer server(80);
 AsyncWebSocket scopeWS("/ws");
 AsyncWebSocket remoteScreen("/screen");
+AsyncWebSocket acEventsWS("/acevents");
 
-WSeventFunctionCallback meterEvents = nullptr, screenEvents = nullptr;
 
+WSeventFunctionCallback meterEvents = nullptr, screenEvents = nullptr, acEvents = nullptr;		//Punteros a los callback de los eventos de los websockets
+
+//
 void webServerSetMeterEvents(WSeventFunctionCallback func)
 {
 	if (func != nullptr)
@@ -24,6 +27,19 @@ AsyncWebSocket* webServerGetMeterWS()
 	return &scopeWS;
 }
 
+void webServerSetAcEvents(WSeventFunctionCallback func)
+{
+	if (func != nullptr)
+		acEvents = func;
+}
+
+AsyncWebSocket* webServerGetAcWS()
+{
+	return &acEventsWS;
+}
+
+
+
 void Init_WebServer()
 {
 	static bool CORS = false;
@@ -33,6 +49,9 @@ void Init_WebServer()
 
 	scopeWS.onEvent(meterEvents);
 	server.addHandler(&scopeWS);
+	acEventsWS.onEvent(acEvents);
+	server.addHandler(&acEventsWS);
+
 	// server.addHandler(&remoteScreen);
 
 	// Web Server Root URL
@@ -58,6 +77,21 @@ void Init_WebServer()
 				//Send what you currently have and you will be asked for more again
 				uint32_t count;
 				for (count = 0; count < maxLen && index < (128 * 1024); count++)
+					*buffer++ = '*';
+				debugI("Enviando %s Pos=%d", url.c_str(), index);
+
+				return count;
+				});
+		}
+		else if (url.endsWith(".csv")) {
+			request->send("text/plain", 16 * 1024 * 1024, [](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+				//Write up to "maxLen" bytes into "buffer" and return the amount written.
+				//index equals the amount of bytes that have been already sent
+				//You will not be asked for more bytes once the content length has been reached.
+				//Keep in mind that you can not delay or yield waiting for more data!
+				//Send what you currently have and you will be asked for more again
+				uint32_t count;
+				for (count = 0; count < maxLen && index < (16 * 1024 * 1024); count++)
 					*buffer++ = '*';
 				debugI("Enviando %s Pos=%d", url.c_str(), index);
 
@@ -140,7 +174,7 @@ void Init_WebServer()
 		// 		request->getParam(x)->value().c_str());
 		// }
 		if (request->hasParam("body", true)) {
-			AsyncWebParameter* body = request->getParam("body", true);
+			const AsyncWebParameter* body = request->getParam("body", true);
 			// Serial.printf(" '%s' = '%s'\n", body->name().c_str(), body->value().c_str());
 			int32_t time = body->value().toInt();
 			setTimeTo(time);
