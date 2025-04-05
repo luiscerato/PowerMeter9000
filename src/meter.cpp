@@ -350,6 +350,7 @@ void acEventsWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
 		Serial.printf("ws[%s][%u] connect\n", server->url(), client->id());
 		client->ping();
 		server->textAll("");
+
 	}
 	else if (type == WS_EVT_DISCONNECT) {
 		Serial.printf("ws[%s][%u] disconnect\n", server->url(), client->id());

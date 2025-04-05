@@ -1,5 +1,6 @@
 #include "Arduino.h"
 #include "ESPAsyncWebServer.h"
+#include "Preferences.h"
 #include "SPIFFS.h"
 #include "webserver.h"
 #include "wifiUtils.h"
@@ -14,7 +15,6 @@ AsyncWebSocket acEventsWS("/acevents");
 
 
 WSeventFunctionCallback meterEvents = nullptr, screenEvents = nullptr, acEvents = nullptr;		//Punteros a los callback de los eventos de los websockets
-
 //
 void webServerSetMeterEvents(WSeventFunctionCallback func)
 {
@@ -182,6 +182,109 @@ void Init_WebServer()
 		uint32_t time = getTime(nullptr);
 		request->send(200, "text/plain", String(time));
 		});
+
+
+	server.on("/opts", HTTP_GET, [](AsyncWebServerRequest* request) {
+		//Param[0] -> Namespace
+		//Param[1] -> Key:value
+		Serial.printf("params: %i\n", request->params());
+		for (int x = 0; x < request->params(); x++) {
+			Serial.printf(" p%i-> %i '%s'='%s' -> size: %d\n", x,
+				request->getParam(x)->isPost(),
+				request->getParam(x)->name().c_str(),
+				request->getParam(x)->value().c_str(),
+				request->getParam(x)->size());
+		}
+		String res = "";
+		if (request->params() > 1) {
+			Preferences opts;
+			const String& key = request->getParam(0)->name();
+			const String& val = request->getParam(0)->value();
+
+			if (opts.begin(val.c_str())) {
+				for (int32_t i = 1; i < request->params(); i++) {
+					const String& key = request->getParam(i)->name();
+					const String& val = request->getParam(i)->value();
+					bool write = request->getParam(i)->size() > 0;
+
+					String value;
+					if (opts.isKey(key.c_str())) {
+						PreferenceType type = opts.getType(key.c_str());
+						if (write) {
+							if (type == PT_I8)
+								opts.putChar(key.c_str(), atoi(val.c_str()));
+							else if (type == PT_U8)
+								opts.putUChar(key.c_str(), atoi(val.c_str()));
+							else if (type == PT_I16)
+								opts.putShort(key.c_str(), atoi(val.c_str()));
+							else if (type == PT_U16)
+								opts.putUShort(key.c_str(), atoi(val.c_str()));
+							else if (type == PT_I32)
+								opts.putInt(key.c_str(), atoi(val.c_str()));
+							else if (type == PT_U32)
+								opts.putUInt(key.c_str(), atoi(val.c_str()));
+							else if (type == PT_I64)
+								opts.putLong64(key.c_str(), atoll(val.c_str()));
+							else if (type == PT_U64)
+								opts.putULong64(key.c_str(), atoll(val.c_str()));
+							else if (type == PT_BLOB) {
+								int32_t size = opts.getBytesLength(key.c_str());
+								if (size == sizeof(float))
+									opts.putFloat(key.c_str(), atof(val.c_str()));
+								else if (size == sizeof(double))
+									opts.putDouble(key.c_str(), atoff(val.c_str()));
+								else
+									value = "invalid";
+							}
+							else if (type == PT_STR)
+								value = opts.getString(key.c_str());
+							else 
+								value = "invalid";
+						}
+						
+						if (type == PT_I8)
+							value = opts.getChar(key.c_str());
+						else if (type == PT_U8)
+							value = opts.getUChar(key.c_str());
+						else if (type == PT_I16)
+							value = opts.getShort(key.c_str());
+						else if (type == PT_U16)
+							value = opts.getUShort(key.c_str());
+						else if (type == PT_I32)
+							value = opts.getUInt(key.c_str());
+						else if (type == PT_U32)
+							value = opts.getLong(key.c_str());
+						else if (type == PT_I64)
+							value = (float)opts.getLong64(key.c_str());
+						else if (type == PT_U64)
+							value = (float)opts.getULong64(key.c_str());
+						else if (type == PT_BLOB) {
+							int32_t size = opts.getBytesLength(key.c_str());
+							if (size == sizeof(float))
+								value = opts.getFloat(key.c_str());
+							else if (size == sizeof(double))
+								value = opts.getDouble(key.c_str());
+							else
+								value = "invalid";
+						}
+						else if (type == PT_STR)
+							value = opts.getString(key.c_str());
+						else 
+							value = "invalid";
+					}
+					res += "'" + key + "': " + value + ", ";
+				}
+			}
+			else {
+				res = "No existe el namespace '" + val + "'";
+			}
+			opts.end();
+		}
+		else
+			res = "Debe ingresar un namespace y un par clave-valor!";
+		request->send(200, "text/plain", res);
+		});
+
 
 	server.serveStatic("/", SPIFFS, "/").setCacheControl("max-age=31536000");
 
