@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "webserver.h"
+#include "bl0942/bl0942.h"
 
 /*
 	Eventos de fases:
@@ -18,6 +19,7 @@
 
 
 ADE9000 ade(15000000, pinAdeSS, VSPI);
+BL0942 bl0942(2);					//Usar el puerto serie 2 para el BL0942
 
 const uint8_t NOMINAL_INPUT_VOLTAGE = 220;
 const float NOMINAL_INPUT_CURRENT = 1;/* Current nominal RMS for Input in Amperes */
@@ -110,6 +112,8 @@ void MeterInit()
 	ade.clearStatusBit1();	//Limpiar flags de interrupciones
 
 	memset(halfCycleSamples, 0, sizeof(halfCycleSamples));	//Poner en 0  buffer de muestras rápidas
+
+	bl0942.begin(pinBLRx, pinBLTx);
 
 	Serial.println("Meter inicializado!");
 }
@@ -449,6 +453,8 @@ void MeterLoop()
 		if (EventsData.isDataReady()) dataReady = true;
 		taskEXIT_CRITICAL(&meterMutex);
 	}
+	bl0942.loop();
+	Meter.neutral.Vrms = bl0942.getVoltage();
 
 	//Una vez capturados los eventos, enviarlos por el web socket
 	if (dataReady) {

@@ -487,6 +487,7 @@ void TimeSetServer()
 
 bool UtilsLoadDeafultSettings()
 {
+	uint32_t time = micros();
 	debugI("Cargando configuracion por defecto!!");
 
 	if (Settings.begin("wifi-stuff", false) == false) {
@@ -543,7 +544,8 @@ bool UtilsLoadDeafultSettings()
 	Settings.putString("mqtt-pass", "electro");
 
 	Settings.end();	//Cerrar por las dudas
-	debugI("Configuración cargada!");
+	time = micros() - time;
+	debugI("Configuracion cargada! time: %Uus", time);
 	return true;
 }
 

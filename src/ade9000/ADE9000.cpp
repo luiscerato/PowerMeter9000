@@ -135,13 +135,15 @@ void ADE9000::setupADE9000(void)
 
 void ADE9000::loadCalibration()
 {
-    preferences.begin("ADE9000", false);
 
     // SPI_Write_32(ADDR_APHCAL0, 0xFBFC9813);
     // SPI_Write_32(ADDR_BPHCAL0, 0xFC1BC118);
     // SPI_Write_32(ADDR_CPHCAL0, 0xFBDE7F6F);
     // SPI_Write_32(ADDR_NPHCAL, 0xFBFCF2DE);
 
+    uint32_t time = micros();
+
+    preferences.begin("ADE9000", false);
     SPI_Write_32(ADDR_APHCAL0, preferences.getInt("APHCAL0", 0));
     SPI_Write_32(ADDR_BPHCAL0, preferences.getInt("BPHCAL0", 0));
     SPI_Write_32(ADDR_CPHCAL0, preferences.getInt("CPHCAL0", 0));
@@ -197,6 +199,8 @@ void ADE9000::loadCalibration()
     SPI_Write_32(ADDR_CVRMS1012OS, preferences.getInt("CVRMS1012OS", 0));
 
     preferences.end();
+    time = micros() - time;
+    Serial.printf("Caliracion cargada! time:%Uus", time);
 
     SPI_Write_16(ADDR_EGY_TIME, ADE9000_EGY_TIME);
     SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
@@ -689,19 +693,19 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_IA));            //Fase R    (rango -180° a 180°)
     Data->AngleReg_VA_IA = tempReg;
     tempValue = tempReg * mulConstant;
-    tempValue = limitAngle(0.0, 360.0, 1.0); 
+    tempValue = limitAngle(0.0, 360.0, 1.0);
     if (tempValue > 180.0) tempValue -= 360.0;
     Data->AngleValue_VA_IA = tempValue;
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_IB));            //Fase S    (rango -180° a 180°)
     Data->AngleReg_VB_IB = tempReg;
     tempValue = tempReg * mulConstant;
-    tempValue = limitAngle(0.0, 360.0, 1.0); 
+    tempValue = limitAngle(0.0, 360.0, 1.0);
     if (tempValue > 180.0) tempValue -= 360.0;
     Data->AngleValue_VB_IB = tempValue;
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VC_IC));            //Fase T    (rango -180° a 180°)
     Data->AngleReg_VC_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    tempValue = limitAngle(0.0, 360.0, 1.0); 
+    tempValue = limitAngle(0.0, 360.0, 1.0);
     if (tempValue > 180.0) tempValue -= 360.0;
     Data->AngleValue_VC_IC = tempValue;
 
@@ -709,15 +713,15 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IB));            //Fase R    (rango 0° a 360°)
     Data->AngleReg_IA_IB = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IB = limitAngle(0.0, 360.0, 1.0); 
+    Data->AngleValue_IA_IB = limitAngle(0.0, 360.0, 1.0);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IB_IC));            //Fase S    (rango 0° a 360°)
     Data->AngleReg_IB_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IB_IC = limitAngle(0.0, 360.0, 1.0); 
+    Data->AngleValue_IB_IC = limitAngle(0.0, 360.0, 1.0);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IC));            //Fase T    (rango 0° a 360°)
     Data->AngleReg_IA_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IC = limitAngle(0.0, 360.0, 1.0); 
+    Data->AngleValue_IA_IC = limitAngle(0.0, 360.0, 1.0);
     return micros() - time;
 }
 uint32_t ADE9000::ReadVoltageTHDRegsnValues(VoltageTHDRegs* Data)

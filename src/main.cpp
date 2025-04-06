@@ -283,13 +283,13 @@ bool Draw_Main(lcd_ui* ui, UI_Action action)
 	}
 	else if (action == UI_Action::Run) {
 		ui->lcd.setFont(Small5x7PLBold);
+		if (mode)
+			ui->getWindow()->Title = "Home (Fase-Fase)";
+		else
+			ui->getWindow()->Title = "Home (Fase-Neutro)";
 
 		switch (index) {
 		case 0:         //Dibujar la pantalla principal
-			if (mode)
-				ui->getWindow()->Title = "Principal FF";
-			else
-				ui->getWindow()->Title = "Principal FN";
 
 			lcd.printStr(c1, l1, "R:");
 			if (mode)

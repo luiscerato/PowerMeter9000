@@ -166,13 +166,6 @@ void Init_WebServer()
 
 
 	server.on("/time", HTTP_POST | HTTP_GET, [](AsyncWebServerRequest* request) {
-		// Serial.printf("params: %i\n", request->params());
-		// for (int x = 0; x < request->params(); x++) {
-		// 	Serial.printf(" p%i-> %i '%s'='%s'\n", x,
-		// 		request->getParam(x)->isPost(),
-		// 		request->getParam(x)->name().c_str(),
-		// 		request->getParam(x)->value().c_str());
-		// }
 		if (request->hasParam("body", true)) {
 			const AsyncWebParameter* body = request->getParam("body", true);
 			// Serial.printf(" '%s' = '%s'\n", body->name().c_str(), body->value().c_str());
@@ -187,15 +180,8 @@ void Init_WebServer()
 	server.on("/opts", HTTP_GET, [](AsyncWebServerRequest* request) {
 		//Param[0] -> Namespace
 		//Param[1] -> Key:value
-		Serial.printf("params: %i\n", request->params());
-		for (int x = 0; x < request->params(); x++) {
-			Serial.printf(" p%i-> %i '%s'='%s' -> size: %d\n", x,
-				request->getParam(x)->isPost(),
-				request->getParam(x)->name().c_str(),
-				request->getParam(x)->value().c_str(),
-				request->getParam(x)->size());
-		}
-		String res = "";
+		uint32_t time = micros();
+		String res = "{";
 		if (request->params() > 1) {
 			Preferences opts;
 			const String& key = request->getParam(0)->name();
@@ -203,45 +189,49 @@ void Init_WebServer()
 
 			if (opts.begin(val.c_str())) {
 				for (int32_t i = 1; i < request->params(); i++) {
+					String value;
 					const String& key = request->getParam(i)->name();
 					const String& val = request->getParam(i)->value();
-					bool write = request->getParam(i)->size() > 0;
+					PreferenceType type = opts.getType(key.c_str());
 
-					String value;
-					if (opts.isKey(key.c_str())) {
-						PreferenceType type = opts.getType(key.c_str());
-						if (write) {
-							if (type == PT_I8)
-								opts.putChar(key.c_str(), atoi(val.c_str()));
-							else if (type == PT_U8)
-								opts.putUChar(key.c_str(), atoi(val.c_str()));
-							else if (type == PT_I16)
-								opts.putShort(key.c_str(), atoi(val.c_str()));
-							else if (type == PT_U16)
-								opts.putUShort(key.c_str(), atoi(val.c_str()));
-							else if (type == PT_I32)
-								opts.putInt(key.c_str(), atoi(val.c_str()));
-							else if (type == PT_U32)
-								opts.putUInt(key.c_str(), atoi(val.c_str()));
-							else if (type == PT_I64)
-								opts.putLong64(key.c_str(), atoll(val.c_str()));
-							else if (type == PT_U64)
-								opts.putULong64(key.c_str(), atoll(val.c_str()));
-							else if (type == PT_BLOB) {
-								int32_t size = opts.getBytesLength(key.c_str());
-								if (size == sizeof(float))
-									opts.putFloat(key.c_str(), atof(val.c_str()));
-								else if (size == sizeof(double))
-									opts.putDouble(key.c_str(), atoff(val.c_str()));
-								else
-									value = "invalid";
-							}
-							else if (type == PT_STR)
-								value = opts.getString(key.c_str());
-							else 
-								value = "invalid";
+					if (request->getParam(i)->value().length() > 0) { //Si la longitud de valor es >0, entonces se lo debe escribir
+						debugI("Escribiendo %s:%s", key.c_str(), value.c_str());
+						/*Todo: poner los valores para los tipos UINT*/
+						if (type == PT_I8)
+							opts.putChar(key.c_str(), atoi(val.c_str()));
+						else if (type == PT_U8)
+							opts.putUChar(key.c_str(), atoi(val.c_str()));
+						else if (type == PT_I16)
+							opts.putShort(key.c_str(), atoi(val.c_str()));
+						else if (type == PT_U16)
+							opts.putUShort(key.c_str(), atoi(val.c_str()));
+						else if (type == PT_I32)
+							opts.putInt(key.c_str(), atoll(val.c_str()));
+						else if (type == PT_U32)
+							opts.putUInt(key.c_str(), atoll(val.c_str()));
+						else if (type == PT_I64)
+							opts.putLong64(key.c_str(), atoll(val.c_str()));
+						else if (type == PT_U64)
+							opts.putULong64(key.c_str(), atoll(val.c_str()));
+						else if (type == PT_BLOB) {
+							int32_t size = opts.getBytesLength(key.c_str());
+							if (size == sizeof(float))
+								opts.putFloat(key.c_str(), atof(val.c_str()));
+							else if (size == sizeof(double))
+								opts.putDouble(key.c_str(), atoff(val.c_str()));
+							else
+								debugE("El typo de la clave '%s' no se puede identificar");
 						}
-						
+						else if (type == PT_STR)
+							opts.putString(key.c_str(), val.c_str());
+						else {//La clave no existe
+							debugW("La clave '%s' no existe o no se puede identificar, se la crea como tipo string");
+							opts.putString(key.c_str(), val.c_str());
+						}
+					}
+
+					//Leer el valor de la clave (si es que se escribió en el paso anterior se la envía con el valor escrito)
+					if (opts.isKey(key.c_str())) {
 						if (type == PT_I8)
 							value = opts.getChar(key.c_str());
 						else if (type == PT_U8)
@@ -265,24 +255,29 @@ void Init_WebServer()
 							else if (size == sizeof(double))
 								value = opts.getDouble(key.c_str());
 							else
-								value = "invalid";
+								value = "\"invalid type\"";
 						}
 						else if (type == PT_STR)
-							value = opts.getString(key.c_str());
-						else 
-							value = "invalid";
+							value = "\"" + opts.getString(key.c_str()) + "\"";	//Prepapararlo para Json
+						else
+							value = "\"invalid type\"";
 					}
-					res += "'" + key + "': " + value + ", ";
+					else 
+						value = "\"key no existe\"";
+					if (res.length() > 3) res += ", ";
+					res += "\"" + key + "\": " + value;
 				}
+				res += "}";
 			}
-			else {
-				res = "No existe el namespace '" + val + "'";
-			}
+			else
+				res = "{\"error\":\"no se puede abrir el namespace o no existe\"}";
 			opts.end();
 		}
 		else
-			res = "Debe ingresar un namespace y un par clave-valor!";
-		request->send(200, "text/plain", res);
+			res = "{\"error\":\"se debe indicar el nombre del namespace y una clave a leer o escribir\"}";
+		time = micros() - time;
+		debugI("Tiempo de ejecucion opts: %Uus", time);
+		request->send(200, "application/json", res);
 		});
 
 
