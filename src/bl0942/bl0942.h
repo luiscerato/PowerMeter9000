@@ -97,6 +97,7 @@ public:
     float getCurrent() { return i_rms; };
     float getPower() { return watt; };
     float getEnergy() { return watt; };
+    float getFrequency() { return frequency; };
 
     void setLineFreq(LineFrequency freq) { this->line_freq_ = freq; }
     void setChipAddress(uint8_t address) { this->address_ = address; }
