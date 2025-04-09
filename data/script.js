@@ -49,6 +49,10 @@ $(document).ready(function () {
     }
 
     initUI();
+
+    board.loadNodeFileList(function (res) {
+        $("#sara").text(res);
+    });
 });
 
 
