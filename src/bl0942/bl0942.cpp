@@ -30,7 +30,7 @@ static const uint32_t BL0942_REG_MODE_CF_CNT_ADD_SEL = 0x80;
 static const uint32_t BL0942_REG_MODE_UART_RATE_19200 = 0x200;
 static const uint32_t BL0942_REG_MODE_UART_RATE_38400 = 0x300;
 static const uint32_t BL0942_REG_MODE_DEFAULT =
-BL0942_REG_MODE_RESV | BL0942_REG_MODE_CF_EN | BL0942_REG_MODE_CF_CNT_ADD_SEL;
+BL0942_REG_MODE_RESV | BL0942_REG_MODE_CF_EN | BL0942_REG_MODE_CF_CNT_ADD_SEL | BL0942_REG_MODE_UART_RATE_38400;
 
 static const uint32_t BL0942_REG_SOFT_RESET_MAGIC = 0x5a5a5a;
 static const uint32_t BL0942_REG_USR_WRPROT_MAGIC = 0x55;
@@ -41,17 +41,16 @@ static const uint32_t PKT_TIMEOUT_MS = 200;
 
 void BL0942::begin()
 {
-    debugI("Iniciando BL0942!");
-    HardwareSerial::begin(4800);
-    setup();
+    begin(-1, -1);
 }
 
-void BL0942::begin(uint32_t rx, uint32_t tx)
+void BL0942::begin(int32_t rx, int32_t tx)
 {
     debugI("Iniciando BL0942!");
-    HardwareSerial::begin(4800);
-    this->setPins(rx, tx);
+    HardwareSerial::begin(4800, SERIAL_8N1, rx, tx);
     setup();
+    setup();
+    HardwareSerial::begin(38400, SERIAL_8N1, rx, tx);
 }
 
 void BL0942::loop() {
@@ -59,7 +58,7 @@ void BL0942::loop() {
     int avail = this->available();
 
     if (!avail) {
-        if (millis() - updateTime > 999) {
+        if (millis() - updateTime > 99) {
             updateTime = millis();
             update();   //Enviar comando de actualizacion cada 1 segundos.
         }
@@ -83,7 +82,8 @@ void BL0942::loop() {
             this->received_package_(&buffer);
         }
     }
-    update();
+    // update();
+    updateTime = millis();
     this->rx_start_ = 0;
 }
 
@@ -97,8 +97,7 @@ bool BL0942::validate_checksum_(DataPacket* data) {
     }
     checksum ^= 0xFF;
     if (checksum != data->checksum) {
-        ESP_LOGW(TAG, "BL0942 invalid checksum! 0x%02X != 0x%02X", checksum
-            , data->checksum);
+        debugV("BL0942 invalid checksum! 0x%02X != 0x%02X", checksum, data->checksum);
     }
     return checksum == data->checksum;
 }

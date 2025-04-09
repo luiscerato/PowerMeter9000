@@ -51,6 +51,7 @@ $(document).ready(function () {
     initUI();
 });
 
+
 const spinner = '<span class="spinner-border spinner-border-sm ml-2" role="status" aria-hidden="true"></span>';
 
 //Iconos SVG

@@ -89,7 +89,7 @@ public:
     };
 
     void begin();
-    void begin(uint32_t rx, uint32_t tx);
+    void begin(int32_t rx, int32_t tx);
     void loop();
     void dump_config();
 
