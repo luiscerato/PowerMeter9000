@@ -51,10 +51,50 @@ $(document).ready(function () {
     initUI();
 
     board.loadNodeFileList(function (res) {
-        $("#sara").text(res);
+        let events = [];
+        res.forEach((path) => {
+            //Path: /share/PowerMeterLogs/ACevent_1970-7-21_13-29-36.csv
+            let data = path.replaceAll("/share/PowerMeterLogs/ACevent_", "");
+            let [datePart, timePart] = data.split(".")[0].split("_");
+            let [year, month, day] = datePart.split("-").map(Number); // "7" → 7
+            let [hours, minutes, seconds] = timePart.split("-").map(Number);
+            const date = new Date(year, month - 1, day, hours, minutes, seconds);
+
+            events.push({path: path, date: date});
+        });
+        //Ordenar por fecha
+        events.sort((a, b) => b.date - a.date);
+        //Hacer lista ordenada por fecha y con el nombre del evento
+
+        let list = "";
+        events.forEach((event) => {
+            list += '<a href="' + event.path + '" class="list-group-item">' + event.date.toLocaleString() + "</a>";
+        });
+
+        $("#eventList").html("<ul class='list-group'>" + list + "</ul>");
+
+        $("#eventList").on("click", ".list-group-item", function (e) {
+            e.preventDefault();
+            const path = $(this).attr("href"); // Si el href tenía la ruta completa
+            // alert(path);
+            board.loadNodeFile(
+                path,
+                function (res) {
+                    $("#eventData").html("");
+                    let lines = res.split("\n");
+                    lines.forEach((line) => {
+                        $("#eventData").append(line + "<br>");
+                    });
+                    // $("#eventData").text(res);
+                    // console.log(res);
+                },
+                function (res) {
+                    $("#eventData").text("Fallo al leer el archivo!");
+                }
+            );
+        });
     });
 });
-
 
 const spinner = '<span class="spinner-border spinner-border-sm ml-2" role="status" aria-hidden="true"></span>';
 

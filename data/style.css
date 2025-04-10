@@ -149,6 +149,14 @@ input[type=range][orient=vertical] {
     overflow: hidden;
 }
 
+.eventList {
+    height: 600px;
+    overflow-x: scroll;
+    overflow-y: scroll;
+    width: 100%;
+    /* border: 1px solid; */
+}
+
 .notLoading {
     background-image: url(/data/imgs/alert64p.png);
     background-size: contain;

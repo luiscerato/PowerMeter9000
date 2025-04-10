@@ -9,10 +9,8 @@
         <link rel="stylesheet" type="text/css" href="lib/jquery.simplegauge.css" />
     </head>
     <body>
-        
         <div id="navbar"></div>
 
-        
         <div class="nav_sep container-xl">
             <div class="row text-center mt-4">
                 <h2>Power Meter ADE9000 - Mediciones en tiempo real</h2>
@@ -274,7 +272,14 @@
                     </div>
                 </div>
                 <div class="tab-pane" id="events" role="tabpanel" aria-labelledby="events-tab">
-                    <div id="sara"></div>
+                    <div class="row">
+                        <div class="col-4 eventList">
+                            <div id="eventList"></div>
+                        </div>
+                        <div class="col-8 eventList">
+                            <div id="eventData"></div>
+                        </div>
+                    </div>
                 </div>
                 <div class="tab-pane" id="allMeasures" role="tabpanel" aria-labelledby="allMeasures-tab">
                     <div class="row p-2">
