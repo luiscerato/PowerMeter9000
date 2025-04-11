@@ -54,13 +54,28 @@ $(document).ready(function () {
         let events = [];
         res.forEach((path) => {
             //Path: /share/PowerMeterLogs/ACevent_1970-7-21_13-29-36.csv
-            let data = path.replaceAll("/share/PowerMeterLogs/ACevent_", "");
-            let [datePart, timePart] = data.split(".")[0].split("_");
+            let data = path.replaceAll("/share/PowerMeterLogs/", "");
+            let fase = "",
+                type = "",
+                time,
+                format = "csv";
+            if (data.endWith(".json")) {
+                data = data.split(".");
+                time = data[0];
+                fase = data[1];
+                type = data[2];
+                format = "json";
+            } else {
+                data = data.replaceAll("ACevent_", "");
+                time = data.split(".")[0];
+            }
+
+            let [datePart, timePart] = time.split(".")[0].split("_");
             let [year, month, day] = datePart.split("-").map(Number); // "7" → 7
             let [hours, minutes, seconds] = timePart.split("-").map(Number);
             const date = new Date(year, month - 1, day, hours, minutes, seconds);
 
-            events.push({path: path, date: date});
+            events.push({path: path, date: date, phase: fase, type: type});
         });
         //Ordenar por fecha
         events.sort((a, b) => b.date - a.date);
