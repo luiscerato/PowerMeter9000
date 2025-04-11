@@ -59,7 +59,7 @@ $(document).ready(function () {
                 type = "",
                 time,
                 format = "csv";
-            if (data.endWith(".json")) {
+            if (data.endsWith(".json")) {
                 data = data.split(".");
                 time = data[0];
                 fase = data[1];
@@ -83,7 +83,10 @@ $(document).ready(function () {
 
         let list = "";
         events.forEach((event) => {
-            list += '<a href="' + event.path + '" class="list-group-item">' + event.date.toLocaleString() + "</a>";
+            detail = event.phase.length > 0 ? " | " + event.phase : ""; 
+            if (detail.length > 0 && event.type.length > 0) detail += " | ";
+            detail += event.type;
+            list += '<a href="' + event.path + '" class="list-group-item">' + event.date.toLocaleString() + detail + "</a>";
         });
 
         $("#eventList").html("<ul class='list-group'>" + list + "</ul>");
