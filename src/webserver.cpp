@@ -281,7 +281,8 @@ void Init_WebServer()
 		});
 
 
-	server.serveStatic("/", SPIFFS, "/").setCacheControl("max-age=31536000");
+	// server.serveStatic("/", SPIFFS, "/").setCacheControl("max-age=31536000");	//Los archivos se pueden almacenas en el servidor por un año
+	server.serveStatic("/", SPIFFS, "/"); //.setCacheControl("max-age=31536000");	//En modo develop hay que actualiza a cada rato
 
 
 	// Para habilitar CORS. Al simular desde un servidor local no se puede llamar a la API. Con esto se soluciona.

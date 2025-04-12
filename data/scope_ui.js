@@ -27,18 +27,18 @@ function initUI() {
     });
 
     //Escalas
-    $("#rangeVolt").change(() => {
-        let volts = parseInt($("#rangeVolt")[0].value);
+    $("#selectVoltage").change(() => {
+        let volts = parseFloat($("#selectVoltage")[0].value);
         Scope.setOptions({voltDiv: volts});
         updateScales();
     });
-    $("#rangeCorr").change(() => {
-        let corriente = parseInt($("#rangeCorr")[0].value);
+    $("#selectCurrent").change(() => {
+        let corriente = parseFloat($("#selectCurrent")[0].value);
         Scope.setOptions({corrDiv: corriente});
         updateScales();
     });
-    $("#rangeTiempo").change(() => {
-        let tiempo = parseInt($("#rangeTiempo")[0].value);
+    $("#selectTimeDiv").change(() => {
+        let tiempo = parseFloat($("#selectTimeDiv")[0].value);
         Scope.setOptions({timeDiv: tiempo});
         updateScales();
     });
@@ -148,12 +148,9 @@ function updateSwitchsChannels() {
 
 function updateScales() {
     let scales = Scope.getDivScales();
-    $("#rangeVolt").val(scales.Voltage.step);
-    $("#lblVoltDiv").text(scales.Voltage.value + " V/div");
-    $("#rangeCorr").val(scales.Current.step);
-    $("#lblCorrDiv").text(scales.Current.value + " A/div");
-    $("#rangeTiempo").val(scales.Time.step);
-    $("#lblTimeDiv").text(scales.Time.value + " ms/div");
+    $("#selectVoltage").val(scales.Voltage);
+    $("#selectCurrent").val(scales.Current);
+    $("#selectTimeDiv").val(scales.Time);
 }
 
 function updateTrigger() {

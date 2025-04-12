@@ -11,7 +11,7 @@
         <div id="navbar"></div>
 
         <div class="container-fluid nav_sep">
-            <div class="row p-2">
+            <div class="row p-2" id="scopeUI">
                 <div class="col-sm-12 col-md-9 p-1 pt-2 pb-2">
                     <div class="card p-1">
                         <div id="chartContainer" style="height: 600px"></div>
@@ -22,7 +22,7 @@
                     <div class="card mb-2">
                         <div class="card-header text-center p-1">Canales</div>
                         <div class="card-body pt-1 pb-1">
-                            <div class="row p-0">
+                            <div class="row p-0" id="scopePanelComandos">
                                 <div class="col p-1">
                                     <button type="button" class="btn btn-primary w-100" id="btnStartStop">Iniciar</button>
                                 </div>
@@ -100,34 +100,61 @@
                             </div>
                         </div>
                     </div>
-                    <div class="card mb-2">
+                    <div class="card mb-2" id="scopePanelEscalas">
                         <div class="card-header text-center p-1">Escalas</div>
                         <div class="card-body p-1">
                             <div>
                                 <div class="">
-                                    <label for="rangeVolt" class="escalasLabel">Voltaje</label>
-                                    <input type="range" id="rangeVolt" min="0" max="10" value="10" class="escalasRange" />
-                                    <label id="lblVoltDiv" class="escalasLabel">25ms/Div</label>
+                                    <label class="label">Voltaje</label>
+                                    <select class="form-select" aria-label="Voltaje" id="selectVoltage">
+                                        <option value="0.01">0.01V/div</option>
+                                        <option value="0.1">0.1V/div</option>
+                                        <option value="1">1V/div</option>
+                                        <option value="2">2V/div</option>
+                                        <option value="5">5V/div</option>
+                                        <option selected value="10">10V/div</option>
+                                        <option value="20">20V/div</option>
+                                        <option value="50">50V/div</option>
+                                        <option value="100">100V/div</option>
+                                      </select>
                                 </div>
                             </div>
                             <div>
                                 <div>
-                                    <label for="rangeCorr" class="escalasLabel">Corriente</label>
-                                    <input type="range" id="rangeCorr" min="0" max="12" value="12" class="escalasRange" />
-                                    <label id="lblCorrDiv" class="escalasLabel">25ms/Div</label>
+                                    <label class="label">Corriente</label>
+                                    <select class="form-select" aria-label="Corriente" id="selectCurrent">
+                                        <option value="0.01">0.01A/div</option>
+                                        <option value="0.1">0.1A/div</option>
+                                        <option value="1">1A/div</option>
+                                        <option value="2">2A/div</option>
+                                        <option value="5">5A/div</option>
+                                        <option selected value="10">10A/div</option>
+                                        <option value="20">20A/div</option>
+                                        <option value="50">50A/div</option>
+                                        <option value="100">100A/div</option>
+                                      </select>
                                 </div>
                             </div>
                             <div>
                                 <div>
-                                    <label for="rangeTiempo" class="escalasLabel">Tiempo</label>
-                                    <input type="range" id="rangeTiempo" min="0" max="9" value="5" class="escalasRange" />
-                                    <label id="lblTimeDiv" class="escalasLabel">25ms/Div</label>
+                                    <label class="label">Tiempo</label>
+                                    <select class="form-select" aria-label="Tiempo" id="selectTimeDiv">
+                                        <option value="0.01">0.01ms/div</option>
+                                        <option value="0.1">0.1ms/div</option>
+                                        <option value="1">1ms/div</option>
+                                        <option value="2">2ms/div</option>
+                                        <option value="5">5ms/div</option>
+                                        <option selected value="10">10ms/div</option>
+                                        <option value="20">20ms/div</option>
+                                        <option value="50">50ms/div</option>
+                                        <option value="100">100ms/div</option>
+                                      </select>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="card">
+                    <div class="card" id="scopePanelTrigger">
                         <div class="card-header text-center p-1">Trigger</div>
                         <div class="card-body p-1">
                             <div>

@@ -25,6 +25,8 @@ class capturedEvent {
 	uint32_t prevSampleQty;				//Cantidad de muestras previas
 	bool capturing, canDownload, canStart;
 	timeval startDate, endDate;
+	uint32_t dipCycles = 5, swellCycles = 5;
+	float dipVoltage, swellVoltage, overCurrent;
 
 	void init(uint32_t maxSamples) {
 		data = nullptr;
@@ -38,6 +40,10 @@ class capturedEvent {
 	};
 
 public:
+
+	void setDipEventParam(float vLevel, uint32_t halfCycles) {dipVoltage = vLevel; dipCycles = halfCycles;};
+	void seSwellEventParam(float vLevel, uint32_t halfCycles) {swellVoltage = vLevel; swellCycles = halfCycles;}
+	void setOverCurrentParam(float iLevel) {overCurrent = iLevel; };
 
 	capturedEvent(uint16_t maxSamples){ init(maxSamples);};
 
@@ -113,7 +119,7 @@ public:
 
 		char info[300];
 		snprintf(info, 128, "{\"event\": %d, \"sampleCount\": %d, \"triggerSample\": %d, \"start\": %u%u, \"end\": %u%u, \"list\":", 
-			eventCounter, sampleCount, prevSampleQty, startDate.tv_sec, startDate.tv_usec/1000, startDate.tv_sec, startDate.tv_usec/1000);
+			eventCounter, sampleCount, prevSampleQty, startDate.tv_sec, startDate.tv_usec/1000, endDate.tv_sec, endDate.tv_usec/1000);
 		
 		event.reserve(events.length() + 300);
 		event = info;

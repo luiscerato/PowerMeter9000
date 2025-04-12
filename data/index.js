@@ -65,12 +65,121 @@ function initUI() {
         if (size > 320) size = 320;
 
         console.log(width, height, size);
-
-        // $("#gaugeVoltaje").simpleGauge(getGaugeOptions("Voltaje"));
-        // $("#gaugeVoltajeF").simpleGauge(getGaugeOptions("Voltaje Fases"));
-        // $("#gaugeCorriente").simpleGauge(getGaugeOptions("Corriente"));
-        // $("#gaugePotencia").simpleGauge(getGaugeOptions("Potencia"));
     });
+
+    // Escuchar el evento en los botones de los tabs
+    $('button[data-bs-toggle="tab"]').on("shown.bs.tab", function (e) {
+        // Obtener el ID del tab panel objetivo (data-bs-target)
+        const tabTarget = $(e.target).attr("data-bs-target");
+
+        // Verificar si es el tab "Events"
+        if (tabTarget !== "#events") return;
+
+        $.getScript("scope.js")
+            .done(function () {
+                $.getScript("lib/canvasjs.min.js")
+                    .done(function () {
+                        console.log("Script canvasjs cargado!");
+                        Scope.begin("chartContainer", null, "event");
+                    })
+                    .fail(function () {
+                        console.error("Error al cargar el script de eventos");
+                    });
+            })
+            .fail(function () {
+                console.error("Error al cargar el script de eventos");
+            });
+
+        $("#eventData").load("scope.html #scopeUI");
+
+        meterLoadEventsList();
+    });
+}
+
+function meterLoadEventsList() {
+    board.loadNodeFileList(function (res) {
+        console.log("Lista de archivos cargada!");
+        let events = [];
+        res.forEach((path) => {
+            //Path: /share/PowerMeterLogs/ACevent_1970-7-21_13-29-36.csv
+            let data = path.replaceAll("/share/PowerMeterLogs/", "");
+            let fase = "",
+                type = "",
+                time,
+                format = "csv";
+            if (data.endsWith(".json")) {
+                data = data.split(".");
+                time = data[0];
+                fase = data[1];
+                type = data[2];
+                format = "json";
+            } else {
+                data = data.replaceAll("ACevent_", "");
+                time = data.split(".")[0];
+            }
+
+            let [datePart, timePart] = time.split(".")[0].split("_");
+            let [year, month, day] = datePart.split("-").map(Number); // "7" → 7
+            let [hours, minutes, seconds] = timePart.split("-").map(Number);
+            const date = new Date(year, month - 1, day, hours, minutes, seconds);
+
+            events.push({path: path, date: date, phase: fase, type: type});
+        });
+        //Ordenar por fecha
+        events.sort((a, b) => b.date - a.date);
+        //Hacer lista ordenada por fecha y con el nombre del evento
+
+        let list = "";
+        events.forEach((event) => {
+            detail = event.phase.length > 0 ? " | " + event.phase : "";
+            if (detail.length > 0 && event.type.length > 0) detail += " | ";
+            detail += event.type;
+            list += '<a href="' + event.path + '" class="list-group-item">' + event.date.toLocaleString() + detail + "</a>";
+        });
+
+        $("#eventList").html("<ul class='list-group'>" + list + "</ul>");
+
+        $("#eventList").on("click", ".list-group-item", function (e) {
+            e.preventDefault();
+            const path = $(this).attr("href"); // Si el href tenía la ruta completa
+            board.loadNodeFile(
+                path,
+                function (res) {
+                    // $("#eventData").html("");
+                    // let lines = res.split("\n");
+                    // lines.forEach((line) => {
+                    //     $("#eventData").append(line + "<br>");
+                    // });
+                    // $("#eventData").text(res);
+                    // console.log(res);
+                    let event = meterParseEventFile(res);
+                    Scope.loadEventData(event);
+                },
+                function (res) {
+                    $("#eventData").text("Fallo al leer el archivo!");
+                }
+            );
+        });
+    });
+}
+
+function meterParseEventFile(data) {
+    data = JSON.parse(data);
+    let resp = {};
+    resp.eventInfo = data.eventInfo;
+    resp.waves = {t: [], vr: [], vs: [], vt: [], ir: [], is: [], it: [], in: []};
+
+    data.datos.forEach((s) => {
+        resp.waves.t.push(s[0]);
+        resp.waves.vr.push(s[1]);
+        resp.waves.vs.push(s[2]);
+        resp.waves.vt.push(s[3]);
+        resp.waves.ir.push(s[4]);
+        resp.waves.is.push(s[5]);
+        resp.waves.it.push(s[6]);
+        resp.waves.in.push(s[7]);
+    });
+    return resp;
 }
 
 function meterOk(resp) {
@@ -81,7 +190,7 @@ function meterOk(resp) {
     $("#gaugeVoltaje").simpleGauge("setValue", resp.vrms.avg);
     $("#gaugeVoltajeF").simpleGauge("setValue", resp.vvrms.avg);
     $("#gaugeCorriente").simpleGauge("setValue", resp.irms.avg);
-    $("#gaugePotencia").simpleGauge("setValue", (resp.watt.avg/1000).toFixed(1));
+    $("#gaugePotencia").simpleGauge("setValue", (resp.watt.avg / 1000).toFixed(1));
 
     // //Llenar las celdas de voltaje
     $(".vvrmsR").text(formatNumber(resp.vvrms.r, "V"));

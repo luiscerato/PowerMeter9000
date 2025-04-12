@@ -1,15 +1,11 @@
 let Scope = {};
 
 // Object.defineProperty(Scope, scaleCorriente, {value: [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100], writable: false, configurable: false});
-
-const scaleCorriente = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100]; //Amperes por división vertical
-const scaleVoltaje = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500]; //Voltios por división vertical
-const scaleTiempo = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50]; //Ms por división horizontal
 const colors = {r: "#804000", s: "#000000", t: "#ff0000", n: "#0000cc", ir: "#cc6600", vr: "#ff9933", is: "#404040", is: "#999999", it: "#cc0000", vt: "#ff3333", in: "#0000cc"};
 
 Scope.Data = {
     sample_rate: 8000,
-    Scale: {Current: 10, Voltage: 50, Time: 10},
+    Scale: {Current: 10, Voltage: 100, Time: 10},
     Trigger: {Channel: 0, Edge: "rising", Value: 0, rechazo: 3},
     window: 320,
     waves: [
@@ -24,9 +20,12 @@ Scope.Data = {
     ],
 };
 
+Scope.mode = "scope";
+
 Scope.Buffer = [[], [], [], [], [], [], []]; //Datos que van llegando
 
-Scope.begin = function (at, server) {
+Scope.begin = function (at, server, modo) {
+    if (modo != null) Scope.mode = modo;
     console.log("Iniciando aplicación de osciloscopio!");
     Scope.initGraph(at);
 
@@ -36,10 +35,27 @@ Scope.begin = function (at, server) {
         x.data = Array(Scope.Data.window).fill(0);
     });
 
+    Scope.setOptions({corrDiv: 10, voltDiv: 100, timeDiv: 10});
+
     Scope.drawWaves();
 
     Scope.server = server;
+
     // Scope.start();
+};
+
+Scope.loadEventData = function (eventData) {
+    Scope.Data.eventInfo = eventData.eventInfo;
+    Scope.Data.waves[0].data = eventData.waves.ir;
+    Scope.Data.waves[1].data = eventData.waves.vr;
+    Scope.Data.waves[2].data = eventData.waves.is;
+    Scope.Data.waves[3].data = eventData.waves.vs;
+    Scope.Data.waves[4].data = eventData.waves.it;
+    Scope.Data.waves[5].data = eventData.waves.vt;
+    Scope.Data.waves[6].data = eventData.waves.in;
+    Scope.Data.timeStamps = eventData.waves.t;
+
+    Scope.drawWaves();
 };
 
 Scope.start = function () {
@@ -134,34 +150,34 @@ Scope.newData = function (data) {
 
 Scope.setOptions = function (options) {
     if (options.hasOwnProperty("corrDiv")) {
-        let div = limitarValor(options.corrDiv, 0, scaleCorriente.length - 1);
+        let div = limitarValor(options.corrDiv, 0.01, 100.0);
         if (isNaN(div)) console.warn(`corrDiv no tiene un valor correcto, debe ser Number() ${div}`);
         else {
-            Scope.Data.Scale.Current = scaleCorriente[div];
-            let scale = (scaleCorriente[div] * 10) / 4096;
-            Scope.websocket.send("scaleCurrent=" + scale);
+            Scope.Data.Scale.Current = div;
+            let scale = (div * 10) / 4096;
             Scope.Data.waves[0].gain = scale;
             Scope.Data.waves[2].gain = scale;
             Scope.Data.waves[4].gain = scale;
             Scope.Data.waves[6].gain = scale;
+            if (Scope.websocket) Scope.websocket.send("scaleCurrent=" + scale);
         }
     }
     if (options.hasOwnProperty("voltDiv")) {
-        let div = limitarValor(options.voltDiv, 0, scaleVoltaje.length - 1);
+        let div = limitarValor(options.voltDiv, 0.01, 500.0);
         if (isNaN(div)) console.warn(`voltDiv no tiene un valor correcto, debe ser Number() ${div}`);
         else {
-            Scope.Data.Scale.Voltage = scaleVoltaje[div];
-            let scale = (scaleVoltaje[div] * 10) / 4096;
-            Scope.websocket.send("scaleVoltage=" + scale);
+            Scope.Data.Scale.Voltage = div;
+            let scale = (div * 10) / 4096;
             Scope.Data.waves[1].gain = scale;
             Scope.Data.waves[3].gain = scale;
             Scope.Data.waves[5].gain = scale;
+            if (Scope.websocket) Scope.websocket.send("scaleVoltage=" + scale);
         }
     }
     if (options.hasOwnProperty("timeDiv")) {
-        let div = limitarValor(options.timeDiv, 0, scaleTiempo.length - 1);
+        let div = limitarValor(options.timeDiv, 0.01, 500.0);
         if (isNaN(div)) console.warn(`timeDiv no tiene un valor correcto, debe ser Number() ${div}`);
-        else Scope.Data.Scale.Time = scaleTiempo[div];
+        else Scope.Data.Scale.Time = div;
     }
     if (options.hasOwnProperty("corrR")) Scope.Data.waves[0].visible = Boolean(options.corrR);
     if (options.hasOwnProperty("voltR")) Scope.Data.waves[1].visible = Boolean(options.voltR);
@@ -201,9 +217,9 @@ Scope.setOptions = function (options) {
 
 Scope.getDivScales = function () {
     let scales = {};
-    scales.Voltage = {value: Scope.Data.Scale.Voltage, step: scaleVoltaje.indexOf(Scope.Data.Scale.Voltage)};
-    scales.Current = {value: Scope.Data.Scale.Current, step: scaleVoltaje.indexOf(Scope.Data.Scale.Current)};
-    scales.Time = {value: Scope.Data.Scale.Time, step: scaleVoltaje.indexOf(Scope.Data.Scale.Time)};
+    scales.Voltage = Scope.Data.Scale.Voltage;
+    scales.Current = Scope.Data.Scale.Current;
+    scales.Time = Scope.Data.Scale.Time;
     scales.SampleRate = Scope.Data.sample_rate;
     scales.SampleCount = Scope.Data.window;
     return scales;
@@ -229,11 +245,16 @@ Scope.getTriggerInfo = function () {
 };
 
 Scope.drawWaves = function () {
+    let mode = Scope.mode === "event" ? false : true;
     let dataSeries = [];
     let ms = (1 / Scope.Data.sample_rate) * 1000;
     //Ajustar escalas de tiempo
     Scope.Data.window = 10 * Scope.Data.Scale.Time * (Scope.Data.sample_rate / 1000);
     let offset = Scope.Data.window / 2;
+    let minV = Infinity,
+        maxV = -Infinity,
+        minI = Infinity,
+        maxI = -Infinity;
 
     Scope.Data.waves.forEach((element) => {
         const type = element.id.slice(0, 1);
@@ -247,10 +268,27 @@ Scope.drawWaves = function () {
                 yValueFormatString: type == "v" ? "0.00V" : type == "i" ? "0.000A" : "",
                 color: element.color,
             };
-            let points = element.data.map((value, index) => ({x: (index + -offset) * ms, y: value}));
+
+            let points;
+            if (mode) {
+                points = element.data.map((value, index) => ({x: (index + -offset) * ms, y: value}));
+            }
+            // points = element.data.map((value, index) => ({x: index, y: value}));
+            else {
+                points = element.data.map((value, index) => ({x: new Date(Scope.Data.timeStamps[index]), y: value}));
+            }
 
             serie.dataPoints = points;
             dataSeries.push(serie);
+            let min = Math.min(...element.data);
+            let max = Math.max(...element.data);
+            if (type == "i") {
+                if (min < minI) minI = min;
+                if (max > maxI) maxI = max;
+            } else {
+                if (min < minV) minV = min;
+                if (max > maxV) maxV = max;
+            }
         }
     });
 
@@ -258,16 +296,37 @@ Scope.drawWaves = function () {
     let scaleY2 = (Scope.Data.Scale.Voltage * 10) / 2;
 
     Scope.options.data = dataSeries;
-    Scope.options.axisX.minimum = -offset * ms;
-    Scope.options.axisX.maximum = offset * ms;
-    Scope.options.axisX.interval = (Scope.Data.window * ms) / 10;
-    Scope.options.axisY.maximum = scaleY;
-    Scope.options.axisY.minimum = -scaleY;
-    Scope.options.axisY.interval = (2 * scaleY) / 10;
+    if (mode) {
+        Scope.options.axisX.minimum = -offset * ms;
+        Scope.options.axisX.maximum = offset * ms;
+        Scope.options.axisX.interval = (Scope.Data.window * ms) / 10;
+        Scope.options.axisY.maximum = scaleY;
+        Scope.options.axisY.minimum = -scaleY;
+        Scope.options.axisY.interval = (2 * scaleY) / 10;
 
-    Scope.options.axisY2.maximum = scaleY2;
-    Scope.options.axisY2.minimum = -scaleY2;
-    Scope.options.axisY2.interval = (2 * scaleY2) / 10;
+        Scope.options.axisY2.maximum = scaleY2;
+        Scope.options.axisY2.minimum = -scaleY2;
+        Scope.options.axisY2.interval = (2 * scaleY2) / 10;
+    } else {
+        // Scope.options.axisX.minimum = new Date(Scope.Data.eventInfo.start);
+        // Scope.options.axisX.maximum = new Date(Scope.Data.eventInfo.end);
+        // Scope.options.axisX.interval = (Scope.Data.window * ms) / 10
+        let diff = (maxI - minI) * 0.1;
+        Scope.options.axisY.maximum = maxI + diff;
+        Scope.options.axisY.minimum = minI - (minI <= 0 ? 0: diff);
+        if (Scope.options.axisY.maximum < 1) Scope.options.axisY.maximum = 1;
+        Scope.options.axisY.interval = (Scope.options.axisY.maximum - Scope.options.axisY.minimum) / 10;
+
+        diff = (maxV - minV) * 0.1;
+        Scope.options.axisY2.maximum = maxV + diff;
+        Scope.options.axisY2.minimum = minV - (minV <= 0 ? 0: diff);
+        if (Scope.options.axisY2.maximum < 1) Scope.options.axisY2.maximum = 1;
+        Scope.options.axisY2.interval = (Scope.options.axisY2.maximum - Scope.options.axisY2.minimum) / 10;
+        Scope.options.title.text = new Date(Scope.Data.eventInfo.start).toLocaleString()
+        Scope.options.title.text += ", evento " + Scope.Data.eventInfo.list[0].type  + " en " + Scope.Data.eventInfo.list[0].phase;
+        Scope.options.title.text += ", duración: " + (Scope.Data.eventInfo.sampleCount*10) + "ms."
+        // Scope.options.title.text += ", duración: " + (Scope.Data.eventInfo.end-Scope.Data.eventInfo.start) + "ms."
+    }
 
     Scope.chart.render();
 };
@@ -277,6 +336,7 @@ Scope.drawWaves = function () {
 */
 
 Scope.initGraph = function (container) {
+    let events = false;
     Scope.options = {
         zoomEnabled: true,
         zoomType: "xy",
@@ -284,11 +344,14 @@ Scope.initGraph = function (container) {
         // height: 600,
         title: {
             text: "Osciloscopio",
+            fontSize: 20,
         },
         toolTip: {
             shared: true,
             contentFormatter: function (e) {
-                let content = `<strong>Posición:</strong> ${e.entries[0].dataPoint.x.toFixed(3)}ms <br/>`;
+                let content;
+                if (Scope.mode === "event") content = `<strong>Posición:</strong> ${e.entries[0].dataPoint.x.toLocaleString()} <br/>`;
+                else content = `<strong>Posición:</strong> ${e.entries[0].dataPoint.x.toFixed(3)}ms <br/>`;
                 for (let i = 0; i < e.entries.length; i++) {
                     let unit = e.entries[i].dataSeries.name.slice(0, 1).toLowerCase();
                     unit = unit == "c" ? "A" : unit == "v" ? "V" : "";
@@ -321,29 +384,12 @@ Scope.initGraph = function (container) {
             interval: 4096 / 10,
         },
         axisX: {
-            valueFormatString: "0.0ms",
+            valueFormatString: Scope.mode === "event" ? "HH:mm:ss.fff" : "0.0ms",
             interval: 80,
             gridDashType: "dot",
             gridThickness: 1,
         },
-        data: [
-            {
-                type: "line",
-                axisYType: "primary",
-                name: "San Fransisco",
-                showInLegend: true,
-                markerSize: 0,
-                yValueFormatString: "0.00V",
-            },
-            {
-                type: "line",
-                axisYType: "secondary",
-                name: "San Fransisco",
-                showInLegend: true,
-                markerSize: 0,
-                yValueFormatString: "0.000A",
-            },
-        ],
+        data: [],
     };
 
     Scope.chart = new CanvasJS.Chart(container, Scope.options);

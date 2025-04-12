@@ -293,6 +293,10 @@ void MeterLoadOptions()
 	if (!swellEnabled) swellVoltage = ade.getMaxInputVoltage();
 	if (!ocEnabled) ocCurrent = ade.getMaxInputCurrent();
 
+	EventsData.setDipEventParam(dipVoltage, dipCycles);
+	EventsData.seSwellEventParam(swellVoltage, swellCycles);
+	EventsData.setOverCurrentParam(ocCurrent);
+
 	debugI("dipEnabled: %s, dipVoltage: %.2f, dipCycles: %d", dipEnabled ? "True" : "False", dipVoltage, dipCycles);
 	debugI("swellEnabled: %s, swellVoltage: %.2f, swellCycles: %d", swellEnabled ? "True" : "False", swellVoltage, swellCycles);
 	debugI("ocEnabled: %s, ocCurrent: %.2f", ocEnabled ? "True" : "False", ocCurrent);
