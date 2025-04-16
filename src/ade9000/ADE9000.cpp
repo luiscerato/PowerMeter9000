@@ -676,15 +676,15 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VB));            //Fase R    (rango 0° a 360°)
     Data->AngleReg_VA_VB = tempReg;
     tempValue = tempReg * mulConstant; // Calculate Angle in degrees
-    Data->AngleValue_VA_VB = limitAngle(0.0, 360.0, 1.0);       //Valor normal 120°
+    Data->AngleValue_VA_VB = limitAngle(tempValue, 0.0, 360.0, 1.0);       //Valor normal 120°
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_VC));            //Fase S    (rango 0° a 360°)
     Data->AngleReg_VB_VC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_VB_VC = limitAngle(0.0, 360.0, 1.0);       //Valor normal 120°
+    Data->AngleValue_VB_VC = limitAngle(tempValue, 0.0, 360.0, 1.0);       //Valor normal 120°
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_VC));            //Fase T    (rango 0° a 360°)
     Data->AngleReg_VA_VC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_VA_VC = limitAngle(0.0, 360.0, 1.0);       //Valor normal 240°
+    Data->AngleValue_VA_VC = limitAngle(tempValue, 0.0, 360.0, 1.0);       //Valor normal 240°
     //Cuando se pone la misma fase en las 3 entradas fase A y fase B 360° y fase C 0°, poner todas en 0
     if (Data->AngleValue_VA_VB > 355.0 && Data->AngleValue_VB_VC > 355.0 && Data->AngleValue_VA_VC < 5.0)
         Data->AngleValue_VA_VB = Data->AngleValue_VB_VC = Data->AngleValue_VA_VC = 0.0;
@@ -693,19 +693,19 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_IA));            //Fase R    (rango -180° a 180°)
     Data->AngleReg_VA_IA = tempReg;
     tempValue = tempReg * mulConstant;
-    tempValue = limitAngle(0.0, 360.0, 1.0);
+    tempValue = limitAngle(tempValue, 0.0, 360.0, 1.0);
     if (tempValue > 180.0) tempValue -= 360.0;
     Data->AngleValue_VA_IA = tempValue;
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VB_IB));            //Fase S    (rango -180° a 180°)
     Data->AngleReg_VB_IB = tempReg;
     tempValue = tempReg * mulConstant;
-    tempValue = limitAngle(0.0, 360.0, 1.0);
+    tempValue = limitAngle(tempValue, 0.0, 360.0, 1.0);
     if (tempValue > 180.0) tempValue -= 360.0;
     Data->AngleValue_VB_IB = tempValue;
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VC_IC));            //Fase T    (rango -180° a 180°)
     Data->AngleReg_VC_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    tempValue = limitAngle(0.0, 360.0, 1.0);
+    tempValue = limitAngle(tempValue, 0.0, 360.0, 1.0);
     if (tempValue > 180.0) tempValue -= 360.0;
     Data->AngleValue_VC_IC = tempValue;
 
@@ -713,15 +713,15 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IB));            //Fase R    (rango 0° a 360°)
     Data->AngleReg_IA_IB = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IB = limitAngle(0.0, 360.0, 1.0);
+    Data->AngleValue_IA_IB = limitAngle(tempValue, 0.0, 360.0, 1.0);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IB_IC));            //Fase S    (rango 0° a 360°)
     Data->AngleReg_IB_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IB_IC = limitAngle(0.0, 360.0, 1.0);
+    Data->AngleValue_IB_IC = limitAngle(tempValue, 0.0, 360.0, 1.0);
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_IA_IC));            //Fase T    (rango 0° a 360°)
     Data->AngleReg_IA_IC = tempReg;
     tempValue = tempReg * mulConstant;
-    Data->AngleValue_IA_IC = limitAngle(0.0, 360.0, 1.0);
+    Data->AngleValue_IA_IC = limitAngle(tempValue, 0.0, 360.0, 1.0);
     return micros() - time;
 }
 uint32_t ADE9000::ReadVoltageTHDRegsnValues(VoltageTHDRegs* Data)

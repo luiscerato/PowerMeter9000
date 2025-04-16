@@ -158,7 +158,7 @@ public:
 
 enum class eventType {
 	voltageDip,
-	voltageDwell,
+	voltageSwell,
 	overCurrent
 };
 
@@ -186,8 +186,8 @@ public:
 	static const char* eventType2String(eventType event) {
 		if (event == eventType::voltageDip)
 			return "Dip";
-		else if (event == eventType::voltageDwell)
-			return "Dwell";
+		else if (event == eventType::voltageSwell)
+			return "Swell";
 		return "Overcurrent";
 	};
 
@@ -313,7 +313,7 @@ struct phaseValues
 			}
 		};
 		voltageDip.setProperties(phase, eventType::voltageDip);
-		voltageSwell.setProperties(phase, eventType::voltageDwell);
+		voltageSwell.setProperties(phase, eventType::voltageSwell);
 		overCurrent.setProperties(phase, eventType::overCurrent);
 	};
 
