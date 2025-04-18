@@ -45,6 +45,26 @@ function initUI() {
 
     board.getResponseRepeat("meter?thd", thdOk, thdFail, "slow");
 
+
+    $.getScript("scope.js")
+        .done(function () {
+            $.getScript("lib/canvasjs.min.js")
+                .done(function () {
+                    console.log("Script canvasjs cargado!");
+                    Scope.begin("chartContainer", null, "event");
+                })
+                .fail(function () {
+                    console.error("Error al cargar el script de eventos");
+                });
+        })
+        .fail(function () {
+            console.error("Error al cargar el script de eventos");
+        });
+
+        //Cargar parte de la interfase que está en scope.html
+    // $("#eventData").load("scope.html #scopeUI");
+
+
     $(window).on("resize", function () {
         let width = $(window).width();
         let height = $(window).height();
@@ -74,23 +94,6 @@ function initUI() {
 
         // Verificar si es el tab "Events"
         if (tabTarget !== "#events") return;
-
-        $.getScript("scope.js")
-            .done(function () {
-                $.getScript("lib/canvasjs.min.js")
-                    .done(function () {
-                        console.log("Script canvasjs cargado!");
-                        Scope.begin("chartContainer", null, "event");
-                    })
-                    .fail(function () {
-                        console.error("Error al cargar el script de eventos");
-                    });
-            })
-            .fail(function () {
-                console.error("Error al cargar el script de eventos");
-            });
-
-        $("#eventData").load("scope.html #scopeUI");
 
         meterLoadEventsList();
     });

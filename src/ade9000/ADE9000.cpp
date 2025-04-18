@@ -686,8 +686,10 @@ uint32_t ADE9000::readAngleRegsnValues(AngleRegs* Data)
     tempValue = tempReg * mulConstant;
     Data->AngleValue_VA_VC = limitAngle(tempValue, 0.0, 360.0, 1.0);       //Valor normal 240°
     //Cuando se pone la misma fase en las 3 entradas fase A y fase B 360° y fase C 0°, poner todas en 0
-    if (Data->AngleValue_VA_VB > 355.0 && Data->AngleValue_VB_VC > 355.0 && Data->AngleValue_VA_VC < 5.0)
-        Data->AngleValue_VA_VB = Data->AngleValue_VB_VC = Data->AngleValue_VA_VC = 0.0;
+
+    if (Data->AngleValue_VA_VB > 359.0) Data->AngleValue_VA_VB = 0.0;
+    if (Data->AngleValue_VB_VC > 359.0) Data->AngleValue_VB_VC = 0.0;
+    if (Data->AngleValue_VA_VC > 359.0) Data->AngleValue_VA_VC = 0.0;
 
     //Mediciones de angulos entre voltaje y corriente por fase
     tempReg = int16_t(SPI_Read_16(ADDR_ANGL_VA_IA));            //Fase R    (rango -180° a 180°)

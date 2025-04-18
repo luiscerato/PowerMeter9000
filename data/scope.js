@@ -312,24 +312,31 @@ Scope.drawWaves = function () {
         // Scope.options.axisX.maximum = new Date(Scope.Data.eventInfo.end);
         // Scope.options.axisX.interval = (Scope.Data.window * ms) / 10
         let diff = (maxI - minI) * 0.1;
-        Scope.options.axisY.maximum = maxI + diff;
-        Scope.options.axisY.minimum = minI - (minI <= 0 ? 0: diff);
+        Scope.options.axisY.maximum = Scope.redondearLimite(maxI + diff);
+        Scope.options.axisY.minimum = Scope.redondearLimite(minI - (minI <= 0 ? 0: diff));
         if (Scope.options.axisY.maximum < 1) Scope.options.axisY.maximum = 1;
         Scope.options.axisY.interval = (Scope.options.axisY.maximum - Scope.options.axisY.minimum) / 10;
 
         diff = (maxV - minV) * 0.1;
-        Scope.options.axisY2.maximum = maxV + diff;
-        Scope.options.axisY2.minimum = minV - (minV <= 0 ? 0: diff);
+        Scope.options.axisY2.maximum = Scope.redondearLimite(maxV + diff);
+        Scope.options.axisY2.minimum = Scope.redondearLimite(minV - (minV <= 0 ? 0: diff));
         if (Scope.options.axisY2.maximum < 1) Scope.options.axisY2.maximum = 1;
         Scope.options.axisY2.interval = (Scope.options.axisY2.maximum - Scope.options.axisY2.minimum) / 10;
         Scope.options.title.text = new Date(Scope.Data.eventInfo.start).toLocaleString()
         Scope.options.title.text += ", evento " + Scope.Data.eventInfo.list[0].type  + " en " + Scope.Data.eventInfo.list[0].phase;
         Scope.options.title.text += ", duración: " + (Scope.Data.eventInfo.sampleCount*10) + "ms."
+        Scope.options.exportFileName = Scope.options.title.text.replaceAll("/", "-").replaceAll(":", ".");
         // Scope.options.title.text += ", duración: " + (Scope.Data.eventInfo.end-Scope.Data.eventInfo.start) + "ms."
     }
 
     Scope.chart.render();
 };
+
+Scope.redondearLimite = function (valor) {
+    const magnitud = Math.pow(10, Math.floor(Math.log10(valor)));
+    const paso = magnitud >= 10 ? 10 : magnitud >= 5 ? 5 : 2;
+    return Math.round(valor / paso) * paso;
+}
 
 /*
 				Incia el gráfico del osciloscopio*********************************************
@@ -338,13 +345,14 @@ Scope.drawWaves = function () {
 Scope.initGraph = function (container) {
     let events = false;
     Scope.options = {
+  exportEnabled: true,
         zoomEnabled: true,
         zoomType: "xy",
         animationEnabled: true,
         // height: 600,
         title: {
             text: "Osciloscopio",
-            fontSize: 20,
+            fontSize: 18,
         },
         toolTip: {
             shared: true,
@@ -365,6 +373,16 @@ Scope.initGraph = function (container) {
             verticalAlign: "bottom",
             horizontalAlign: "center",
             dockInsidePlotArea: false,
+            itemclick: function (e) {
+                console.log("legend click: " + e.dataPointIndex);
+                console.log(e);
+                if (typeof (e.dataSeries.visible) === "undefined" || e.dataSeries.visible) {
+                    e.dataSeries.visible = false;
+                } else {
+                    e.dataSeries.visible = true;
+                }
+                e.chart.render();
+            }
         },
         axisY: {
             lineThickness: 1,

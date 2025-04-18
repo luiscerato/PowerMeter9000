@@ -816,6 +816,11 @@ public:
 		SPI_Write_32(ADDR_MASK0, flags.raw);
 	};
 
+	ADE_MASK0_t readInterruption0Mask() {
+		ADE_MASK0_t mask;
+		mask.raw = SPI_Read_32(ADDR_MASK0);
+		return mask;
+	};
 
 	void setupInterruption1(uint32_t flags) {
 		SPI_Write_32(ADDR_MASK1, flags);
@@ -823,6 +828,13 @@ public:
 
 	void setupInterruption1(ADE_MASK1_t flags) {
 		SPI_Write_32(ADDR_MASK1, flags.raw);
+	};
+	
+
+	ADE_MASK1_t readInterruption1Mask() {
+		ADE_MASK1_t mask;
+		mask.raw = SPI_Read_32(ADDR_MASK1);
+		return mask;
 	};
 
 

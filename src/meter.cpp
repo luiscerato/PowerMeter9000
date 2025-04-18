@@ -85,7 +85,7 @@ void MeterInit()
 	*/
 
 	//Interrupción 0 se va a encargar de desbloquear por eventos de medición
-	ade.setupInterruption0(ADE_MASK0_BITS_EGYRDY | ADE_MASK0_BITS_PAGE_FULL | ADE_MASK0_BITS_RMSONERDY 
+	ade.setupInterruption0(ADE_MASK0_BITS_EGYRDY | ADE_MASK0_BITS_PAGE_FULL | ADE_MASK0_BITS_RMSONERDY
 		| ADE_MASK0_BITS_RMS1012RDY | ADE_MASK0_BITS_THD_PF_RDY);
 
 	attachInterrupt(pinAdeInt0, []() {
@@ -95,13 +95,13 @@ void MeterInit()
 		}, FALLING);
 	ade.clearStatusBit0();
 
-	
 
 
-	//Interrupcion 1 va a desbloquear por eventos en las señales medidas
+
+	//Interrupcion 1 va a desbloquear por eventos de picos de voltaje, sobrecorriente y pérdida de cruces por cero de los voltajes
 	ade.setupInterruption1(ADE_MASK1_BITS_DIPA | ADE_MASK1_BITS_DIPB | ADE_MASK1_BITS_DIPC |
-		ADE_MASK1_BITS_SWELLA | ADE_MASK1_BITS_SWELLB | ADE_MASK1_BITS_SWELLC |
-		ADE_MASK1_BITS_OI);	//Limpiar flags de interrupciones
+		ADE_MASK1_BITS_SWELLA | ADE_MASK1_BITS_SWELLB | ADE_MASK1_BITS_SWELLC);
+	// ADE_MASK1_BITS_OI | ADE_MASK1_BITS_ZXTOVA | ADE_MASK1_BITS_ZXTOVB  | ADE_MASK1_BITS_ZXTOVC
 
 	attachInterrupt(pinAdeInt1, []() {
 		BaseType_t switchToMeterTask = pdFALSE; //
@@ -123,13 +123,12 @@ capturedEvent EventsData(400);
 void MeterTask(void* arg)
 {
 	uint32_t waitingTime = 0, runningTime = 0, startTime = 0, stopTime = 0, realTime = 0;
-	// ADE_EVENT_STATUS_t lastEvent, event;
-	ADE_OISTATUS_t lastOI, oi;
 	uint32_t EventsCount;
 
 	uint32_t firstEventMs = 0, lastEventMs = 0;
 	uint32_t lastEvent, newEvent;
 	bool recording = false;
+	ADE_OISTATUS_t lastOI = { .raw = 0 }, oi, overCurrentEvent;
 
 
 	while (millis() < 250)
@@ -205,14 +204,51 @@ void MeterTask(void* arg)
 			}
 		}
 
-		while (digitalRead(pinAdeInt1) == 0) {		//Leer que causó la interrupcion
-			ADE_STATUS1_t status1 = ade.readStatus1();
-			if (status1.raw) ade.clearStatusBit1(status1.raw);
+		oi .raw = ade.SPI_Read_16(ADDR_OISTATUS);
+		overCurrentEvent.raw = 0;
 
-			debugI("status1:0x%x", status1.raw);
+		if (oi.OIPHASE != lastOI.OIPHASE) {
+			debugI("overCurrent -> R:%u, S:%u, T:%u, N:%u", oi.OIPHASEA, oi.OIPHASEB, oi.OIPHASEC, oi.OIPHASEN);
+			CurrentRMSRegs current;
+			ade.readOverCurrentLevels(&current);
+			if (oi.OIPHASEA != lastOI.OIPHASEA) {
+				meterVals.phaseR.overCurrent.setStatus(oi.OIPHASEA, current.CurrentRMS_A);
+				meterVals.phaseR.overCurrent.printEvent();
+				overCurrentEvent.OIPHASEA = true;
+			}
+			if (oi.OIPHASEB != lastOI.OIPHASEB) {
+				meterVals.phaseS.overCurrent.setStatus(oi.OIPHASEB, current.CurrentRMS_B);
+				meterVals.phaseS.overCurrent.printEvent();
+				overCurrentEvent.OIPHASEB = true;
+			}
+			if (oi.OIPHASEC != lastOI.OIPHASEC) {
+				meterVals.phaseT.overCurrent.setStatus(oi.OIPHASEC, current.CurrentRMS_C);
+				meterVals.phaseT.overCurrent.printEvent();
+				overCurrentEvent.OIPHASEC = true;
+			}
+			if (oi.OIPHASEN != lastOI.OIPHASEN) {
+				meterVals.neutral.overCurrent.setStatus(oi.OIPHASEN, current.CurrentRMS_N);
+				meterVals.neutral.overCurrent.printEvent();
+				overCurrentEvent.OIPHASEN = true;
+			}
+			lastOI = oi;
+		}
+
+
+		while ((digitalRead(pinAdeInt1) == 0 || overCurrentEvent.OIPHASE)) {		//Leer que causó la interrupcion
+			ADE_STATUS1_t status1 = ade.readStatus1();
+			if (status1.raw) ade.clearStatusBit1(status1.raw);	//Limpiar los estados que causaron la interrupción
+			// debugI("status1:0x%x. OI:%u", status1.raw, status1.OI);
+
+			/*
+				Por algún motivo cuando se genera un evento de sobrecorriente y se limpia ese bit de estado, si el evento sigue se vuelve
+				a disparar. Esto hace que no se salga casi nunca del loop, ya que al limpiarse, en el próximo ciclo se vuevle a generar y
+				vuelve a disparar la interrupción.
+				Cuando se dispare un evento de oc se va a deshabilitar la interrupción hasta que la condición termine.
+			*/
+
 
 			ADE_EVENT_STATUS_t ds = meterReadDipSwell();
-			meterReadOverCurrent();
 			// debugI("DipR:%c, DipS:%c, DipT:%c, SwellR:%c, SwellR:%c, SwellT:%c",
 			// 	ds.DIPA ? '1' : ' ', ds.DIPB ? '1' : ' ', ds.DIPC ? '1' : ' ', ds.SWELLA ? '1' : ' ', ds.SWELLB ? '1' : ' ', ds.SWELLC ? '1' : ' ');
 
@@ -242,11 +278,12 @@ void MeterTask(void* arg)
 				if (meterVals.phaseS.voltageSwell.hasChanged()) EventsData.pushEvent(meterVals.phaseS.voltageSwell.getJson().c_str());
 				if (meterVals.phaseT.voltageSwell.hasChanged()) EventsData.pushEvent(meterVals.phaseT.voltageSwell.getJson().c_str());
 
-				if (meterVals.phaseR.overCurrent.hasChanged()) EventsData.pushEvent(meterVals.phaseR.overCurrent.getJson().c_str());
-				if (meterVals.phaseS.overCurrent.hasChanged()) EventsData.pushEvent(meterVals.phaseS.overCurrent.getJson().c_str());
-				if (meterVals.phaseT.overCurrent.hasChanged()) EventsData.pushEvent(meterVals.phaseT.overCurrent.getJson().c_str());
-				if (meterVals.neutral.overCurrent.hasChanged()) EventsData.pushEvent(meterVals.neutral.overCurrent.getJson().c_str());
+				if (overCurrentEvent.OIPHASEA) EventsData.pushEvent(meterVals.phaseR.overCurrent.getJson().c_str());
+				if (overCurrentEvent.OIPHASEB) EventsData.pushEvent(meterVals.phaseS.overCurrent.getJson().c_str());
+				if (overCurrentEvent.OIPHASEC) EventsData.pushEvent(meterVals.phaseT.overCurrent.getJson().c_str());
+				if (overCurrentEvent.OIPHASEN) EventsData.pushEvent(meterVals.neutral.overCurrent.getJson().c_str());
 			}
+			overCurrentEvent.OIPHASE = 0;	//Poner a 0 para salir del loop
 			meterUpdated++;
 		}
 	}
@@ -260,8 +297,8 @@ void MeterLoadOptions()
 	float dipVoltage, swellVoltage, ocCurrent;
 	int dipCycles, swellCycles;
 
-    //Cargar valores de deteccion de eventos. TODO: reemplazar por opciones en otro lado
-    meterOptions.begin("meter", false);
+	//Cargar valores de deteccion de eventos. TODO: reemplazar por opciones en otro lado
+	meterOptions.begin("meter", false);
 
 	if (!meterOptions.isKey("ready")) {
 		meterOptions.putBool("ready", true);
@@ -285,9 +322,9 @@ void MeterLoadOptions()
 
 	ocEnabled = meterOptions.getBool("overcurrent", true);
 	ocCurrent = meterOptions.getFloat("ocCurrent", ade.getMaxInputCurrent());
-	
 
-    meterOptions.end();
+
+	meterOptions.end();
 
 	if (!dipEnabled) dipVoltage = 0.0;
 	if (!swellEnabled) swellVoltage = ade.getMaxInputVoltage();
@@ -469,7 +506,7 @@ void MeterLoop()
 			mqtt.publish("PowerMeter9000/events", 0, false, events.c_str());
 		}
 		acEventsWS.binaryAll(EventsData.getBuffer(), EventsData.getSampleCount() * sizeof(fastRMSData_t));	//Enviar array de datos
-		
+
 		EventsData.reset();
 		debugI("Datos de evento enviado por web socket!");
 
@@ -498,6 +535,8 @@ void meterReadWaveBuffer()
 	compressWaveBuffer12(readBuffer[0].buffer, outputSamples, part++);
 	timeCompress = micros() - timeCompress;
 
+
+
 	if (part == 6) {	//Buffer de 96ms comprimido listo para enviar
 		part = 0;
 
@@ -507,7 +546,7 @@ void meterReadWaveBuffer()
 
 		timeSend = micros() - timeSend;
 
-		// Serial.printf("Tiempo de lectura: %uus, tiempo escalado: %uus, tiempo de compresion: %uus, tiempo de envio: %uus, free heap: %u bytes\n",
+		// debugI("Tiempo de lectura: %uus, tiempo escalado: %uus, tiempo de compresion: %uus, tiempo de envio: %uus, free heap: %u bytes\n",
 		// 	timeRead, timeScale, timeCompress, timeSend, ESP.getFreeHeap());
 	}
 }

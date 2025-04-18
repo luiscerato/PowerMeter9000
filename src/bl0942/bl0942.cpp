@@ -48,7 +48,9 @@ void BL0942::begin(int32_t rx, int32_t tx)
 {
     debugI("Iniciando BL0942!");
     HardwareSerial::begin(4800, SERIAL_8N1, rx, tx);
+    debugI("Setup 1");
     setup();
+    debugI("Setup 2");
     setup();
     HardwareSerial::begin(38400, SERIAL_8N1, rx, tx);
 }

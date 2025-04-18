@@ -198,3 +198,19 @@ input[type=range][orient=vertical] {
         transform: translate(1px, -2px) rotate(-1deg);
     }
 }
+
+/* Altura por defecto (70vh) */
+.eventElements {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+/* En móviles (dispositivos con ancho menor a 768px) */
+@media (max-width: 767.98px) {
+    .eventElements {
+        max-height: 40vh !important; /* !important para asegurar que sobrescriba estilos en línea */
+    }
+    #eventList {
+        max-height: 25vh !important; /* !important para asegurar que sobrescriba estilos en línea */
+    }
+}

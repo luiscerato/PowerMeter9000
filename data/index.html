@@ -273,14 +273,17 @@
                 </div>
                 <div class="tab-pane" id="events" role="tabpanel" aria-labelledby="events-tab">
                     <div class="row">
-                        <div class="col-3 eventList">
-                            <div id="eventList"></div>
+                        <div class="col-sm-12 col-md-3 p-1 pt-2 pb-2">
+                            <div id="eventList" style="max-height: 70vh; overflow-y: auto;" class="eventElements"></div>
                         </div>
-                        <div class="col-9">
-                            <div id="eventData">
-                                
+                        <div class="col-sm-12 col-md-9 p-1 pt-2 pb-2">
+                            <div class="card p-1">
+                                <div id="chartContainer" style="height: 70vh"  class="eventElements"></div>
                             </div>
                         </div>
+                        <!-- <div class="col-9">
+                            <div id="eventData"></div>
+                        </div> -->
                     </div>
                 </div>
                 <div class="tab-pane" id="allMeasures" role="tabpanel" aria-labelledby="allMeasures-tab">
