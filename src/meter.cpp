@@ -59,6 +59,8 @@ void MeterInit()
 	pinMode(pinAdeInt0, INPUT_PULLUP);
 	pinMode(pinAdeInt1, INPUT_PULLUP);
 
+	ade.restoreCalibration();	//Cargar calibración por defecto
+
 	ade.initADE9000(pinAdeClk, pinAdeSdi, pinAdeSdo);
 	ade.ADC_Redirect(adeChannel_IA, adeChannel_IC);	//Cruzar los canales A con C
 	ade.ADC_Redirect(adeChannel_IC, adeChannel_IA);
@@ -68,6 +70,7 @@ void MeterInit()
 	//5 vueltas de cable por cada trafo
 	ade.setNoPowerCutoff(0.5);		//0.5mA es 0A
 	// ade.setNoCurrentCutoff(0.01);
+
 
 	scopeInfo.currentScale = 1.0;
 	scopeInfo.voltageScale = 1.0;
@@ -116,6 +119,7 @@ void MeterInit()
 	bl0942.begin(pinBLRx, pinBLTx);
 
 	Serial.println("Meter inicializado!");
+
 }
 
 capturedEvent EventsData(400);
@@ -254,18 +258,20 @@ void MeterTask(void* arg)
 
 			bool saveEvent = false;
 
-			if (!EventsData.isCapturing()) {
-				lastEventMs = firstEventMs = millis();
-				EventsData.startCapture(eventsDataPrevSamples);
-				//Guardar datos actuales en la primer parte del buffer e iniciar la grabación
-				for (int32_t i = (eventsDataPrevSamples - 1); i >= 0; i--) {
-					EventsData.pushSamples(meterGetFastDataSample(i));
+			if (!ade.isCalibrating()) {
+				if (!EventsData.isCapturing()) {
+					lastEventMs = firstEventMs = millis();
+					EventsData.startCapture(eventsDataPrevSamples);
+					//Guardar datos actuales en la primer parte del buffer e iniciar la grabación
+					for (int32_t i = (eventsDataPrevSamples - 1); i >= 0; i--) {
+						EventsData.pushSamples(meterGetFastDataSample(i));
+					}
+					saveEvent = true;
 				}
-				saveEvent = true;
-			}
-			else {
-				lastEventMs = millis();
-				saveEvent = true;
+				else {
+					lastEventMs = millis();
+					saveEvent = true;
+				}
 			}
 
 			//Guardar el evento en el registro
@@ -534,15 +540,14 @@ void meterReadWaveBuffer()
 	timeCompress = micros();
 	compressWaveBuffer12(readBuffer[0].buffer, outputSamples, part++);
 	timeCompress = micros() - timeCompress;
-
-
-
+	
 	if (part == 6) {	//Buffer de 96ms comprimido listo para enviar
 		part = 0;
 
 		timeSend = micros();
 		size_t size = sizeof(outputSamples);
-		webServerGetMeterWS()->binaryAll(outputSamples, size);
+		if (webServerGetMeterWS()->count() > 0 )
+			webServerGetMeterWS()->binaryAll(outputSamples, size);
 
 		timeSend = micros() - timeSend;
 
@@ -688,11 +693,13 @@ void meterReadAngles()
 
 	meterVals.phaseR.AngleV = ang.AngleValue_VA_VB;
 	meterVals.phaseS.AngleV = ang.AngleValue_VB_VC;
-	meterVals.phaseT.AngleV = 360 - ang.AngleValue_VA_VC;
+	// meterVals.phaseT.AngleV = 360 - ang.AngleValue_VA_VC;
+	meterVals.phaseT.AngleV = ang.AngleValue_VA_VC;
 
 	meterVals.phaseR.AngleI = ang.AngleValue_IA_IB;
 	meterVals.phaseS.AngleI = ang.AngleValue_IB_IC;
-	meterVals.phaseT.AngleI = 360 - ang.AngleValue_IA_IC;
+	// meterVals.phaseT.AngleI = 360 - ang.AngleValue_IA_IC;
+	meterVals.phaseT.AngleI = ang.AngleValue_IA_IC;
 
 	if (meterVals.phaseR.Irms < 0.2) meterVals.phaseR.AngleVI = meterVals.phaseR.AngleI = 0.0;
 	if (meterVals.phaseS.Irms < 0.2) meterVals.phaseS.AngleVI = meterVals.phaseS.AngleI = 0.0;

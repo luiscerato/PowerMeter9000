@@ -71,7 +71,8 @@ void setup(void)
 
 	UtilsInitSettings();
 
-	UtilsLoadDeafultSettings();
+	// UtilsLoadDeafultSettings();
+	
 	DebugStart();
 
 	pinMode(pinRelay, OUTPUT);
@@ -286,6 +287,7 @@ bool Draw_Main(lcd_ui* ui, UI_Action action)
 		if (mode)
 			ui->getWindow()->Title = "Home (Fase-Fase)";
 		else
+			// ui->getWindow()->Title = "°ñÑ áÁéÉíÍóÓúÚ";
 			ui->getWindow()->Title = "Home (Fase-Neutro)";
 
 		switch (index) {
@@ -347,19 +349,19 @@ bool Draw_Main(lcd_ui* ui, UI_Action action)
 			lcd.printStr(c4, l1, "Corr", TextAling::TopRight);
 
 			lcd.printStr(c1, l2, "R:");
-			lcd.printStr(c2, l2, ade.format(Meter.phaseR.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-			lcd.printStr(c3, l2, ade.format(Meter.phaseR.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-			lcd.printStr(c4, l2, ade.format(Meter.phaseR.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+			lcd.printStr(c2, l2, ade.format(Meter.phaseR.AngleV, 5, "°", formatNoPrefix).c_str(), TextAling::TopRight);
+			lcd.printStr(c3, l2, ade.format(Meter.phaseR.AngleVI, 4, "°", formatNoPrefix).c_str(), TextAling::TopRight);
+			lcd.printStr(c4, l2, ade.format(Meter.phaseR.AngleI, 4, "°", formatNoPrefix).c_str(), TextAling::TopRight);
 
 			lcd.printStr(c1, l3, "S:");
-			lcd.printStr(c2, l3, ade.format(Meter.phaseS.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-			lcd.printStr(c3, l3, ade.format(Meter.phaseS.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-			lcd.printStr(c4, l3, ade.format(Meter.phaseS.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+			lcd.printStr(c2, l3, ade.format(Meter.phaseS.AngleV, 5, "°", formatNoPrefix).c_str(), TextAling::TopRight);
+			lcd.printStr(c3, l3, ade.format(Meter.phaseS.AngleVI, 4, "°", formatNoPrefix).c_str(), TextAling::TopRight);
+			lcd.printStr(c4, l3, ade.format(Meter.phaseS.AngleI, 4, "°", formatNoPrefix).c_str(), TextAling::TopRight);
 
 			lcd.printStr(c1, l4, "T:");
-			lcd.printStr(c2, l4, ade.format(Meter.phaseT.AngleV, 5, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-			lcd.printStr(c3, l4, ade.format(Meter.phaseT.AngleVI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
-			lcd.printStr(c4, l4, ade.format(Meter.phaseT.AngleI, 4, "g", formatNoPrefix).c_str(), TextAling::TopRight);
+			lcd.printStr(c2, l4, ade.format(Meter.phaseT.AngleV, 5, "°", formatNoPrefix).c_str(), TextAling::TopRight);
+			lcd.printStr(c3, l4, ade.format(Meter.phaseT.AngleVI, 4, "°", formatNoPrefix).c_str(), TextAling::TopRight);
+			lcd.printStr(c4, l4, ade.format(Meter.phaseT.AngleI, 4, "°", formatNoPrefix).c_str(), TextAling::TopRight);
 			break;
 		}
 
@@ -367,7 +369,7 @@ bool Draw_Main(lcd_ui* ui, UI_Action action)
 		Keys key = ui->GetKeys();
 
 		if (key == Keys::Esc)
-			ui->Home();
+			ui->Show("wifi");
 		else if (key == Keys::Enter)
 			ui->Show("calibration");
 		// ui->Show("wifi");
@@ -402,21 +404,21 @@ bool Draw_Wifi(lcd_ui* ui, UI_Action action)
 
 	UI_Window* win = ui->getWindow();
 	if (action == UI_Action::Init) {
-		win->setPosAndSize(25, 15, 80, 40);
-		win->setWindowMode(UI_Window_Mode::Compact);
+		win->setFullScreen();
+		win->setWindowMode(UI_Window_Mode::Normal);
 		win->Title = "Estado Wifi";
 	}
 	else if (action == UI_Action::Run) {
 		ui->lcd.setFont(Small5x7PLBold);
-		x += incX;
-		y += incY;
+		// x += incX;
+		// y += incY;
 
-		if (y > 50) incY = -2;
-		else if (y < 4) incY = 2;
+		// if (y > 50) incY = -2;
+		// else if (y < 4) incY = 2;
 
-		if (x > 100) incX = -4;
-		else if (x < 3) incX = 4;
-		win->setPosAndSize(x, y, 80, 40);
+		// if (x > 100) incX = -4;
+		// else if (x < 3) incX = 4;
+		// win->setPosAndSize(x, y, 80, 40);
 
 		snprintf(str, sizeof(str), "SSID: %s", WiFi.SSID().c_str());
 		lcd.printStr(c1, l1, str);
@@ -454,23 +456,25 @@ bool Draw_Batt(lcd_ui* ui, UI_Action action)
 
 	UI_Window* win = ui->getWindow();
 	if (action == UI_Action::Init) {
-		win->setPosAndSize(10, 25, 80, 40);
-		win->setWindowMode(UI_Window_Mode::Small);
+		// win->setPosAndSize(10, 25, 80, 40);
+		// win->setWindowMode(UI_Window_Mode::Small);
+		win->setFullScreen();
+		win->setWindowMode(UI_Window_Mode::Normal);
 		win->Title = "Bateria";
 		offset = 0;
 	}
 	else if (action == UI_Action::Run) {
 		ui->lcd.setFont(Small5x7PLBold);
 
-		x += incX;
-		y += incY;
+		// x += incX;
+		// y += incY;
 
-		if (y > 50) incY = -1;
-		else if (y < 5) incY = 1;
+		// if (y > 50) incY = -1;
+		// else if (y < 5) incY = 1;
 
-		if (x > 100) incX = -3;
-		else if (x < 7) incX = 3;
-		win->setPosAndSize(x, y, 80, 40);
+		// if (x > 100) incX = -3;
+		// else if (x < 7) incX = 3;
+		// win->setPosAndSize(x, y, 80, 40);
 
 		snprintf(str, sizeof(str), "Volt: %0.3f", battery.getVBAT());
 		lcd.printStr(c1, l1 + offset, str);
@@ -684,9 +688,9 @@ bool Draw_Calibrate(lcd_ui* ui, UI_Action action)
 
 			case calPhaseGain:
 				multiplier = 1;
-				lcd.printStr(c2, l1, ade.format(info.values.A, 6, "g", formatNoPrefix).c_str());
-				lcd.printStr(c2, l2, ade.format(info.values.B, 6, "g", formatNoPrefix).c_str());
-				lcd.printStr(c2, l3, ade.format(info.values.C, 6, "g", formatNoPrefix).c_str());
+				lcd.printStr(c2, l1, ade.format(info.values.A, 6, "°", formatNoPrefix).c_str());
+				lcd.printStr(c2, l2, ade.format(info.values.B, 6, "°", formatNoPrefix).c_str());
+				lcd.printStr(c2, l3, ade.format(info.values.C, 6, "°", formatNoPrefix).c_str());
 				lcd.printStr(c3 + 12, l1, ade.format(Meter.average.Irms / 5.0, 5, "A").c_str());
 				break;
 			}

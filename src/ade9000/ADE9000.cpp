@@ -135,12 +135,6 @@ void ADE9000::setupADE9000(void)
 
 void ADE9000::loadCalibration()
 {
-
-    // SPI_Write_32(ADDR_APHCAL0, 0xFBFC9813);
-    // SPI_Write_32(ADDR_BPHCAL0, 0xFC1BC118);
-    // SPI_Write_32(ADDR_CPHCAL0, 0xFBDE7F6F);
-    // SPI_Write_32(ADDR_NPHCAL, 0xFBFCF2DE);
-
     uint32_t time = micros();
 
     preferences.begin("ADE9000", false);
@@ -206,6 +200,70 @@ void ADE9000::loadCalibration()
     SPI_Write_16(ADDR_EP_CFG, ADE9000_EP_CFG); //Energy accumulation ON
 }
 
+
+void ADE9000::restoreCalibration()
+{
+    Serial.printf("Restaurando calibracion de fábrica!!");
+    preferences.begin("ADE9000", false);
+
+    preferences.putInt("APHCAL0", 0xfc46300c);
+    preferences.putInt("BPHCAL0", 0xfc780c4d);
+    preferences.putInt("CPHCAL0", 0xfc266bec);
+    preferences.putInt("NPHCAL", 0xfc4c3817);
+
+    //Cargar current gain
+    preferences.putInt("AIGAIN", 0x1417b6);
+    preferences.putInt("BIGAIN", 0xf9ee4);
+    preferences.putInt("CIGAIN", 0x1b5e40);
+    preferences.putInt("NIGAIN", 0x1e6815);
+    //Cargar voltage gain
+    preferences.putInt("AVGAIN", 0xcba12);
+    preferences.putInt("BVGAIN", 0xab86d);
+    preferences.putInt("CVGAIN", 0x112b60);
+
+    //Current offset
+    preferences.putInt("AIRMSOS", 0);
+    preferences.putInt("BIRMSOS", 0);
+    preferences.putInt("CIRMSOS", 0);
+    preferences.putInt("NIRMSOS", 0);
+    //Voltage offset
+    preferences.putInt("AVRMSOS", 0);
+    preferences.putInt("BVRMSOS", 0);
+    preferences.putInt("CVRMSOS", 0);
+
+    //Offset Fundamental
+    preferences.putInt("AIFRMSOS", 0);
+    preferences.putInt("BIFRMSOS", 0);
+    preferences.putInt("CIFRMSOS", 0);
+
+    preferences.putInt("AVFRMSOS", 0);
+    preferences.putInt("BVFRMSOS", 0);
+    preferences.putInt("CVFRMSOS", 0);
+
+    //Offsets one cicle
+    preferences.putInt("AIRMSONEOS", 0);
+    preferences.putInt("BIRMSONEOS", 0);
+    preferences.putInt("CIRMSONEOS", 0);
+    preferences.putInt("NIRMSONEOS", 0);
+
+    preferences.putInt("AVRMSONEOS", 0);
+    preferences.putInt("BVRMSONEOS", 0);
+    preferences.putInt("CVRMSONEOS", 0);
+
+    //Offsets 1012 cicles
+    preferences.putInt("AIRMS1012OS", 0);
+    preferences.putInt("BIRMS1012OS", 0);
+    preferences.putInt("CIRMS1012OS", 0);
+    preferences.putInt("NIRMS1012OS", 0);
+
+    preferences.putInt("AVRMS1012OS", 0);
+    preferences.putInt("BVRMS1012OS", 0);
+    preferences.putInt("CVRMS1012OS", 0);
+
+    preferences.end();
+    Serial.printf("Listo! Debe reinicar para que los cambios tengan efecto completamente!");
+}
+
 void ADE9000::printCalibration()
 {
     preferences.begin("ADE9000", false);
@@ -266,7 +324,6 @@ void ADE9000::printCalibration()
 
 
     preferences.end();
-
 }
 
 void ADE9000::resetADE9000(uint8_t ADE9000_RESET_PIN)
@@ -365,6 +422,7 @@ void ADE9000::SPI_Burst_Read_FixedDT_Buffer(uint16_t bufferPos, uint16_t samples
     port.transfer16(((0x800 + bufferPos) << 4) + 8);  //Send the starting address
 
     //burst read the data upto Read_Length 
+    // port.transferBytes(nullptr, (uint8_t*)samplesBuffer, samplesCount*7*4);
     for (i = 0;i < samplesCount;i++) {
         samplesBuffer->IA = port.transfer32(0);
         samplesBuffer->VA = port.transfer32(0);
@@ -1098,7 +1156,7 @@ bool ADE9000::startCalibration(calibrationStep_t function, bool phaseA, bool pha
 int32_t ADE9000::updateCalibration(float realValue, calibrationInfo* info)
 {
     //Borrar promedio si cambia el valor de referencia
-    if (realValue != calInfo.realValue) {
+    if (realValue != calInfo.realValue || calInfo.samples > 5) {
         calInfo.clearAccumulators();
         calInfo.samples = 0;
     }
@@ -1306,6 +1364,9 @@ bool ADE9000::endCalibration(bool save)
     }
     else if (calInfo.isCalibratingPhase()) {
         Serial.printf("Valores calculados en base a %d muestras\n", calInfo.samples);
+        //El neutro no hay forma de calcularlo, por lo que se hace un promedio de las 3 fases
+        calInfo.values.N = (calInfo.values.A + calInfo.values.B + calInfo.values.C) / 3.0;
+        calInfo.regs.N = (calInfo.regs.A + calInfo.regs.B + calInfo.regs.C) / 3.0;
         if (calInfo.calA) Serial.printf("Fase A(R): %.3f° APHCAL0 = 0x%x\n", calInfo.values.A, calInfo.regs.A);
         if (calInfo.calB) Serial.printf("Fase B(S): %.3f° BPHCAL0 = 0x%x\n", calInfo.values.B, calInfo.regs.B);
         if (calInfo.calC) Serial.printf("Fase C(T): %.3f° CPHCAL0 = 0x%x\n", calInfo.values.C, calInfo.regs.C);
@@ -1314,7 +1375,8 @@ bool ADE9000::endCalibration(bool save)
         if (calInfo.calA) { SPI_Write_32(ADDR_APHCAL0, (int32_t)calInfo.regs.A);  preferences.putInt("APHCAL0", (int32_t)calInfo.regs.A); };
         if (calInfo.calB) { SPI_Write_32(ADDR_BPHCAL0, (int32_t)calInfo.regs.B);  preferences.putInt("BPHCAL0", (int32_t)calInfo.regs.B); };
         if (calInfo.calC) { SPI_Write_32(ADDR_CPHCAL0, (int32_t)calInfo.regs.C);  preferences.putInt("CPHCAL0", (int32_t)calInfo.regs.C); };
-        if (calInfo.calN) { SPI_Write_32(ADDR_NPHCAL, (int32_t)calInfo.regs.N);  preferences.putInt("NPHCAL", (int32_t)calInfo.regs.N); };
+        // if (calInfo.calN) { SPI_Write_32(ADDR_NPHCAL, (int32_t)calInfo.regs.N);  preferences.putInt("NPHCAL", (int32_t)calInfo.regs.N); };
+        { SPI_Write_32(ADDR_NPHCAL, (int32_t)calInfo.regs.N);  preferences.putInt("NPHCAL", (int32_t)calInfo.regs.N); };
 
         SPI_Write_32(ADDR_MASK0, mask0.raw);
     }

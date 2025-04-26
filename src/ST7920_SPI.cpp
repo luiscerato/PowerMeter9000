@@ -731,30 +731,25 @@ bool ST7920_SPI::isNumberExt(uint8_t ch)
 unsigned char ST7920_SPI::convertPolish(unsigned char _c)
 {
 	unsigned char pl, c = _c;
-	if (c == 196 || c == 197 || c == 195) {
+	if (c == 196 || c == 197 || c == 195 || c == 194) {
 		dualChar = c;
 		return 0;
 	}
 	if (dualChar) { // UTF8 coding
 		switch (_c) {
-		case 133: pl = 1 + 9; break; // '�'
-		case 135: pl = 2 + 9; break; // '�'
-		case 153: pl = 3 + 9; break; // '�'
-		case 130: pl = 4 + 9; break; // '�'
-		case 132: pl = dualChar == 197 ? 5 + 9 : 1; break; // '�' and '�'
-		case 179: pl = 6 + 9; break; // '�'
-		case 155: pl = 7 + 9; break; // '�'
-		case 186: pl = 8 + 9; break; // '�'
-		case 188: pl = 9 + 9; break; // '�'
-			//case 132: pl = 1; break; // '�'
-		case 134: pl = 2; break; // '�'
-		case 152: pl = 3; break; // '�'
-		case 129: pl = 4; break; // '�'
-		case 131: pl = 5; break; // '�'
-		case 147: pl = 6; break; // '�'
-		case 154: pl = 7; break; // '�'
-		case 185: pl = 8; break; // '�'
-		case 187: pl = 9; break; // '�'
+		case 176: pl = 1; break; // '°'
+		case 177: pl = 2; break; // 'ñ'
+		case 145: pl = 3; break; // 'Ñ'
+		case 161: pl = 4; break; // 'á'
+		case 169: pl = 5; break; // 'é'
+		case 173: pl = 6; break; // 'í'
+		case 179: pl = 7; break; // 'ó'
+		case 186: pl = 8; break; // 'ú'
+		case 129: pl = 9; break; // 'Á'
+		case 137: pl = 10; break; // 'É'
+		case 141: pl = 11; break; // 'Í'
+		case 147: pl = 12; break; // 'Ó'
+		case 154: pl = 13; break; // 'Ú'
 		default:  return c; break;
 		}
 		dualChar = 0;

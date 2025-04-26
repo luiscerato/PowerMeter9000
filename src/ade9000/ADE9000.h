@@ -445,6 +445,8 @@ public:
 		int64_t N;
 	} acc;
 
+	bool inline isCalibrating() {return function != calNone;};
+
 	bool inline isCalibratingVoltage() {
 		return function == calVoltageGain || function == calVoltageOffset || function == calFundVoltageOffset || function == calVoltageOneOffset || function == calVoltageTenOffset;
 	}
@@ -474,8 +476,8 @@ protected:
 	};
 
 	int32_t calcPhaseErrorReg(double angle, double errorAngle) {
-		const double omega = (float)2 * (float)3.14159 * (float)INPUT_FREQUENCY / (float)ADE9000_FDSP;
-		int32_t factor = ((sin(radians(errorAngle) - omega) + sin(omega)) / (sin(2 * omega - radians(errorAngle)))) * 134217728; //2^27
+		const double omega = (double)2 * (double)3.14159 * (double)INPUT_FREQUENCY / (double)ADE9000_FDSP;
+		int32_t factor = ((sin(radians(errorAngle) - omega) + sin(omega)) / (sin(2 * omega - radians(errorAngle)))) * (double)134217728.0; //2^27
 		Serial.printf("Valor real : % .3f°, medido : % .3f°->Value : 0x % x\n", angle, errorAngle, factor);
 		return factor;
 	};
@@ -891,12 +893,15 @@ public:
 	// Read the levels of swell event and store them in a VoltageRMSRegs data structure.
 	void readSwellLevels(struct VoltageRMSRegs* Data);
 
+	//Escribe la caliración por defector del medidor
+    void restoreCalibration();
+
 
 private:
 	Preferences preferences;		//Configuracion desde flash
 	void loadCalibration();			//Carga la calibracion guardada en la memoria flash
 
-    void printCalibration();
+void printCalibration();
 
 	float limitAngle(float angle, float min, float max, float cutOff = 0.0);
 
