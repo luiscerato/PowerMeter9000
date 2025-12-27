@@ -116,6 +116,11 @@ void lcd_ui::Run()
 
     if (UpdateStep == 0) {  //  Pintar fondo del LCD
         tClear = micros();
+        if (millis() - RestartLCDTime > 60000) {
+            //Reiniciar el LCD cada 60 segundos para evitar fallos de visualización
+            lcd.init();
+            RestartLCDTime = millis();
+        }
         lcd.cls();
         tClear = micros() - tClear;
         UpdateLcdStep = 0;

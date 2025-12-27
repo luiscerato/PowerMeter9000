@@ -79,7 +79,8 @@ void MeterInit()
 	webServerSetAcEvents(acEventsWSevents);		//Callback para eventos del websocket de los eventos
 
 
-	MeterLoadOptions();
+	MeterLoadOptions();				//Cargar configuración de los eventos del medidor
+	MeterReadEnergyRegisters();		//Leer los registros de energía 
 
 	xTaskCreatePinnedToCore(MeterTask, "meterTask", 8192, NULL, 10, &meterHandle, APP_CPU_NUM);
 
@@ -117,6 +118,8 @@ void MeterInit()
 	memset(halfCycleSamples, 0, sizeof(halfCycleSamples));	//Poner en 0  buffer de muestras rápidas
 
 	bl0942.begin(pinBLRx, pinBLTx);
+
+
 
 	Serial.println("Meter inicializado!");
 
@@ -296,6 +299,64 @@ void MeterTask(void* arg)
 }
 
 
+bool MeterWriteEnergyRegisters(bool reset)
+{
+	if (reset){
+		debugI("Reseteando registros de energía del medidor");}
+	else{
+		debugI("Actualizando registros de energía del medidor");}
+	
+	if (!meterOptions.begin("meter", false)) {
+		debugE("No se pudo abrir la partición de opciones del medidor para actualizar los registros de energía");
+		return false;
+	}
+	meterOptions.putFloat("rWattH", reset ? 0.0 : Meter.phaseR.Watt_H);
+	meterOptions.putFloat("rVarH", reset ? 0.0 : Meter.phaseR.VAR_H);
+	meterOptions.putFloat("rVaH", reset ? 0.0 : Meter.phaseR.VA_H);
+	
+	meterOptions.putFloat("sWattH", reset ? 0.0 : Meter.phaseS.Watt_H);
+	meterOptions.putFloat("sVarH", reset ? 0.0 : Meter.phaseS.VAR_H);
+	meterOptions.putFloat("sVaH", reset ? 0.0 : Meter.phaseS.VA_H);
+
+	meterOptions.putFloat("tWattH", reset ? 0.0 : Meter.phaseT.Watt_H);
+	meterOptions.putFloat("tVarH", reset ? 0.0 : Meter.phaseT.VAR_H);
+	meterOptions.putFloat("tVaH", reset ? 0.0 : Meter.phaseT.VA_H);
+	
+	meterOptions.putFloat("WattH", reset ? 0.0 : Meter.energy.Watt_H);
+	meterOptions.putFloat("VarH", reset ? 0.0 : Meter.energy.VAR_H);
+	meterOptions.putFloat("VaH", reset ? 0.0 : Meter.energy.VA_H);
+
+	meterOptions.end();
+	return true;
+}
+
+void MeterReadEnergyRegisters()
+{
+	debugI("Leyendo registros de energía del medidor");
+	
+	if (!meterOptions.begin("meter", false)) {
+		debugE("No se pudo abrir la partición de opciones del medidor para leer los registros de energía");
+		return;
+	}
+	Meter.phaseR.Watt_H =  meterOptions.getFloat("rWattH", 0.0);
+	Meter.phaseR.VAR_H =  meterOptions.getFloat("rVarH", 0.0);
+	Meter.phaseR.VA_H =  meterOptions.getFloat("rVaH", 0.0);
+	
+	Meter.phaseS.Watt_H =  meterOptions.getFloat("sWattH", 0.0);
+	Meter.phaseS.VAR_H =  meterOptions.getFloat("sVarH", 0.0);
+	Meter.phaseS.VA_H =  meterOptions.getFloat("sVaH", 0.0);
+
+	Meter.phaseT.Watt_H =  meterOptions.getFloat("tWattH", 0.0);
+	Meter.phaseT.VAR_H =  meterOptions.getFloat("tVarH", 0.0);
+	Meter.phaseT.VA_H =  meterOptions.getFloat("tVaH", 0.0);
+	
+	Meter.energy.Watt_H =  meterOptions.getFloat("WattH", 0.0);
+	Meter.energy.VAR_H =  meterOptions.getFloat("VarH", 0.0);
+	Meter.energy.VA_H =  meterOptions.getFloat("VaH", 0.0);
+
+	meterOptions.end();
+}
+
 void MeterLoadOptions()
 {
 	debugI("Cargando configuracion de meter");
@@ -328,7 +389,6 @@ void MeterLoadOptions()
 
 	ocEnabled = meterOptions.getBool("overcurrent", true);
 	ocCurrent = meterOptions.getFloat("ocCurrent", ade.getMaxInputCurrent());
-
 
 	meterOptions.end();
 
@@ -490,7 +550,7 @@ void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEven
 
 void MeterLoop()
 {
-	static uint32_t index = 0;
+	static uint32_t index = 0, energyUpdateTime = millis();
 	bool dataReady = false;
 
 	if (meterUpdated) {
@@ -523,6 +583,13 @@ void MeterLoop()
 		// }
 	}
 	else index = 0;
+
+	if (millis() - energyUpdateTime >= 3600 * 8 * 1000) {	//Cada 8 horas actualizar los registros de energía
+		if (MeterWriteEnergyRegisters(false)) {
+			energyUpdateTime = millis();	//Solo actualizar el tiempo si se pudo guardar
+			debugI("Registros de energía actualizados correctamente");
+		}
+	}
 }
 
 

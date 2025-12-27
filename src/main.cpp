@@ -371,10 +371,14 @@ bool Draw_Main(lcd_ui* ui, UI_Action action)
 		if (key == Keys::Esc)
 			ui->Show("wifi");
 		else if (key == Keys::Enter)
-			ui->Show("calibration");
+		 	ui->Show("batt");
+		 	// ui->Show("calibration");
 		// ui->Show("wifi");
-		else if (key == Keys::Next)
+		else if (key == Keys::Next) {
+			if (!mode)
+				MeterWriteEnergyRegisters();	//Forzar escritura de registros de energía para probar que funcionan
 			mode++;
+		}
 		else if (key == Keys::Up) {
 			index++;
 		}

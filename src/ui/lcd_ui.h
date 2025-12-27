@@ -620,6 +620,7 @@ class lcd_ui
     uint32_t UpdateStep = 0;                    //Paso de actualización
     uint32_t UpdateScreenIndex;                //Pantalla siendo actualizada
     uint32_t UpdateLcdStep;                     //Parte del LCD siendo actualizada
+    uint32_t RestartLCDTime = 0;                //Tiempo para reiniciar el LCD
     static const uint32_t DftUpdateTime = 100; // Tiempo de actualizaci�n por defecto
     UI_Window*  uiWindow;                      //Puntero a la ventana actual
 

@@ -485,6 +485,10 @@ typedef struct {
 void MeterInit();
 
 
+bool MeterWriteEnergyRegisters( bool reset = false);
+
+void MeterReadEnergyRegisters();
+
 void MeterLoadOptions();
 
 void MeterLoop();

@@ -110,7 +110,14 @@ void Init_WebServer()
 
 	server.on("/reset", HTTP_GET, [](AsyncWebServerRequest* request) {
 		request->send(200, "text/plain", "ok");
+		MeterWriteEnergyRegisters();		//Forzar escritura de registros de energía antes de reiniciar
+		delay(100);
 		ESP.restart();
+		});
+
+	server.on("/resetEnergy", HTTP_GET, [](AsyncWebServerRequest* request) {
+		request->send(200, "text/plain", "ok");
+		MeterWriteEnergyRegisters(true);		//Reiniciar contadores de energía
 		});
 
 	server.on("/status", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -174,6 +181,11 @@ void Init_WebServer()
 		}
 		uint32_t time = getTime(nullptr);
 		request->send(200, "text/plain", String(time));
+		});
+
+	server.on("/restorecal", HTTP_POST | HTTP_GET, [](AsyncWebServerRequest* request) {
+		request->send(200, "text/plain", "restaurando calibracion... reiniciar para aplicar cambios!");
+		ade.restoreCalibration();
 		});
 
 
