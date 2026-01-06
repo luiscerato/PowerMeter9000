@@ -116,10 +116,12 @@ function meterLoadEventsList() {
                 fase = data[1];
                 type = data[2];
                 format = "json";
-            } else {
+            } else if (data.endsWith(".csv")) {
                 data = data.replaceAll("ACevent_", "");
                 time = data.split(".")[0];
             }
+            else 
+                return; //No es un archivo de evento válido ( se rompía con archivos que no eran .json o .csv)
 
             let [datePart, timePart] = time.split(".")[0].split("_");
             let [year, month, day] = datePart.split("-").map(Number); // "7" → 7
