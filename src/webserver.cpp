@@ -5,6 +5,8 @@
 #include "webserver.h"
 #include "wifiUtils.h"
 #include "meter.h"
+#include "manager_api.h"
+#include "event_store.h"
 
 
 // Create AsyncWebServer object on port 80
@@ -16,6 +18,30 @@ AsyncWebSocket acEventsWS("/acevents");
 
 WSeventFunctionCallback meterEvents = nullptr, screenEvents = nullptr, acEvents = nullptr;		//Punteros a los callback de los eventos de los websockets
 //
+
+// Convierte texto decimal o hexadecimal a entero con signo.
+// value: texto recibido por HTTP.
+static int64_t parseSignedOption(const String& value)
+{
+	return strtoll(value.c_str(), nullptr, 0);
+}
+
+// Convierte texto decimal o hexadecimal a entero sin signo.
+// value: texto recibido por HTTP.
+static uint64_t parseUnsignedOption(const String& value)
+{
+	return strtoull(value.c_str(), nullptr, 0);
+}
+
+// Obtiene el identificador requerido por las rutas de artefactos de eventos.
+// request: solicitud HTTP. eventId: destino del identificador validado.
+static bool getEventIdParam(AsyncWebServerRequest* request, String& eventId)
+{
+	if (!request->hasParam("eventId")) return false;
+	eventId = request->getParam("eventId")->value();
+	return eventId.length() > 0;
+}
+
 void webServerSetMeterEvents(WSeventFunctionCallback func)
 {
 	if (func != nullptr)
@@ -56,7 +82,25 @@ void Init_WebServer()
 
 	// Web Server Root URL
 	server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-		request->send(SPIFFS, "/index.html", "text/html");
+		AsyncWebServerResponse* response = request->beginResponse(SPIFFS, "/index.html", "text/html");
+		response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+		response->addHeader("Pragma", "no-cache");
+		response->addHeader("Expires", "0");
+		request->send(response);
+		});
+
+	server.on("/scope.html", HTTP_GET, [](AsyncWebServerRequest* request) {
+		AsyncWebServerResponse* response = request->beginResponse(302, "text/plain", "");
+		response->addHeader("Location", "/index.html#scopePage");
+		response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+		request->send(response);
+		});
+
+	server.on("/nav.html", HTTP_GET, [](AsyncWebServerRequest* request) {
+		AsyncWebServerResponse* response = request->beginResponse(302, "text/plain", "");
+		response->addHeader("Location", "/index.html");
+		response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+		request->send(response);
 		});
 
 	/*
@@ -126,6 +170,120 @@ void Init_WebServer()
 		request->send(200, "application/json", status);
 		});
 
+	server.on("/api/v1/manager/discovery", HTTP_GET, [](AsyncWebServerRequest* request) {
+		String response;
+		managerGetDiscoveryJson(response);
+		request->send(200, "application/json", response);
+		});
+
+	server.on("/api/v1/status", HTTP_GET, [](AsyncWebServerRequest* request) {
+		String response;
+		managerGetStatusJson(response);
+		request->send(200, "application/json", response);
+		});
+
+	server.on("/api/v1/telemetry/current", HTTP_GET, [](AsyncWebServerRequest* request) {
+		String response;
+		managerGetTelemetryCurrentJson(response);
+		request->send(200, "application/json", response);
+		});
+
+	server.on("/api/v1/events/test", HTTP_GET, [](AsyncWebServerRequest* request) {
+		if (request->hasParam("pattern")) {
+			if (request->getParam("pattern")->value() != "ramp") {
+				request->send(400, "application/json", "{\"schemaVersion\":1,\"ok\":false,\"reason\":\"unknown_pattern\"}");
+				return;
+			}
+			String eventId, reason;
+			bool created = eventStoreCreateRampTest(eventId, reason);
+			String payload = created
+				? "{\"schemaVersion\":1,\"ok\":true,\"eventId\":\"" + eventId + "\",\"testPattern\":\"triangle-int12-v1\"}"
+				: "{\"schemaVersion\":1,\"ok\":false,\"reason\":\"" + reason + "\"}";
+			AsyncWebServerResponse* response = request->beginResponse(created ? 201 : 503, "application/json", payload);
+			response->addHeader("Cache-Control", "no-store");
+			request->send(response);
+			return;
+		}
+		MeterTriggerTestEvent();
+		String response = "{\"ok\":true,\"message\":\"test event capture requested\"}";
+		request->send(200, "application/json", response);
+		});
+
+	server.on("/api/v1/events/fast-rms", HTTP_GET, [](AsyncWebServerRequest* request) {
+		String eventId;
+		if (!getEventIdParam(request, eventId)) {
+			request->send(400, "application/json", "{\"error\":\"eventId is required\"}");
+			return;
+		}
+		size_t dataSize = 0;
+		if (!eventStoreGetFastRmsSize(eventId, dataSize)) {
+			request->send(404, "application/json", "{\"error\":\"fast RMS data not available\"}");
+			return;
+		}
+		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", dataSize, [eventId](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+			return eventStoreCopyFastRmsChunk(eventId, index, buffer, maxLen);
+			});
+		response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+		request->send(response);
+		});
+
+	server.on("/api/v1/events/wave", HTTP_GET, [](AsyncWebServerRequest* request) {
+		String eventId;
+		if (!getEventIdParam(request, eventId)) {
+			request->send(400, "application/json", "{\"error\":\"eventId is required\"}");
+			return;
+		}
+		size_t dataSize = 0;
+		if (!eventStoreGetWaveSize(eventId, dataSize)) {
+			request->send(404, "application/json", "{\"error\":\"wave data not available\"}");
+			return;
+		}
+		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", dataSize, [eventId](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+			return eventStoreCopyWaveChunk(eventId, index, buffer, maxLen);
+			});
+		response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+		request->send(response);
+		});
+
+	server.on("/api/v1/events/wave-diagnostics", HTTP_GET, [](AsyncWebServerRequest* request) {
+		String payload;
+		meterGetWaveDiagnostics(payload);
+		AsyncWebServerResponse* response = request->beginResponse(200, "application/json", payload);
+		response->addHeader("Cache-Control", "no-store");
+		request->send(response);
+		});
+
+	server.on("/api/v1/events/clear", HTTP_POST, [](AsyncWebServerRequest* request) {
+		String eventId;
+		if (!getEventIdParam(request, eventId)) {
+			request->send(400, "application/json", "{\"error\":\"eventId is required\"}");
+			return;
+		}
+		if (!eventStoreClearEvent(eventId)) {
+			request->send(404, "application/json", "{\"error\":\"event not available\"}");
+			return;
+		}
+		request->send(200, "application/json", "{\"ok\":true}");
+		});
+
+	server.on("/api/v1/events", HTTP_GET, [](AsyncWebServerRequest* request) {
+		String response;
+		eventStoreGetListJson(response);
+		request->send(200, "application/json", response);
+		});
+
+	server.on("/api/v1/history", HTTP_GET, [](AsyncWebServerRequest* request) {
+		String response;
+		managerGetNotImplementedJson(response, "history");
+		request->send(501, "application/json", response);
+		});
+
+	server.on("/api/v1/configuration", HTTP_GET | HTTP_PATCH, [](AsyncWebServerRequest* request) {
+		String response;
+		managerGetNotImplementedJson(response, "configuration");
+		request->send(501, "application/json", response);
+		});
+
 	server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest* request) {
 		String status;
 		scanWifiGetJson(status);
@@ -178,6 +336,7 @@ void Init_WebServer()
 			// Serial.printf(" '%s' = '%s'\n", body->name().c_str(), body->value().c_str());
 			int32_t time = body->value().toInt();
 			setTimeTo(time);
+			managerSetClockSynchronized("rtc");
 		}
 		uint32_t time = getTime(nullptr);
 		request->send(200, "text/plain", String(time));
@@ -186,6 +345,11 @@ void Init_WebServer()
 	server.on("/restorecal", HTTP_POST | HTTP_GET, [](AsyncWebServerRequest* request) {
 		request->send(200, "text/plain", "restaurando calibracion... reiniciar para aplicar cambios!");
 		ade.restoreCalibration();
+		});
+
+	server.on("/reloadopts", HTTP_POST | HTTP_GET, [](AsyncWebServerRequest* request) {
+		MeterLoadOptions();
+		request->send(200, "text/plain", "opciones recargadas");
 		});
 
 
@@ -207,24 +371,24 @@ void Init_WebServer()
 					PreferenceType type = opts.getType(key.c_str());
 
 					if (request->getParam(i)->value().length() > 0) { //Si la longitud de valor es >0, entonces se lo debe escribir
-						debugI("Escribiendo %s:%s", key.c_str(), value.c_str());
+						debugI("Escribiendo %s:%s", key.c_str(), val.c_str());
 						/*Todo: poner los valores para los tipos UINT*/
 						if (type == PT_I8)
-							opts.putChar(key.c_str(), atoi(val.c_str()));
+							opts.putChar(key.c_str(), parseSignedOption(val));
 						else if (type == PT_U8)
-							opts.putUChar(key.c_str(), atoi(val.c_str()));
+							opts.putUChar(key.c_str(), parseUnsignedOption(val));
 						else if (type == PT_I16)
-							opts.putShort(key.c_str(), atoi(val.c_str()));
+							opts.putShort(key.c_str(), parseSignedOption(val));
 						else if (type == PT_U16)
-							opts.putUShort(key.c_str(), atoi(val.c_str()));
+							opts.putUShort(key.c_str(), parseUnsignedOption(val));
 						else if (type == PT_I32)
-							opts.putInt(key.c_str(), atoll(val.c_str()));
+							opts.putInt(key.c_str(), parseSignedOption(val));
 						else if (type == PT_U32)
-							opts.putUInt(key.c_str(), atoll(val.c_str()));
+							opts.putUInt(key.c_str(), parseUnsignedOption(val));
 						else if (type == PT_I64)
-							opts.putLong64(key.c_str(), atoll(val.c_str()));
+							opts.putLong64(key.c_str(), parseSignedOption(val));
 						else if (type == PT_U64)
-							opts.putULong64(key.c_str(), atoll(val.c_str()));
+							opts.putULong64(key.c_str(), parseUnsignedOption(val));
 						else if (type == PT_BLOB) {
 							int32_t size = opts.getBytesLength(key.c_str());
 							if (size == sizeof(float))
@@ -253,9 +417,9 @@ void Init_WebServer()
 						else if (type == PT_U16)
 							value = opts.getUShort(key.c_str());
 						else if (type == PT_I32)
-							value = opts.getUInt(key.c_str());
+							value = opts.getInt(key.c_str());
 						else if (type == PT_U32)
-							value = opts.getLong(key.c_str());
+							value = opts.getUInt(key.c_str());
 						else if (type == PT_I64)
 							value = (float)opts.getLong64(key.c_str());
 						else if (type == PT_U64)
@@ -294,14 +458,14 @@ void Init_WebServer()
 
 
 	// server.serveStatic("/", SPIFFS, "/").setCacheControl("max-age=31536000");	//Los archivos se pueden almacenas en el servidor por un año
-	server.serveStatic("/", SPIFFS, "/"); //.setCacheControl("max-age=31536000");	//En modo develop hay que actualiza a cada rato
+	server.serveStatic("/", SPIFFS, "/").setCacheControl("no-store, no-cache, must-revalidate, max-age=0");
 
 
 	// Para habilitar CORS. Al simular desde un servidor local no se puede llamar a la API. Con esto se soluciona.
 	if (!CORS) {
 		CORS = true;	//Solo agregarlos una vez
 		DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-		DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT");
+		DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH");
 		DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
 	}
 
@@ -328,7 +492,7 @@ int32_t scanWifiGetJson(String& List)
 {
 	static String list = "";
 	static bool first = true;
-	int32_t count;
+	int32_t count = WIFI_SCAN_RUNNING;
 
 	if (first) {
 		count = WiFi.scanNetworks(true);
@@ -336,11 +500,12 @@ int32_t scanWifiGetJson(String& List)
 	}
 	else {
 		String ssid;
-		int32_t rssi, channel, count;
+		int32_t rssi, channel;
 		uint8_t encType, * bssid;
 		char item[128];
 
-		if (count = WiFi.scanComplete() >= 0) {	//Una vez terminado el escaneo, crear un array de objetos con la info de la red
+		count = WiFi.scanComplete();
+		if (count >= 0) {	//Una vez terminado el escaneo, crear un array de objetos con la info de la red
 			list = "";	//Limpiar lista
 			for (int32_t i = 0; i < count; i++) {
 				if (WiFi.getNetworkInfo(i, ssid, encType, rssi, bssid, channel)) {	//Obtener info de la red

@@ -3,15 +3,99 @@
     <head>
         <title>POWER METER ADE9000</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" charset="UTF-8"/>
+        <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+        <meta http-equiv="Pragma" content="no-cache" />
+        <meta http-equiv="Expires" content="0" />
         <link rel="icon" type="image/x-icon" href="favicon.ico" />
-        <link rel="stylesheet" type="text/css" href="style.css" />
-        <link rel="stylesheet" type="text/css" href="lib/bootstrap.min.css" />
-        <link rel="stylesheet" type="text/css" href="lib/jquery.simplegauge.css" />
     </head>
     <body>
-        <div id="navbar"></div>
+        <div id="bootLoader" style="position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #f5f5f5; z-index: 9999; padding: 1rem;">
+    <textarea id="bootProgress" readonly style="width: min(92vw, 720px); height: min(70vh, 360px); padding: 1rem; font-family: Consolas, monospace; resize: none;">Iniciando carga...
+</textarea>
+</div>
+<script>
+const bootStyles = ["style.css","lib/bootstrap.min.css","lib/jquery.simplegauge.css"];
+const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","lib/char-lcd.js","board.js","scope.js","index.js","scope_ui.js","script.js"];
+const bootBuild = "20260619-3";
 
-        <div class="nav_sep container-xl">
+// Agrega una linea al progreso de carga.
+// message: texto que se muestra en el textarea.
+function bootLog(message) {
+    const box = document.getElementById("bootProgress");
+    box.value += message + "\n";
+    box.scrollTop = box.scrollHeight;
+}
+
+// Carga un archivo CSS y espera a que termine.
+// path: ruta del archivo CSS.
+function loadStyle(path) {
+    return new Promise((resolve, reject) => {
+        bootLog("Cargando estilo: " + path);
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = cacheBust(path);
+        link.onload = () => resolve();
+        link.onerror = () => reject(new Error(path));
+        document.head.appendChild(link);
+    });
+}
+
+// Carga un archivo JavaScript y espera a que termine.
+// path: ruta del archivo JavaScript.
+function loadScript(path) {
+    return new Promise((resolve, reject) => {
+        bootLog("Cargando script: " + path);
+        const script = document.createElement("script");
+        script.src = cacheBust(path);
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error(path));
+        document.body.appendChild(script);
+    });
+}
+
+// Agrega version a los archivos para evitar cache viejo del navegador.
+// path: ruta original del archivo.
+function cacheBust(path) {
+    return path + (path.includes("?") ? "&" : "?") + "v=" + bootBuild;
+}
+
+// Carga todos los archivos de la app de a uno.
+async function bootApp() {
+    try {
+        for (const path of bootStyles) await loadStyle(path);
+        for (const path of bootScripts) await loadScript(path);
+        bootLog("Aplicacion cargada.");
+        document.getElementById("appRoot").style.display = "";
+        document.getElementById("bootLoader").style.display = "none";
+    } catch (error) {
+        bootLog("ERROR cargando: " + error.message);
+        bootLog("Recargue la pagina para intentar nuevamente.");
+    }
+}
+
+bootApp();
+</script>
+        <div id="appRoot" style="display: none;">
+        <div id="navbar"><nav id="codeNavBar" class="navbar fixed-top navbar-expand-sm navbar-dark bg-dark pt-1 pb-1">
+    <div class="container-fluid nav_bar">
+        <a class="navbar-brand"><h3 class="navBarText">PowerMeter</h3></a>
+        <form class="d-flex align-items-center d-none p-1" style="height: 30px" role="search" id="navServerIP">
+            <input class="form-control form-control-sm me-2" type="text" placeholder="IP de la placa ESP32" value="192.168.1.0" id="inputBoardURL" aria-label="IP de la placa" required />
+            <button class="btn btn-sm btn-outline-light p-1" type="button" id="btnReloadIP">↻</button>
+        </form>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNavAltMarkup" aria-controls="navbarNavAltMarkup" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse justify-content-end" id="navbarNavAltMarkup">
+            <div class="navbar-nav">
+                <a class="nav-link app-page-link" href="#meterPage" id="navindex" data-page="meterPage"><h5>Inicio</h5></a>
+                <a class="nav-link app-page-link" href="#scopePage" id="navscope" data-page="scopePage"><h5>Osciloscopio</h5></a>
+            </div>
+        </div>
+    </div>
+</nav></div>
+
+        <div id="meterPage" class="appPage nav_sep container-xl">
             <div class="row text-center mt-4">
                 <h2>Power Meter ADE9000 - Mediciones en tiempo real</h2>
             </div>
@@ -274,11 +358,20 @@
                 <div class="tab-pane" id="events" role="tabpanel" aria-labelledby="events-tab">
                     <div class="row">
                         <div class="col-sm-12 col-md-3 p-1 pt-2 pb-2">
+                            <div class="border rounded p-2 mb-2">
+                                <div class="d-grid gap-2">
+                                    <button id="eventTestBtn" class="btn btn-sm btn-warning" type="button">Iniciar captura de evento</button>
+                                    <button id="eventRampBtn" class="btn btn-sm btn-outline-warning" type="button">Generar rampa de prueba</button>
+                                    <button id="eventRefreshBtn" class="btn btn-sm btn-outline-secondary" type="button">Recargar eventos</button>
+                                </div>
+                                <div id="eventRamStatus" class="small text-muted mt-2">Eventos RAM sin cargar.</div>
+                                <div id="eventRamList" class="mt-2"></div>
+                            </div>
                             <div id="eventList" style="max-height: 70vh; overflow-y: auto;" class="eventElements"></div>
                         </div>
                         <div class="col-sm-12 col-md-9 p-1 pt-2 pb-2">
                             <div class="card p-1">
-                                <div id="chartContainer" style="height: 70vh"  class="eventElements"></div>
+                                <div id="eventChartContainer" style="height: 70vh"  class="eventElements"></div>
                             </div>
                         </div>
                         <!-- <div class="col-9">
@@ -296,13 +389,199 @@
                 <div class="tab-pane" id="settings" role="tabpanel" aria-labelledby="settings-tab"></div>
             </div>
         </div>
-        <div id="divFooter"></div>
-    </body>
+        <div id="scopePage" class="appPage container-fluid nav_sep d-none">
+            <div class="row p-2" id="scopeUI">
+                <div class="col-sm-12 col-md-9 p-1 pt-2 pb-2">
+                    <div class="card p-1">
+                        <div id="chartContainer" style="height: 600px"></div>
+                    </div>
+                </div>
 
-    <script src="lib/jquery-3.6.4.min.js"></script>
-    <script src="lib/bootstrap.bundle.min.js"></script>
-    <script src="lib/jquery.simplegauge.js"></script>
-    <script src="board.js"></script>
-    <script src="index.js"></script>
-    <script src="script.js"></script>
+                <div class="col-sm-12 col-md-3 p-1 pt-2 pb-2" style="min-width: 240px">
+                    <div class="card mb-2">
+                        <div class="card-header text-center p-1">Canales</div>
+                        <div class="card-body pt-1 pb-1">
+                            <div class="row p-0" id="scopePanelComandos">
+                                <div class="col p-1">
+                                    <button type="button" class="btn btn-primary w-100" id="btnStartStop">Iniciar</button>
+                                </div>
+                                <div class="col p-1">
+                                    <div><h5 id="lblSpeed"></h5></div>
+                                </div>
+                            </div>
+                            <div class="row p-0">
+                                <div class="col p-1">
+                                    <div class="btn-group btn-group-sm w-100" role="group">
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnFaseR" value="fase-r" autocomplete="off" checked />
+                                        <label class="btn btn-outline-primary" for="btnFaseR">Fase R</label>
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnFaseS" value="fase-s" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnFaseS">Fase S</label>
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnFaseT" value="fase-t" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnFaseT">Fase T</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row p-0">
+                                <div class="col p-1">
+                                    <div class="btn-group btn-group-sm w-100" role="group">
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnCorriente" value="corriente" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnCorriente">Corriente</label>
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnVoltaje" value="voltaje" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnVoltaje">Voltaje</label>
+                                        <input type="radio" class="btn-check" name="radioChkCanal" id="btnTodos" value="todos" autocomplete="off" />
+                                        <label class="btn btn-outline-primary" for="btnTodos">Todos</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-6 p-1">
+                                    <div class="card">
+                                        <div class="card-header text-center p-0">Corriente</div>
+                                        <div class="card-body p-1">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input corriente" type="checkbox" id="switchCorrienteR" checked />
+                                                <label class="form-check-label" for="switchCorrienteR">Fase R</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input corriente" type="checkbox" id="switchCorrienteS" checked />
+                                                <label class="form-check-label" for="switchCorrienteS">Fase S</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input corriente" type="checkbox" id="switchCorrienteT" checked />
+                                                <label class="form-check-label" for="switchCorrienteT">Fase T</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input corriente" type="checkbox" id="switchCorrienteN" checked />
+                                                <label class="form-check-label" for="switchCorrienteN">Neutro</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-6 p-1">
+                                    <div class="card">
+                                        <div class="card-header text-center p-0">Voltaje</div>
+                                        <div class="card-body p-1">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input voltaje" type="checkbox" id="switchVoltR" checked />
+                                                <label class="form-check-label" for="switchVoltR">Fase R</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input voltaje" type="checkbox" id="switchVoltS" checked />
+                                                <label class="form-check-label" for="switchVoltS">Fase S</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input voltaje" type="checkbox" id="switchVoltT" checked />
+                                                <label class="form-check-label" for="switchVoltT">Fase T</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card mb-2" id="scopePanelEscalas">
+                        <div class="card-header text-center p-1">Escalas</div>
+                        <div class="card-body p-1">
+                            <div>
+                                <div class="">
+                                    <label class="label">Voltaje</label>
+                                    <select class="form-select" aria-label="Voltaje" id="selectVoltage">
+                                        <option value="0.01">0.01V/div</option>
+                                        <option value="0.1">0.1V/div</option>
+                                        <option value="1">1V/div</option>
+                                        <option value="2">2V/div</option>
+                                        <option value="5">5V/div</option>
+                                        <option selected value="10">10V/div</option>
+                                        <option value="20">20V/div</option>
+                                        <option value="50">50V/div</option>
+                                        <option value="100">100V/div</option>
+                                      </select>
+                                </div>
+                            </div>
+                            <div>
+                                <div>
+                                    <label class="label">Corriente</label>
+                                    <select class="form-select" aria-label="Corriente" id="selectCurrent">
+                                        <option value="0.01">0.01A/div</option>
+                                        <option value="0.1">0.1A/div</option>
+                                        <option value="1">1A/div</option>
+                                        <option value="2">2A/div</option>
+                                        <option value="5">5A/div</option>
+                                        <option selected value="10">10A/div</option>
+                                        <option value="20">20A/div</option>
+                                        <option value="50">50A/div</option>
+                                        <option value="100">100A/div</option>
+                                      </select>
+                                </div>
+                            </div>
+                            <div>
+                                <div>
+                                    <label class="label">Tiempo</label>
+                                    <select class="form-select" aria-label="Tiempo" id="selectTimeDiv">
+                                        <option value="0.01">0.01ms/div</option>
+                                        <option value="0.1">0.1ms/div</option>
+                                        <option value="1">1ms/div</option>
+                                        <option value="2">2ms/div</option>
+                                        <option value="5">5ms/div</option>
+                                        <option selected value="10">10ms/div</option>
+                                        <option value="20">20ms/div</option>
+                                        <option value="50">50ms/div</option>
+                                        <option value="100">100ms/div</option>
+                                      </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card" id="scopePanelTrigger">
+                        <div class="card-header text-center p-1">Trigger</div>
+                        <div class="card-body p-1">
+                            <div>
+                                <div class="mb-2 mt-1">
+                                    <label for="rangeTrigger" class="w-25">Nivel</label>
+                                    <input type="range" id="rangeTrigger" min="-1000" max="1000" value="0" class="w-50" />
+                                    <label id="lblTrigger" class="">25ms</label>
+                                </div>
+                            </div>
+                            <div class="d-flex align-items-center mb-2">
+                                <label for="selectTriggerCh" class="escalasLabel">Canal</label>
+                                <select class="form-select form-select-sm" aria-label="Canal trigger" id="selectTriggerCh"></select>
+                            </div>
+                            <div>
+                                <div class="btn-group btn-group-sm w-100" role="group">
+                                    <input type="radio" class="btn-check" name="radioTriggerEdge" id="btnTriggerRising" value="rising" autocomplete="off" checked />
+                                    <label class="btn btn-outline-primary" for="btnTriggerRising">Rising edge</label>
+                                    <input type="radio" class="btn-check" name="radioTriggerEdge" id="btnTriggerFalling" value="falling" autocomplete="off" />
+                                    <label class="btn btn-outline-primary" for="btnTriggerFalling">Falling edge</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="content">
+                <div class="card" style="zoom: 1.5">
+                    <div id="lcd"></div>
+                </div>
+            </div>
+        </div>
+        <div id="divFooter">
+    <div style="margin-bottom: 40px; height: 2px"></div>
+    <nav class="navbar fixed-bottom navbar-dark bg-dark mt-0 mb-0 pt-0 pb-0">
+        <div class="container">
+            <div class="container text-center navbar-text mt-0 mb-0 pt-0 pb-0">
+                <div class="row justify-content-evenly">
+                    <div class="col-auto textFooter"><span id="statusWifi">Conectado a</span></div>
+                    <div class="col-auto textFooter"><span id="statusIP">IP:</span></div>
+                    <div class="col-auto textFooter"><span id="statusHeap">Heap</span></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+</div>
+        </div>
+    </body>
 </html>

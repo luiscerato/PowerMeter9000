@@ -6,15 +6,15 @@ let tableRows = [
     {name: "Potencia Reactiva", unit: "var", visible: true, decimals: 1, source: "meter"},
     {name: "Potencia Aparente", unit: "va", visible: true, decimals: 1, source: "meter"},
     {name: "Frecuencia", unit: "freq", visible: true, decimals: 2, source: "meter"},
-    {name: "Facrtor de potencia", unit: "fp", visible: true, decimals: 2, source: "meter"},
+    {name: "Factor de potencia", unit: "fp", visible: true, decimals: 2, source: "meter"},
     {name: "Energía activa", unit: "wattH", visible: true, decimals: 2, source: "energia"},
-    {name: "Energía ractiva", unit: "varH", visible: true, decimals: 2, source: "energia"},
+    {name: "Energía reactiva", unit: "varH", visible: true, decimals: 2, source: "energia"},
     {name: "Energía aparente", unit: "vaH", visible: true, decimals: 2, source: "energia"},
     {name: "Desfasaje fases", unit: "degv", visible: true, decimals: 2, source: "angulos"},
     {name: "Desfasaje corriente", unit: "degvi", visible: true, decimals: 2, source: "angulos"},
     {name: "Desfasaje fases corriente", unit: "degi", visible: true, decimals: 2, source: "angulos"},
-    {name: "Distorción Voltaje", unit: "thdV", visible: true, decimals: 2, source: "thd"},
-    {name: "Distorción Corriente", unit: "thdI", visible: true, decimals: 2, source: "thd"},
+    {name: "Distorsión Voltaje", unit: "thdV", visible: true, decimals: 2, source: "thd"},
+    {name: "Distorsión Corriente", unit: "thdI", visible: true, decimals: 2, source: "thd"},
 ];
 
 let decimalPlaces = {};
@@ -29,13 +29,14 @@ let tableHeaders = [
     {name: "Promedio", short: "Avg", visible: true},
 ];
 
-function initUI() {
+function initMeterUI() {
     $("#gaugeVoltaje").simpleGauge(getGaugeOptions("Voltaje"));
     $("#gaugeVoltajeF").simpleGauge(getGaugeOptions("Voltaje Fases"));
     $("#gaugeCorriente").simpleGauge(getGaugeOptions("Corriente"));
     $("#gaugePotencia").simpleGauge(getGaugeOptions("Potencia"));
 
     createTable();
+    initSettingsUI();
 
     board.getResponseRepeat("meter", meterOk, meterFail, "fast");
 
@@ -46,24 +47,12 @@ function initUI() {
     board.getResponseRepeat("meter?thd", thdOk, thdFail, "slow");
 
 
-    $.getScript("scope.js")
-        .done(function () {
-            $.getScript("lib/canvasjs.min.js")
-                .done(function () {
-                    console.log("Script canvasjs cargado!");
-                    Scope.begin("chartContainer", null, "event");
-                })
-                .fail(function () {
-                    console.error("Error al cargar el script de eventos");
-                });
-        })
-        .fail(function () {
-            console.error("Error al cargar el script de eventos");
-        });
-
-        //Cargar parte de la interfase que está en scope.html
-    // $("#eventData").load("scope.html #scopeUI");
-
+    $("#eventList").html('<div class="text-muted p-2">Seleccione la pestaña Eventos para cargar la lista.</div>');
+    $("#eventRamList").html("");
+    $("#eventChartContainer").html('<div class="text-muted p-3">Sin evento cargado.</div>');
+    $("#eventTestBtn").on("click", createVirtualEvent);
+    $("#eventRampBtn").on("click", createRampTestEvent);
+    $("#eventRefreshBtn").on("click", refreshEventLists);
 
     $(window).on("resize", function () {
         let width = $(window).width();
@@ -95,13 +84,402 @@ function initUI() {
         // Verificar si es el tab "Events"
         if (tabTarget !== "#events") return;
 
+        loadRamEventsList();
         meterLoadEventsList();
     });
 }
 
+// Mantiene compatibilidad si el navegador conserva un script viejo.
+function initUI() {
+    initMeterUI();
+}
+
+const calibrationGroups = [
+    {
+        title: "Calibración de fase",
+        fields: [
+            {key: "APHCAL0", label: "Fase R"},
+            {key: "BPHCAL0", label: "Fase S"},
+            {key: "CPHCAL0", label: "Fase T"},
+            {key: "NPHCAL", label: "Neutro"},
+        ],
+    },
+    {
+        title: "Ganancia de corriente",
+        fields: [
+            {key: "AIGAIN", label: "Fase R"},
+            {key: "BIGAIN", label: "Fase S"},
+            {key: "CIGAIN", label: "Fase T"},
+            {key: "NIGAIN", label: "Neutro"},
+        ],
+    },
+    {
+        title: "Ganancia de voltaje",
+        fields: [
+            {key: "AVGAIN", label: "Fase R"},
+            {key: "BVGAIN", label: "Fase S"},
+            {key: "CVGAIN", label: "Fase T"},
+        ],
+    },
+    {
+        title: "Offset RMS de corriente",
+        fields: [
+            {key: "AIRMSOS", label: "Fase R"},
+            {key: "BIRMSOS", label: "Fase S"},
+            {key: "CIRMSOS", label: "Fase T"},
+            {key: "NIRMSOS", label: "Neutro"},
+        ],
+    },
+    {
+        title: "Offset RMS de voltaje",
+        fields: [
+            {key: "AVRMSOS", label: "Fase R"},
+            {key: "BVRMSOS", label: "Fase S"},
+            {key: "CVRMSOS", label: "Fase T"},
+        ],
+    },
+    {
+        title: "Offset fundamental",
+        fields: [
+            {key: "AIFRMSOS", label: "Corriente R"},
+            {key: "BIFRMSOS", label: "Corriente S"},
+            {key: "CIFRMSOS", label: "Corriente T"},
+            {key: "AVFRMSOS", label: "Voltaje R"},
+            {key: "BVFRMSOS", label: "Voltaje S"},
+            {key: "CVFRMSOS", label: "Voltaje T"},
+        ],
+    },
+    {
+        title: "Offset RMS un ciclo",
+        fields: [
+            {key: "AIRMSONEOS", label: "Corriente R"},
+            {key: "BIRMSONEOS", label: "Corriente S"},
+            {key: "CIRMSONEOS", label: "Corriente T"},
+            {key: "NIRMSONEOS", label: "Corriente N"},
+            {key: "AVRMSONEOS", label: "Voltaje R"},
+            {key: "BVRMSONEOS", label: "Voltaje S"},
+            {key: "CVRMSONEOS", label: "Voltaje T"},
+        ],
+    },
+    {
+        title: "Offset RMS 10/12 ciclos",
+        fields: [
+            {key: "AIRMS1012OS", label: "Corriente R"},
+            {key: "BIRMS1012OS", label: "Corriente S"},
+            {key: "CIRMS1012OS", label: "Corriente T"},
+            {key: "NIRMS1012OS", label: "Corriente N"},
+            {key: "AVRMS1012OS", label: "Voltaje R"},
+            {key: "BVRMS1012OS", label: "Voltaje S"},
+            {key: "CVRMS1012OS", label: "Voltaje T"},
+        ],
+    },
+];
+
+const meterOptionGroups = [
+    {
+        title: "Eventos de voltaje",
+        namespace: "meter",
+        fields: [
+            {key: "dipEnabled", label: "Detectar baja tensión", type: "bool"},
+            {key: "dipVoltage", label: "Nivel baja tensión", type: "float", unit: "V"},
+            {key: "dipCicles", label: "Ciclos baja tensión", type: "int"},
+            {key: "swellEnabled", label: "Detectar sobretensión", type: "bool"},
+            {key: "swellVoltage", label: "Nivel sobretensión", type: "float", unit: "V"},
+            {key: "swellCicles", label: "Ciclos sobretensión", type: "int"},
+        ],
+    },
+    {
+        title: "Eventos de corriente",
+        namespace: "meter",
+        fields: [
+            {key: "overcurrent", label: "Detectar sobrecorriente", type: "bool"},
+            {key: "ocCurrent", label: "Nivel sobrecorriente", type: "float", unit: "A"},
+        ],
+    },
+    {
+        title: "Captura de eventos",
+        namespace: "meter",
+        fields: [
+            {key: "eventPrevSamples", label: "Muestras previas", type: "int"},
+            {key: "eventPostSamples", label: "Muestras posteriores", type: "int"},
+            {key: "eventMaxSamples", label: "Muestras máximas", type: "int"},
+        ],
+    },
+];
+
+// Inicializa la pestaña de opciones.
+function initSettingsUI() {
+    $("#settings").html(createSettingsHtml());
+    $("#btnLoadSettings").click(loadSettings);
+    $("#btnLoadCalibration").click(loadSettings);
+    $("#btnSaveMeterOptions").click(saveMeterOptions);
+    $("#btnSaveCalibration").click(saveCalibrationOptions);
+    $("#btnRestoreCalibration").click(restoreDefaultCalibration);
+    loadSettings();
+}
+
+// Crea el HTML base de las opciones.
+function createSettingsHtml() {
+    let html = '<div class="row p-2 g-2">';
+    html += '<div class="col-12"><span class="text-muted" id="settingsStatus"></span></div>';
+    html += '<div class="col-12 col-xl-4">' + createMeterSettingsHtml() + "</div>";
+    html += '<div class="col-12 col-xl-8">' + createCalibrationSettingsHtml() + "</div>";
+    html += "</div>";
+    return html;
+}
+
+// Crea el bloque de opciones del medidor.
+function createMeterSettingsHtml() {
+    let html = '<div class="card mb-2">';
+    html += '<div class="card-header p-2 d-flex justify-content-between align-items-center gap-2 flex-wrap">';
+    html += '<span>Opciones de medición</span><div class="d-flex gap-2">';
+    html += '<button class="btn btn-sm btn-primary" id="btnLoadSettings" type="button">Cargar</button>';
+    html += '<button class="btn btn-sm btn-success" id="btnSaveMeterOptions" type="button">Guardar</button>';
+    html += "</div></div>";
+    html += '<div class="card-body p-2">' + createOptionGroupsHtml(meterOptionGroups, "meter") + "</div>";
+    html += "</div>";
+    return html;
+}
+
+// Crea el bloque compacto de calibración.
+function createCalibrationSettingsHtml() {
+    let html = '<div class="card mb-2">';
+    html += '<div class="card-header p-2 d-flex justify-content-between align-items-center gap-2 flex-wrap">';
+    html += '<span>Calibración</span><div class="d-flex gap-2">';
+    html += '<button class="btn btn-sm btn-primary" id="btnLoadCalibration" type="button">Cargar</button>';
+    html += '<button class="btn btn-sm btn-success" id="btnSaveCalibration" type="button">Guardar</button>';
+    html += '<button class="btn btn-sm btn-warning" id="btnRestoreCalibration" type="button">Por defecto</button>';
+    html += "</div></div>";
+    html += '<div class="card-body p-2"><div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-0">';
+    html += "<thead><tr><th>Registro</th><th>Fase R</th><th>Fase S</th><th>Fase T</th><th>Neutro</th></tr></thead><tbody>";
+    getCalibrationRows().forEach((row) => {
+        html += '<tr><td class="small">' + row.name + "</td>";
+        ["r", "s", "t", "n"].forEach((phase) => {
+            html += "<td>" + createCalibrationCellHtml(row[phase]) + "</td>";
+        });
+        html += "</tr>";
+    });
+    html += "</tbody></table></div></div></div>";
+    return html;
+}
+
+// Devuelve las filas compactas de calibración.
+function getCalibrationRows() {
+    return [
+        {name: "Calibración de fase", r: "APHCAL0", s: "BPHCAL0", t: "CPHCAL0", n: "NPHCAL"},
+        {name: "Ganancia corriente", r: "AIGAIN", s: "BIGAIN", t: "CIGAIN", n: "NIGAIN"},
+        {name: "Ganancia voltaje", r: "AVGAIN", s: "BVGAIN", t: "CVGAIN"},
+        {name: "Offset RMS corriente", r: "AIRMSOS", s: "BIRMSOS", t: "CIRMSOS", n: "NIRMSOS"},
+        {name: "Offset RMS voltaje", r: "AVRMSOS", s: "BVRMSOS", t: "CVRMSOS"},
+        {name: "Offset fundamental corriente", r: "AIFRMSOS", s: "BIFRMSOS", t: "CIFRMSOS"},
+        {name: "Offset fundamental voltaje", r: "AVFRMSOS", s: "BVFRMSOS", t: "CVFRMSOS"},
+        {name: "Offset RMS 1 ciclo corriente", r: "AIRMSONEOS", s: "BIRMSONEOS", t: "CIRMSONEOS", n: "NIRMSONEOS"},
+        {name: "Offset RMS 1 ciclo voltaje", r: "AVRMSONEOS", s: "BVRMSONEOS", t: "CVRMSONEOS"},
+        {name: "Offset RMS 10/12 corriente", r: "AIRMS1012OS", s: "BIRMS1012OS", t: "CIRMS1012OS", n: "NIRMS1012OS"},
+        {name: "Offset RMS 10/12 voltaje", r: "AVRMS1012OS", s: "BVRMS1012OS", t: "CVRMS1012OS"},
+    ];
+}
+
+// Crea una celda de calibración.
+// key: clave del registro de calibración.
+function createCalibrationCellHtml(key) {
+    if (!key) return '<span class="text-muted">-</span>';
+    const id = getOptionInputId("cal", key);
+    return '<div class="small text-muted">' + key + '</div><input class="form-control form-control-sm optionInput font-monospace" type="text" id="' + id + '" data-key="' + key + '" data-type="hex">';
+}
+
+// Crea los grupos de opciones del medidor.
+// groups: lista de grupos. prefix: prefijo usado en los ids.
+function createOptionGroupsHtml(groups, prefix) {
+    let html = "";
+    groups.forEach((group) => {
+        html += '<div class="card mb-2"><div class="card-header p-2">' + group.title + '</div><div class="card-body p-2">';
+        group.fields.forEach((field) => {
+            html += createOptionInputHtml(field, prefix);
+        });
+        html += "</div></div>";
+    });
+    return html;
+}
+
+// Crea un input para una opción.
+// field: definición del campo. prefix: prefijo usado en el id.
+function createOptionInputHtml(field, prefix) {
+    const id = getOptionInputId(prefix, field.key);
+    if (field.type == "bool") {
+        return '<div class="form-check form-switch mb-2"><input class="form-check-input optionInput" type="checkbox" id="' + id + '" data-key="' + field.key + '" data-type="' + field.type + '"><label class="form-check-label" for="' + id + '">' + field.label + "</label></div>";
+    }
+    let unit = field.unit ? '<span class="input-group-text">' + field.unit + "</span>" : "";
+    return '<label class="form-label mb-1" for="' + id + '">' + field.label + '</label><div class="input-group input-group-sm mb-2"><input class="form-control optionInput" type="text" id="' + id + '" data-key="' + field.key + '" data-type="' + field.type + '">' + unit + "</div>";
+}
+
+// Devuelve el id de un input de opción.
+// prefix: prefijo del grupo. key: clave de Preferences.
+function getOptionInputId(prefix, key) {
+    return "opt_" + prefix + "_" + key;
+}
+
+// Carga todas las opciones visibles.
+function loadSettings() {
+    setSettingsStatus("Cargando opciones...");
+    $.when(readOptions("meter", getMeterOptionKeys()), readOptions("ADE9000", getCalibrationKeys()))
+        .done((meterResp, calResp) => {
+            fillMeterOptions(meterResp[0]);
+            fillCalibrationOptions(calResp[0]);
+            setSettingsStatus("Opciones cargadas.");
+        })
+        .fail(() => setSettingsStatus("No se pudieron cargar las opciones.", true));
+}
+
+// Lee opciones de un namespace.
+// namespace: nombre del namespace. keys: claves a leer.
+function readOptions(namespace, keys) {
+    let params = new URLSearchParams();
+    params.append("ns", namespace);
+    keys.forEach((key) => params.append(key, ""));
+    return $.ajax({type: "GET", url: board.IP + "/opts?" + params.toString(), timeout: board.timeout});
+}
+
+// Escribe opciones en un namespace.
+// namespace: nombre del namespace. values: objeto clave valor.
+function writeOptions(namespace, values) {
+    let params = new URLSearchParams();
+    params.append("ns", namespace);
+    Object.keys(values).forEach((key) => params.append(key, values[key]));
+    return $.ajax({type: "GET", url: board.IP + "/opts?" + params.toString(), timeout: board.timeout});
+}
+
+// Devuelve las claves de opciones del medidor.
+function getMeterOptionKeys() {
+    return meterOptionGroups.flatMap((group) => group.fields.map((field) => field.key));
+}
+
+// Devuelve las claves de calibración.
+function getCalibrationKeys() {
+    return calibrationGroups.flatMap((group) => group.fields.map((field) => field.key));
+}
+
+// Completa los inputs de opciones del medidor.
+// values: valores recibidos desde el firmware.
+function fillMeterOptions(values) {
+    meterOptionGroups.forEach((group) => {
+        group.fields.forEach((field) => {
+            const input = $("#" + getOptionInputId("meter", field.key));
+            if (field.type == "bool") input.prop("checked", Number(values[field.key]) != 0);
+            else input.val(values[field.key]);
+        });
+    });
+}
+
+// Completa los inputs de calibración.
+// values: valores recibidos desde el firmware.
+function fillCalibrationOptions(values) {
+    getCalibrationKeys().forEach((key) => {
+        $("#" + getOptionInputId("cal", key)).val(toHex32(values[key]));
+    });
+}
+
+// Guarda las opciones del medidor y las aplica.
+function saveMeterOptions() {
+    setSettingsStatus("Guardando opciones del medidor...");
+    writeOptions("meter", collectMeterOptionValues())
+        .done(() => $.ajax({type: "GET", url: board.IP + "/reloadopts", timeout: board.timeout}))
+        .done(() => {
+            setSettingsStatus("Opciones del medidor guardadas.");
+            loadSettings();
+        })
+        .fail(() => setSettingsStatus("No se pudieron guardar las opciones del medidor.", true));
+}
+
+// Guarda los valores de calibración.
+function saveCalibrationOptions() {
+    let values = collectCalibrationValues();
+    if (values == null) return;
+    setSettingsStatus("Guardando calibración...");
+    writeOptions("ADE9000", values)
+        .done(() => setSettingsStatus("Calibración guardada. Reinicie para aplicarla."))
+        .fail(() => setSettingsStatus("No se pudo guardar la calibración.", true));
+}
+
+// Restaura la calibración por defecto.
+function restoreDefaultCalibration() {
+    setSettingsStatus("Restaurando calibración por defecto...");
+    $.ajax({type: "GET", url: board.IP + "/restorecal", timeout: board.timeout})
+        .done(() => {
+            setSettingsStatus("Calibración por defecto cargada. Reinicie para aplicarla.");
+            loadSettings();
+        })
+        .fail(() => setSettingsStatus("No se pudo restaurar la calibración.", true));
+}
+
+// Recolecta los valores de opciones del medidor.
+function collectMeterOptionValues() {
+    let values = {};
+    meterOptionGroups.forEach((group) => {
+        group.fields.forEach((field) => {
+            const input = $("#" + getOptionInputId("meter", field.key));
+            values[field.key] = field.type == "bool" ? (input.prop("checked") ? "1" : "0") : input.val();
+        });
+    });
+    return values;
+}
+
+// Recolecta los valores de calibración.
+function collectCalibrationValues() {
+    let values = {};
+    for (const key of getCalibrationKeys()) {
+        const value = $("#" + getOptionInputId("cal", key)).val().trim();
+        if (!isHex32(value)) {
+            setSettingsStatus("Valor hexadecimal inválido en " + key + ".", true);
+            return null;
+        }
+        values[key] = value;
+    }
+    return values;
+}
+
+// Valida un hexadecimal de 32 bits.
+// value: texto ingresado por el usuario.
+function isHex32(value) {
+    return /^0x[0-9a-fA-F]{1,8}$/.test(value);
+}
+
+// Convierte un valor numérico a hexadecimal de 32 bits.
+// value: valor decimal recibido desde el firmware.
+function toHex32(value) {
+    value = Number(value);
+    if (!isFinite(value)) value = 0;
+    return "0x" + (value >>> 0).toString(16).padStart(8, "0");
+}
+
+// Muestra el estado de la pestaña de opciones.
+// message: texto a mostrar. isError: indica si debe mostrarse como error.
+function setSettingsStatus(message, isError = false) {
+    $("#settingsStatus").text(message).toggleClass("text-danger", isError).toggleClass("text-muted", !isError);
+}
+
+// Inicializa el grafico de eventos cuando sus librerias estan disponibles.
+function initEventChart() {
+    if (typeof Scope == "undefined" || typeof CanvasJS == "undefined") {
+        showEventError("No se pudo cargar el modulo de eventos.");
+        return false;
+    }
+    Scope.stop();
+    Scope.begin("eventChartContainer", null, "event");
+    return true;
+}
+
 function meterLoadEventsList() {
+    if (!initEventChart()) return;
+    $("#eventList").html('<div class="text-muted p-2">Cargando eventos...</div>');
     board.loadNodeFileList(function (res) {
         console.log("Lista de archivos cargada!");
+        res = parseNodeFileList(res);
+        if (!Array.isArray(res)) {
+            showEventError("Node-RED no devolvió una lista de eventos válida.");
+            return;
+        }
+
         let events = [];
         res.forEach((path) => {
             //Path: /share/PowerMeterLogs/ACevent_1970-7-21_13-29-36.csv
@@ -121,22 +499,27 @@ function meterLoadEventsList() {
                 time = data.split(".")[0];
             }
             else 
-                return; //No es un archivo de evento válido ( se rompía con archivos que no eran .json o .csv)
+                return; //No es un archivo de evento válido (se rompía con archivos que no eran .json o .csv)
 
             let [datePart, timePart] = time.split(".")[0].split("_");
+            if (!datePart || !timePart) return;
             let [year, month, day] = datePart.split("-").map(Number); // "7" → 7
             let [hours, minutes, seconds] = timePart.split("-").map(Number);
             const date = new Date(year, month - 1, day, hours, minutes, seconds);
+            if (isNaN(date.getTime())) return;
 
             events.push({path: path, date: date, phase: fase, type: type});
         });
-        //Ordenar por fecha
         events.sort((a, b) => b.date - a.date);
-        //Hacer lista ordenada por fecha y con el nombre del evento
+
+        if (events.length == 0) {
+            showEventError("No se encontraron archivos de eventos válidos.");
+            return;
+        }
 
         let list = "";
         events.forEach((event) => {
-            detail = event.phase.length > 0 ? " | " + event.phase : "";
+            let detail = event.phase.length > 0 ? " | " + event.phase : "";
             if (detail.length > 0 && event.type.length > 0) detail += " | ";
             detail += event.type;
             list += '<a href="' + event.path + '" class="list-group-item">' + event.date.toLocaleString() + detail + "</a>";
@@ -144,34 +527,176 @@ function meterLoadEventsList() {
 
         $("#eventList").html("<ul class='list-group'>" + list + "</ul>");
 
+        $("#eventList").off("click", ".list-group-item");
         $("#eventList").on("click", ".list-group-item", function (e) {
             e.preventDefault();
             const path = $(this).attr("href"); // Si el href tenía la ruta completa
             board.loadNodeFile(
                 path,
                 function (res) {
-                    // $("#eventData").html("");
-                    // let lines = res.split("\n");
-                    // lines.forEach((line) => {
-                    //     $("#eventData").append(line + "<br>");
-                    // });
-                    // $("#eventData").text(res);
-                    // console.log(res);
-                    let event = meterParseEventFile(res);
-                    Scope.loadEventData(event);
+                    try {
+                        if (typeof Scope == "undefined" || !Scope.chart) throw new Error("gráfico no inicializado");
+                        let event = meterParseEventFile(res);
+                        Scope.loadEventData(event);
+                    }
+                    catch (error) {
+                        showEventError("No se pudo interpretar el archivo de evento: " + error.message);
+                    }
                 },
-                function (res) {
-                    $("#eventData").text("Fallo al leer el archivo!");
+                function () {
+                    showEventError("Fallo al leer el archivo de evento.");
                 }
             );
         });
+    }, function (error) {
+        showEventError("No se pudo conectar con Node-RED para cargar la lista de eventos." + getAjaxErrorText(error));
     });
+}
+
+// Actualiza los eventos persistidos en Node-RED y los eventos temporales de RAM.
+function refreshEventLists() {
+    loadRamEventsList();
+    meterLoadEventsList();
+}
+
+// Genera un evento virtual en el firmware para probar el flujo Manager.
+function createVirtualEvent() {
+    $("#eventRamStatus").text("Iniciando captura de evento...").removeClass("text-danger");
+    $.ajax({type: "GET", url: board.IP + "/api/v1/events/test", timeout: board.timeout})
+        .done((event) => {
+            renderRamEventStatus("Captura iniciada. Esperando cierre...");
+            setTimeout(loadRamEventsList, 1800);
+        })
+        .fail((error) => {
+            renderRamEventStatus("No se pudo generar el evento virtual." + getAjaxErrorText(error), true);
+        });
+}
+
+// Genera buffers sinteticos sin capturar el ADE; sin parametros.
+function createRampTestEvent() {
+    $("#eventRampBtn").prop("disabled", true);
+    renderRamEventStatus("Generando rampa de prueba en RAM...");
+    $.ajax({type: "GET", url: board.IP + "/api/v1/events/test?pattern=ramp", cache: false, timeout: board.timeout})
+        .done((data) => {
+            renderRamEventStatus("Rampa generada: " + data.eventId);
+            setTimeout(loadRamEventsList, 500);
+        })
+        .fail((error) => {
+            const reason = error.responseJSON && error.responseJSON.reason;
+            renderRamEventStatus("No se pudo generar la rampa." + (reason ? " " + reason : getAjaxErrorText(error)), true);
+        })
+        .always(() => { $("#eventRampBtn").prop("disabled", false); });
+}
+
+// Carga la lista de eventos retenidos en RAM por el firmware.
+function loadRamEventsList() {
+    $("#eventRamStatus").text("Cargando eventos RAM...").removeClass("text-danger");
+    $.ajax({type: "GET", url: board.IP + "/api/v1/events", timeout: board.timeout})
+        .done((data) => {
+            renderRamEventsList(data);
+        })
+        .fail((error) => {
+            renderRamEventStatus("No se pudo leer /api/v1/events." + getAjaxErrorText(error), true);
+        });
+}
+
+// Muestra un estado corto del bloque de eventos RAM.
+// message: texto a mostrar. isError: indica si debe mostrarse como error.
+function renderRamEventStatus(message, isError = false) {
+    $("#eventRamStatus").text(message).toggleClass("text-danger", isError).toggleClass("text-muted", !isError);
+}
+
+// Renderiza los eventos RAM disponibles para descarga local.
+// data: respuesta de /api/v1/events.
+function renderRamEventsList(data) {
+    if (!data || !Array.isArray(data.events)) {
+        renderRamEventStatus("La placa no devolvio una lista valida.", true);
+        return;
+    }
+    renderRamEventStatus(data.events.length + " evento(s) RAM disponible(s).");
+    if (data.events.length == 0) {
+        $("#eventRamList").html('<div class="small text-muted">No hay eventos RAM.</div>');
+        return;
+    }
+
+    let html = '<div class="list-group small">';
+    data.events.forEach((event) => {
+        const id = escapeHtml(event.eventId || "");
+        const fastRms = event.fastRms || {};
+        const wave = event.wave || {};
+        const links = event.links || {};
+        const fastRmsUrl = links.fastRms ? board.IP + links.fastRms : "";
+        const waveUrl = links.wave ? board.IP + links.wave : "";
+        html += '<div class="list-group-item p-2">';
+        html += '<div class="fw-semibold">' + id + " - " + escapeHtml(event.type || "evento") + "</div>";
+        html += '<div>Fast RMS: ' + (fastRms.available ? "si" : "no") + (fastRms.available ? " (" + (fastRms.sampleCount || 0) + " muestras)" : " (" + escapeHtml(fastRms.reason || "sin detalle") + ")") + "</div>";
+        html += '<div>Wave: ' + (wave.available ? "si" : "no") + (wave.available ? " (" + (wave.samplesPerChannel || 0) + " muestras/canal)" : " (" + escapeHtml(wave.reason || "sin detalle") + ")") + "</div>";
+        html += '<div class="d-flex flex-wrap gap-1 mt-1">';
+        if (fastRms.available && fastRmsUrl) html += '<a class="btn btn-sm btn-outline-primary py-0" href="' + escapeHtml(fastRmsUrl) + '" target="_blank">Fast RMS</a>';
+        if (wave.available && waveUrl) html += '<a class="btn btn-sm btn-outline-primary py-0" href="' + escapeHtml(waveUrl) + '" target="_blank">Wave</a>';
+        html += '<button class="btn btn-sm btn-outline-danger py-0 event-clear-btn" data-event-id="' + id + '">Borrar</button>';
+        html += "</div></div>";
+    });
+    html += "</div>";
+    $("#eventRamList").html(html);
+    $("#eventRamList").off("click", ".event-clear-btn");
+    $("#eventRamList").on("click", ".event-clear-btn", function () {
+        clearRamEvent($(this).data("event-id"));
+    });
+}
+
+// Borra de RAM un evento descargado o de prueba.
+// eventId: id del evento a borrar.
+function clearRamEvent(eventId) {
+    if (!eventId) return;
+    renderRamEventStatus("Borrando evento " + eventId + "...");
+    $.ajax({type: "POST", url: board.IP + "/api/v1/events/clear?eventId=" + encodeURIComponent(eventId), timeout: board.timeout})
+        .done(() => {
+            renderRamEventStatus("Evento borrado: " + eventId);
+            loadRamEventsList();
+        })
+        .fail((error) => {
+            renderRamEventStatus("No se pudo borrar el evento." + getAjaxErrorText(error), true);
+        });
+}
+
+// Convierte la respuesta de Node-RED en una lista de archivos.
+// value: respuesta recibida desde Node-RED.
+function parseNodeFileList(value) {
+    if (Array.isArray(value)) return value;
+    if (typeof value != "string") return value;
+    try {
+        return JSON.parse(value);
+    } catch (error) {
+        return value;
+    }
+}
+
+// Devuelve un detalle corto de error Ajax para mostrar al usuario.
+// error: objeto de error recibido desde jQuery.
+function getAjaxErrorText(error) {
+    if (!error || !error.status) return "";
+    return " Código: " + error.status + ".";
+}
+
+// Muestra un error en la pestaña de eventos.
+// message: texto que se muestra al usuario.
+function showEventError(message) {
+    $("#eventList").html('<div class="alert alert-warning m-2">' + escapeHtml(message) + "</div>");
+    $("#eventChartContainer").html('<div class="text-muted p-3">Sin evento cargado.</div>');
+}
+
+// Escapa texto para insertarlo como HTML seguro.
+// text: valor a convertir en texto seguro.
+function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char]));
 }
 
 function meterParseEventFile(data) {
     data = JSON.parse(data);
+    if (!data || !Array.isArray(data.datos)) throw new Error("formato inválido");
     let resp = {};
-    resp.eventInfo = data.eventInfo;
+    resp.eventInfo = data.eventInfo || {};
     resp.waves = {t: [], vr: [], vs: [], vt: [], ir: [], is: [], it: [], in: []};
 
     data.datos.forEach((s) => {
@@ -253,22 +778,22 @@ function energyOk(resp) {
     energyOk.fail = false;
 
     // //Energía activa
-    $(".wattHR").text(formatNumber(resp.wattH.r / 1000.0, "kWh"));
-    $(".wattHS").text(formatNumber(resp.wattH.s / 1000.0, "kWh"));
-    $(".wattHT").text(formatNumber(resp.wattH.t / 1000.0, "kWh"));
-    $(".wattHTot").text(formatNumber(resp.wattH.tot / 1000.0, "kWh"));
+    $(".wattHR").text(formatEnergy(resp.wattH.r, "Wh", "kWh"));
+    $(".wattHS").text(formatEnergy(resp.wattH.s, "Wh", "kWh"));
+    $(".wattHT").text(formatEnergy(resp.wattH.t, "Wh", "kWh"));
+    $(".wattHTot").text(formatEnergy(resp.wattH.tot, "Wh", "kWh"));
 
     // //Energía reactiva
-    $(".varHR").text(formatNumber(resp.varH.r / 1000.0, "kVARh"));
-    $(".varHS").text(formatNumber(resp.varH.s / 1000.0, "kVARh"));
-    $(".varHT").text(formatNumber(resp.varH.t / 1000.0, "kVARh"));
-    $(".varHTot").text(formatNumber(resp.varH.tot / 1000.0, "kVARh"));
+    $(".varHR").text(formatEnergy(resp.varH.r, "VARh", "kVARh"));
+    $(".varHS").text(formatEnergy(resp.varH.s, "VARh", "kVARh"));
+    $(".varHT").text(formatEnergy(resp.varH.t, "VARh", "kVARh"));
+    $(".varHTot").text(formatEnergy(resp.varH.tot, "VARh", "kVARh"));
 
     // //Energía aparente
-    $(".vaHR").text(formatNumber(resp.vaH.r / 1000.0, "kVAh"));
-    $(".vaHS").text(formatNumber(resp.vaH.s / 1000.0, "kVAh"));
-    $(".vaHT").text(formatNumber(resp.vaH.t / 1000.0, "kVAh"));
-    $(".vaHTot").text(formatNumber(resp.vaH.tot / 1000.0, "kVAh"));
+    $(".vaHR").text(formatEnergy(resp.vaH.r, "VAh", "kVAh"));
+    $(".vaHS").text(formatEnergy(resp.vaH.s, "VAh", "kVAh"));
+    $(".vaHT").text(formatEnergy(resp.vaH.t, "VAh", "kVAh"));
+    $(".vaHTot").text(formatEnergy(resp.vaH.tot, "VAh", "kVAh"));
 }
 
 function energyFail(response) {
@@ -281,19 +806,19 @@ function angleOk(resp) {
     if (angleOk.fail) $(".angulos").removeClass("notLoading");
     angleOk.fail = false;
 
-    $(".degvR").text(formatNumber(resp.voltage.r, "°"));
-    $(".degvS").text(formatNumber(resp.voltage.s, "°"));
-    $(".degvT").text(formatNumber(resp.voltage.t, "°"));
+    $(".degvR").text(formatNumber(resp.voltage.r, "°", "degv"));
+    $(".degvS").text(formatNumber(resp.voltage.s, "°", "degv"));
+    $(".degvT").text(formatNumber(resp.voltage.t, "°", "degv"));
 
     // //Ángulos entre fases de voltaje y fases de corriente
-    $(".degviR").text(formatNumber(resp.vi.r, "°"));
-    $(".degviS").text(formatNumber(resp.vi.s, "°"));
-    $(".degviT").text(formatNumber(resp.vi.t, "°"));
+    $(".degviR").text(formatNumber(resp.vi.r, "°", "degvi"));
+    $(".degviS").text(formatNumber(resp.vi.s, "°", "degvi"));
+    $(".degviT").text(formatNumber(resp.vi.t, "°", "degvi"));
 
     // //Ángulos entre fases de corriente
-    $(".degiR").text(formatNumber(resp.current.r, "°"));
-    $(".degiS").text(formatNumber(resp.current.s, "°"));
-    $(".degiT").text(formatNumber(resp.current.t, "°"));
+    $(".degiR").text(formatNumber(resp.current.r, "°", "degi"));
+    $(".degiS").text(formatNumber(resp.current.s, "°", "degi"));
+    $(".degiT").text(formatNumber(resp.current.t, "°", "degi"));
 }
 
 function angleFail(response) {
@@ -321,7 +846,10 @@ function thdFail(response) {
     thdOk.fail = true;
 }
 
-function formatNumber(value, unit) {
+function formatNumber(value, unit, unitType = "") {
+    value = Number(value);
+    if (!isFinite(value)) return "-- " + unit;
+
     let places = 2;
     if (unit == "V") places = decimalPlaces.vrms;
     else if (unit == "A") places = decimalPlaces.irms;
@@ -332,11 +860,18 @@ function formatNumber(value, unit) {
     else if (unit == "kVARh") places = 3;
     else if (unit == "kVAh") places = 3;
     else if (unit == "Wh") places = decimalPlaces.wattH;
-    else if (unit == "°") places = decimalPlaces.degv;
-    else if (unit == "°") places = decimalPlaces.degvi;
-    else if (unit == "°") places = decimalPlaces.degi;
+    else if (unit == "°" && unitType) places = decimalPlaces[unitType];
 
     return value.toFixed(places) + " " + unit;
+}
+
+// Formatea energía en unidad chica o kilo según el valor.
+// value: energía en la unidad chica. unit: unidad chica. kiloUnit: unidad grande.
+function formatEnergy(value, unit, kiloUnit) {
+    value = Number(value);
+    if (!isFinite(value)) return "-- " + unit;
+    if (Math.abs(value) < 1000) return formatNumber(value, unit);
+    return formatNumber(value / 1000.0, kiloUnit);
 }
 
 function getGaugeOptions(signal) {

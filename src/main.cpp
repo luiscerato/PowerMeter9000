@@ -12,6 +12,7 @@
 #include "webserver.h"
 #include "AsyncMqttClient.h"
 #include "ui/lcd_ui.h"
+#include "manager_api.h"
 
 
 TactSwitch BtnEnter, BtnUp, BtnDown, BtnEsc, BtnNext; // Interfase de 5 botones
@@ -43,6 +44,19 @@ void Draw_CalibrarFase();
 
 
 boardButtons_t getButtons();
+
+bool webServerStarted = false;
+
+// Inicia el servidor web una sola vez.
+// connected: indica si la placa ya tiene conexion WiFi lista.
+void startWebServerOnce(bool connected)
+{
+	if (!connected || webServerStarted) return;
+
+	Serial.println("Conectado a Wifi");
+	Init_WebServer();
+	webServerStarted = true;
+}
 
 
 
@@ -121,25 +135,26 @@ void setup(void)
 
 	ui.Show("main");
 
-	WifiStart();
-	TimeStart();
-	OTAStart();
-	MQTTStart();
-
-	WiFi.onEvent([](arduino_event_t* event) {
-		Serial.println("Conectado a Wifi");
-		Init_WebServer();
-		}, ARDUINO_EVENT_WIFI_STA_CONNECTED);
-
-	strip.begin();
-	strip.setAllLedsColor(0);
-
-
 	debugI("Iniciando sistema de archivos... ");
 	if (!SPIFFS.begin(true))
 		debugI("An error has occurred while mounting SPIFFS");
 	else
 		debugI("SPIFFS mounted successfully");
+
+	WiFi.onEvent([](arduino_event_t* event) {
+		startWebServerOnce(true);
+		}, ARDUINO_EVENT_WIFI_STA_GOT_IP);
+
+	WifiStart();
+	TimeStart();
+	OTAStart();
+	MQTTStart();
+
+	startWebServerOnce(WiFi.isConnected());
+
+	strip.begin();
+	strip.setAllLedsColor(0);
+
 	MeterInit();
 
 	Batt.Init();
@@ -184,31 +199,30 @@ void loop(void)
 		// debugI("Loop counter: %d", counter);
 		counter = 0;
 
-		if (mqtt.connected()) {
-			static String data;
-			static uint32_t batt = 0;
+		static String data;
+		static uint32_t batt = 0;
+		uint64_t meterTimestamp = MeterGetLastSampleTimestampMs();
 
-			Meter.getJsonBasic(data);
-			mqtt.publish("PowerMeter9000/meter", 0, false, data.c_str());
-			Meter.getJsonEnergy(data);
-			mqtt.publish("PowerMeter9000/meter/energy", 0, false, data.c_str());
-			Meter.getJsonFastMeasures(data);
-			mqtt.publish("PowerMeter9000/meter/fast", 0, false, data.c_str());
-			data = Meter.phaseR.getJson();
-			mqtt.publish("PowerMeter9000/meter/r", 0, false, data.c_str());
-			data = Meter.phaseS.getJson();
-			mqtt.publish("PowerMeter9000/meter/s", 0, false, data.c_str());
-			data = Meter.phaseT.getJson();
-			mqtt.publish("PowerMeter9000/meter/t", 0, false, data.c_str());
+		Meter.getJsonBasic(data);
+		managerPublishTelemetry("meter", data, meterTimestamp);
+		Meter.getJsonEnergy(data);
+		managerPublishTelemetry("meter/energy", data, meterTimestamp);
+		Meter.getJsonFastMeasures(data);
+		managerPublishTelemetry("meter/fast", data, meterTimestamp);
+		data = Meter.phaseR.getJson();
+		managerPublishTelemetry("meter/r", data, meterTimestamp);
+		data = Meter.phaseS.getJson();
+		managerPublishTelemetry("meter/s", data, meterTimestamp);
+		data = Meter.phaseT.getJson();
+		managerPublishTelemetry("meter/t", data, meterTimestamp);
 
-			getStatus(data);
-			mqtt.publish("PowerMeter9000/status", 0, false, data.c_str());
+		getStatus(data);
+		managerPublishTelemetry("status", data, managerNowMs());
 
-			if (batt++ > 4) {
-				batt = 0;
-				Batt.getJson(data);
-				mqtt.publish("PowerMeter9000/battery", 0, false, data.c_str());
-			}
+		if (batt++ > 4) {
+			batt = 0;
+			Batt.getJson(data);
+			managerPublishTelemetry("battery", data, managerNowMs());
 
 		}
 	}

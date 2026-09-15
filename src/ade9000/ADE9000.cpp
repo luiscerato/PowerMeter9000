@@ -138,6 +138,11 @@ void ADE9000::loadCalibration()
     uint32_t time = micros();
 
     preferences.begin("ADE9000", false);
+    if (!preferences.isKey("APHCAL0")) {
+        preferences.end();
+        restoreCalibration();
+        preferences.begin("ADE9000", false);
+    }
     SPI_Write_32(ADDR_APHCAL0, preferences.getInt("APHCAL0", 0));
     SPI_Write_32(ADDR_BPHCAL0, preferences.getInt("BPHCAL0", 0));
     SPI_Write_32(ADDR_CPHCAL0, preferences.getInt("CPHCAL0", 0));

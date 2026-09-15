@@ -1,56 +1,71 @@
 $(document).ready(function () {
-    //Cargar nav y mostrar el cuadro de carga de IP si es necesario
-    $("#navbar").load("nav.html #codeNavBar", function (status) {
-        if (status == "error") {
-            $("#navbar").text("Fallo al cargar la barra de navegación!");
-        } else {
-            if (editBoardURL) $("#navServerIP").removeClass("d-none");
-
-            $("#inputBoardURL").val(boardIP);
-            $("#btnReloadIP").click(function () {
-                if (saveBoardURL($("#inputBoardURL").val())) location.reload();
-            });
-
-            let path = location.pathname.split("/");
-            path = path[path.length - 1].split(".")[0];
-            path = "#nav" + path;
-            $(path).addClass("active");
-        }
-    });
-
-    $("#divFooter").load("nav.html #codeFooter", function (status) {
-        if (status == "error") {
-            $("#divFooter").text("Fallo al cargar la barar de estado!");
-        } else {
-            updateFooter("loading");
-            board.getStateRepeat(
-                (data) => updateFooter(data),
-                () => updateFooter("fail"),
-                500
-            );
-        }
-    });
-
-    function updateFooter(status) {
-        if (status == "loading" || status == "fail") {
-            $("#statusWifi").html("Conectado a " + spinner + " | señal: " + spinner);
-            $("#statusIP").html("IP: " + spinner);
-            $("#statusHeap").html("Heap total: " + spinner + " libre: " + spinner);
-        } else {
-            let icon = iconWifiFull;
-            if (status.rssi < -80) icon = iconWifi0;
-            else if (status.rssi < -65) icon = iconWifi1;
-            else if (status.rssi < -50) icon = iconWifi2;
-
-            $("#statusWifi").html("Conectado a " + status.ssid + " " + icon);
-            $("#statusIP").text("IP: " + status.ip);
-            $("#statusHeap").text("Heap total: " + status.heap + " libre: " + status.free);
-        }
-    }
-
-    initUI();
-
+    setupNav();
+    setupFooter();
+    initMeterUI();
+    showAppPage(location.hash == "#scopePage" ? "scopePage" : "meterPage");
 });
+
+// Configura la barra de navegacion embebida en la pagina.
+function setupNav() {
+    if (editBoardURL) $("#navServerIP").removeClass("d-none");
+
+    $("#inputBoardURL").val(boardIP);
+    $("#btnReloadIP").click(function () {
+        if (saveBoardURL($("#inputBoardURL").val())) location.reload();
+    });
+
+    $(".app-page-link").click(function (event) {
+        event.preventDefault();
+        showAppPage($(this).data("page"));
+    });
+}
+
+// Muestra una seccion principal de la app sin recargar la pagina.
+// pageId: id de la seccion a mostrar.
+function showAppPage(pageId) {
+    $(".appPage").addClass("d-none");
+    $("#" + pageId).removeClass("d-none");
+    $(".app-page-link").removeClass("active");
+
+    if (pageId == "scopePage") {
+        $("#navscope").addClass("active");
+        location.hash = "scopePage";
+        initScopeUI();
+    } else {
+        if (typeof Scope != "undefined" && Scope.mode == "scope") Scope.stop();
+        $("#navindex").addClass("active");
+        location.hash = "meterPage";
+    }
+}
+
+// Configura la barra de estado inferior.
+function setupFooter() {
+    updateFooter("loading");
+    board.getStateRepeat(
+        (data) => updateFooter(data),
+        () => updateFooter("fail"),
+        500
+    );
+}
+
+// Actualiza la barra inferior con el estado de la placa.
+// status: objeto de estado o texto de carga/error.
+function updateFooter(status) {
+    if (status == "loading" || status == "fail") {
+        $("#statusWifi").html("Conectado a " + spinner + " | señal: " + spinner);
+        $("#statusIP").html("IP: " + spinner);
+        $("#statusHeap").html("Heap total: " + spinner + " libre: " + spinner);
+    } else {
+        let icon = iconWifiFull;
+        if (status.rssi < -80) icon = iconWifi0;
+        else if (status.rssi < -65) icon = iconWifi1;
+        else if (status.rssi < -50) icon = iconWifi2;
+
+        $("#statusWifi").html("Conectado a " + status.ssid + " " + icon);
+        $("#statusIP").text("IP: " + status.ip);
+        $("#statusHeap").text("Heap total: " + status.heap + " libre: " + status.free);
+    }
+}
 
 const spinner = '<span class="spinner-border spinner-border-sm ml-2" role="status" aria-hidden="true"></span>';
 

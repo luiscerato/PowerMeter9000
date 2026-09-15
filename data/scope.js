@@ -37,7 +37,8 @@ Scope.begin = function (at, server, modo) {
 
     Scope.setOptions({corrDiv: 10, voltDiv: 100, timeDiv: 10});
 
-    Scope.drawWaves();
+    if (Scope.mode == "event") Scope.Data.timeStamps = [];
+    else Scope.drawWaves();
 
     Scope.server = server;
 
@@ -59,7 +60,11 @@ Scope.loadEventData = function (eventData) {
 };
 
 Scope.start = function () {
-    console.log("Trying to open a WebSocket connection…");
+    if (!Scope.server) {
+        console.warn("No hay servidor websocket configurado.");
+        return;
+    }
+    console.log("Intentando abrir una conexión WebSocket...");
     Scope.websocket = new WebSocket(Scope.server);
 
     Scope.websocket.onclose = () => {
@@ -107,12 +112,20 @@ Scope.getState = function () {
 Scope.stop = function () {
     console.log("Cerrando web socket...");
     clearInterval(Scope.timer);
-    Scope.websocket.close();
+    if (Scope.websocket && (Scope.websocket.readyState === WebSocket.OPEN || Scope.websocket.readyState === WebSocket.CONNECTING)) {
+        Scope.websocket.close();
+    }
+    Scope.websocket = undefined;
 };
 
 Scope.newData = function (data) {
     if (typeof data == "string") {
-        //   console.log(data);
+        if (data === "scope_gap" && Scope.mode === "scope") {
+            // No unir muestras anteriores y posteriores a bloques descartados por el ESP.
+            Scope.Buffer.forEach((buffer) => { buffer.length = 0; });
+            Scope.Data.waves.forEach((wave) => { wave.data = []; });
+            Scope.drawWaves();
+        }
     } else if (data instanceof ArrayBuffer) {
         Scope.bytes += data.byteLength;
         let output = new Uint8Array(data); //Convertir los datos binarios que llegaron a un array, luego descomprimir los mismos
@@ -275,7 +288,8 @@ Scope.drawWaves = function () {
             }
             // points = element.data.map((value, index) => ({x: index, y: value}));
             else {
-                points = element.data.map((value, index) => ({x: new Date(Scope.Data.timeStamps[index]), y: value}));
+                let timeStamps = Array.isArray(Scope.Data.timeStamps) ? Scope.Data.timeStamps : [];
+                points = element.data.map((value, index) => ({x: new Date(timeStamps[index] || Date.now()), y: value}));
             }
 
             serie.dataPoints = points;
@@ -311,20 +325,22 @@ Scope.drawWaves = function () {
         // Scope.options.axisX.minimum = new Date(Scope.Data.eventInfo.start);
         // Scope.options.axisX.maximum = new Date(Scope.Data.eventInfo.end);
         // Scope.options.axisX.interval = (Scope.Data.window * ms) / 10
-        let diff = (maxI - minI) * 0.1;
-        Scope.options.axisY.maximum = Scope.redondearLimite(maxI + diff);
-        Scope.options.axisY.minimum = Scope.redondearLimite(minI - (minI <= 0 ? 0: diff));
-        if (Scope.options.axisY.maximum < 1) Scope.options.axisY.maximum = 1;
-        Scope.options.axisY.interval = (Scope.options.axisY.maximum - Scope.options.axisY.minimum) / 10;
+        let currentRange = Scope.getAxisRange(minI, maxI, 1);
+        Scope.options.axisY.maximum = currentRange.maximum;
+        Scope.options.axisY.minimum = currentRange.minimum;
+        Scope.options.axisY.interval = currentRange.interval;
 
-        diff = (maxV - minV) * 0.1;
-        Scope.options.axisY2.maximum = Scope.redondearLimite(maxV + diff);
-        Scope.options.axisY2.minimum = Scope.redondearLimite(minV - (minV <= 0 ? 0: diff));
-        if (Scope.options.axisY2.maximum < 1) Scope.options.axisY2.maximum = 1;
-        Scope.options.axisY2.interval = (Scope.options.axisY2.maximum - Scope.options.axisY2.minimum) / 10;
-        Scope.options.title.text = new Date(Scope.Data.eventInfo.start).toLocaleString()
-        Scope.options.title.text += ", evento " + Scope.Data.eventInfo.list[0].type  + " en " + Scope.Data.eventInfo.list[0].phase;
-        Scope.options.title.text += ", duración: " + (Scope.Data.eventInfo.sampleCount*10) + "ms."
+        let voltageRange = Scope.getAxisRange(minV, maxV, 10);
+        Scope.options.axisY2.maximum = voltageRange.maximum;
+        Scope.options.axisY2.minimum = voltageRange.minimum;
+        Scope.options.axisY2.interval = voltageRange.interval;
+        let eventInfo = Scope.Data.eventInfo || {};
+        let firstEvent = Array.isArray(eventInfo.list) && eventInfo.list.length > 0 ? eventInfo.list[0] : {};
+        let start = eventInfo.start ? new Date(eventInfo.start).toLocaleString() : "Evento";
+        Scope.options.title.text = start;
+        if (firstEvent.type || firstEvent.phase) Scope.options.title.text += ", evento " + (firstEvent.type || "") + " en " + (firstEvent.phase || "");
+        let durationMs = eventInfo.eventDurationMs || firstEvent.durationMs || eventInfo.captureDurationMs || (eventInfo.sampleCount ? eventInfo.sampleCount * 10 : 0);
+        if (durationMs) Scope.options.title.text += ", duración: " + durationMs + "ms.";
         Scope.options.exportFileName = Scope.options.title.text.replaceAll("/", "-").replaceAll(":", ".");
         // Scope.options.title.text += ", duración: " + (Scope.Data.eventInfo.end-Scope.Data.eventInfo.start) + "ms."
     }
@@ -333,9 +349,35 @@ Scope.drawWaves = function () {
 };
 
 Scope.redondearLimite = function (valor) {
+    if (!isFinite(valor) || valor == 0) return 1;
+    const signo = valor < 0 ? -1 : 1;
+    valor = Math.abs(valor);
     const magnitud = Math.pow(10, Math.floor(Math.log10(valor)));
     const paso = magnitud >= 10 ? 10 : magnitud >= 5 ? 5 : 2;
-    return Math.round(valor / paso) * paso;
+    return Math.round(valor / paso) * paso * signo;
+}
+
+// Calcula un rango de eje valido aunque la senial sea plana.
+// min: valor minimo. max: valor maximo. minSpan: apertura minima del eje.
+Scope.getAxisRange = function (min, max, minSpan) {
+    if (!isFinite(min) || !isFinite(max)) return {minimum: 0, maximum: minSpan, interval: minSpan / 10};
+
+    let span = max - min;
+    if (span < minSpan) {
+        let center = (max + min) / 2;
+        min = center - (minSpan / 2);
+        max = center + (minSpan / 2);
+        span = minSpan;
+    } else {
+        let margin = span * 0.1;
+        min -= min <= 0 ? 0 : margin;
+        max += margin;
+    }
+
+    let minimum = Scope.redondearLimite(min);
+    let maximum = Scope.redondearLimite(max);
+    if (maximum <= minimum) maximum = minimum + minSpan;
+    return {minimum, maximum, interval: (maximum - minimum) / 10};
 }
 
 /*

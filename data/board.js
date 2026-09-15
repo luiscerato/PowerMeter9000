@@ -15,7 +15,7 @@ if (location.hostname.startsWith("127.0") || location.hostname.startsWith("local
     editBoardURL = true;
 }
 
-const boardIP = boardURL.protocol + "//" + boardURL.hostname; //IP del servidor
+const boardIP = boardURL.protocol + "//" + boardURL.host; //IP del servidor
 const boardTimeOut = isServerRemote(boardIP) ? 5000 : 500; //Timeout dependiendo del tipo de conexión (remota o directa)
 const boardUpdateTime = 2500; //Tiempo en ms de actualización de lecturas de la placa
 
@@ -53,7 +53,7 @@ board.getUpdateTime = function (speed = "normal") {
     let remote = {fast: 1000, normal: 2500, slow: 5000};
     let local = {fast: 500, normal: 1000, slow: 2500};
 
-    let value = isServerRemote(boardURL) ? remote[speed] : local[speed] || 1500;
+    let value = isServerRemote(board.IP) ? remote[speed] : local[speed] || 1500;
     return value;
 };
 
@@ -73,9 +73,8 @@ board.getWebSocketURL = function (server) {
         protocol = "https://";
     }
 
-    let url = socket + server.hostname;
+    let url = socket + server.host;
     if (server.pathname !== "") url += server.pathname;
-    else if (server.port !== "") url += ":" + server.port;
     return url;
 };
 
@@ -97,6 +96,7 @@ board.loadNodeFileList = function (done = undefined, fail = undefined, async = t
         url: url + "/files",
         timeout: board.timeout,
         async: async,
+        cache: false,
         beforeSend: function (xhr) {
             xhr.setRequestHeader("Authorization", makeBaseAuth(board.nodeUser, board.nodePass));
         },
@@ -120,7 +120,7 @@ board.loadNodeFile = function (path, done = undefined, fail = undefined, async =
 
     $.ajax({
         type: "GET",
-        url: url + "/filedata?file=" + path,
+        url: url + "/filedata?file=" + encodeURIComponent(path),
         timeout: board.timeout,
         async: async,
         beforeSend: function (xhr) {
@@ -241,7 +241,7 @@ board.getResponseRepeat = function (request, done, fail, period) {
     if (typeof period == "string") period = board.getUpdateTime(period);
     else if (period < 150) period = 150;
 
-    timer = setInterval(() => {
+    let timer = setInterval(() => {
         board.getRespone(request, done, fail);
     }, period);
     return timer;

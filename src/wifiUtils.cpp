@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include "AsyncMqttClient.h"
 #include "ST7920_SPI.h"
+#include "manager_api.h"
 
 Preferences Settings;
 const char* settingsName = "wifi-stuff";
@@ -453,11 +454,12 @@ void TimeSetServer()
 		return;
 	}
 	// Setear el servidor de tiempo
-	configTime(localTimeZone.tz_minuteswest * 60, localTimeZone.tz_dsttime * 60, server);
+	configTime(0, 0, server);
 
 	//Agregar un callback para cuando se sincronice la hora 
 	sntp_set_time_sync_notification_cb([](struct timeval* tv) {
 		debugI("Fecha y hora sincronizada con servidor!!");
+		managerSetClockSynchronized("sntp");
 		printLocalTime();
 		});
 

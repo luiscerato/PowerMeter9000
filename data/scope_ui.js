@@ -1,8 +1,14 @@
 
-function initUI() {
-    let ws = board.IP + "/ws";
-    Scope.begin("chartContainer", board.getWebSocketURL(ws));
+let scopeUiReady = false;
 
+function initScopeUI() {
+    if (scopeUiReady) {
+        initScopeChart();
+        updateUI();
+        return;
+    }
+    scopeUiReady = true;
+    initScopeChart();
     updateUI();
 
     //Switchs de canales
@@ -74,6 +80,13 @@ function initUI() {
         if (status.state == "ready") $("#lblSpeed").text((Scope.bandWidth / 1024).toFixed(2) + "kb/s");
         else $("#lblSpeed").text("");
     }, 500);
+}
+
+// Inicializa el grafico del osciloscopio.
+function initScopeChart() {
+    let ws = board.IP + "/ws";
+    Scope.stop();
+    Scope.begin("chartContainer", board.getWebSocketURL(ws), "scope");
 }
 
 //Actualizar todos los elementos de la UI según el estado del  osciloscopio

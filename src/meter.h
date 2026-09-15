@@ -1,7 +1,10 @@
+#pragma once
+
 #include "ade9000/ADE9000.h"
 #include "AsyncWebSocket.h"
 #include "time.h"
 #include "wifiUtils.h"
+#include "event_trigger.h"
 
 #define fastDataSamplesCount 200
 
@@ -22,7 +25,10 @@ class capturedEvent {
 	uint32_t sampleCount;
 	String events;
 	uint32_t eventCounter;
+	uint64_t eventDurationMs;
+	String eventId;
 	uint32_t prevSampleQty;				//Cantidad de muestras previas
+	int32_t triggerSample = -1;
 	bool capturing, canDownload, canStart;
 	timeval startDate, endDate;
 	uint32_t dipCycles = 5, swellCycles = 5;
@@ -37,6 +43,8 @@ class capturedEvent {
 		canDownload = false;
 		canStart = true;
 		eventCounter = 0;
+		eventDurationMs = 0;
+		eventId = "";
 	};
 
 public:
@@ -58,23 +66,47 @@ public:
 
 	uint32_t getSampleCount() {return sampleCount;};
 
-	bool isSampleBufferFull() {return sampleCount == (maxSamples-1);};
+	// Devuelve el inicio estimado dentro de las muestras, o -1 si quedo afuera; sin parametros.
+	int32_t getTriggerSample() {return triggerSample;};
+
+	// Descuenta lookbackUs de la frontera de deteccion a 100 Hz; cero para captura manual.
+	void markTriggerSample(uint64_t lookbackUs = 0) {
+		triggerSample = eventTriggerIndex(int64_t(sampleCount) - int64_t(lookbackUs / 10000));
+	};
+
+	// Devuelve los semiciclos configurados; swell selecciona el detector de sobretension.
+	uint32_t getConfirmationHalfCycles(bool swell) {return swell ? swellCycles : dipCycles;};
+
+	uint64_t getEventDurationMs() {return eventDurationMs;};
+
+	const String& getEventId() {return eventId;};
+
+	bool isSampleBufferFull() {return sampleCount >= maxSamples;};
 
 	// Iniciar la clase para emperzar a capturar datos. Inicia el buffer según la cantidad de muestras máximas a guardar.
-	bool startCapture(uint32_t prevSampleQty) {
+	bool startCapture(uint32_t prevSampleQty, const String& eventId) {
 		uint32_t size = sizeof(fastRMSData_t) * maxSamples;
-		if (capturing || (data != nullptr) || !canStart ) {debugE("Captura en curso!"); return false;};
+		if (capturing || (data != nullptr) || !canStart ) {
+			// debugE("Captura en curso!");
+			return false;
+		};
 		data = (fastRMSData_t*)malloc(size);
-		if (data == nullptr) {debugE("Fallo al intentar asignar %d bytes", size); return false;};
-		debugI("Iniciando captura... Asignados %u bytes para %u samples", size, maxSamples);
+		if (data == nullptr) {
+			// debugE("Fallo al intentar asignar %d bytes", size);
+			return false;
+		};
+		// debugI("Iniciando captura... Asignados %u bytes para %u samples", size, maxSamples);
 		memset(data, 0, size);	//Iniciar todo a 0
 		sampleCount = 0;
 		events = "";	//Crear un array Json para los eventos de texto
+		eventDurationMs = 0;
+		this->eventId = eventId;
 		capturing = true;
 		canDownload = canStart = false;
 		eventCounter++;		//Incrementar contador de evento
 		gettimeofday(&startDate, nullptr);
 		this->prevSampleQty = prevSampleQty;
+		triggerSample = -1;
 		return true;
 	};
 
@@ -82,7 +114,7 @@ public:
 
 	void stopCapture() {
 		if (!capturing) return;
-		debugI("Terminando captura... %d samples capturadas", sampleCount);
+		// debugI("Terminando captura... %d samples capturadas", sampleCount);
 		capturing = false;
 		canDownload = true;
 		canStart = false;
@@ -94,6 +126,7 @@ public:
 		if (data) free(data);
 		data = nullptr;
 		events = "";
+		eventId = "";
 		canDownload = false;
 		canStart = true;
  	};
@@ -118,8 +151,12 @@ public:
 		if (!canDownload) return false;
 
 		char info[300];
-		snprintf(info, 128, "{\"event\": %d, \"sampleCount\": %d, \"triggerSample\": %d, \"start\": %u%u, \"end\": %u%u, \"list\":", 
-			eventCounter, sampleCount, prevSampleQty, startDate.tv_sec, startDate.tv_usec/1000, endDate.tv_sec, endDate.tv_usec/1000);
+		uint64_t startMs = ((uint64_t)startDate.tv_sec * 1000ULL) + (startDate.tv_usec / 1000ULL);
+		uint64_t endMs = ((uint64_t)endDate.tv_sec * 1000ULL) + (endDate.tv_usec / 1000ULL);
+		uint64_t captureDurationMs = endMs >= startMs ? endMs - startMs : 0;
+		String triggerJson = triggerSample >= 0 && triggerSample < sampleCount ? String(triggerSample) : String("null");
+		snprintf(info, sizeof(info), "{\"event\": %d, \"eventId\": \"%s\", \"sampleCount\": %d, \"triggerSample\": %s, \"start\": %llu, \"end\": %llu, \"captureDurationMs\": %llu, \"eventDurationMs\": %llu, \"list\":",
+			eventCounter, eventId.c_str(), sampleCount, triggerJson.c_str(), (unsigned long long)startMs, (unsigned long long)endMs, (unsigned long long)captureDurationMs, (unsigned long long)eventDurationMs);
 		
 		event.reserve(events.length() + 300);
 		event = info;
@@ -130,7 +167,7 @@ public:
 	uint32_t pushSamples(fastRMSData_t* samples) {
 		if (!capturing) return 0;
 		if (sampleCount >= maxSamples) return 0;
-		if (data == nullptr) return 0;
+		if (data == nullptr || samples == nullptr) return 0;
 
 		data[sampleCount++] = *samples;
 		return 1;
@@ -150,10 +187,18 @@ public:
 
 	void pushEvent(const char * event) {
 		if (!capturing) return;
-		debugI("Evento: %s", event);
+		// debugI("Evento: %s", event);
 		if (events.length() ) events += ", ";
 		events += event;
 	};
+
+	// Guarda un evento y conserva la mayor duracion real detectada.
+	// event: JSON del evento. durationMs: duracion real del evento electrico.
+	void pushEvent(const char * event, uint64_t durationMs) {
+		pushEvent(event);
+		if (durationMs > eventDurationMs) eventDurationMs = durationMs;
+	};
+
 };
 
 enum class eventType {
@@ -220,21 +265,41 @@ public:
 		return lastActive != active;
 	}
 
+	// Convierte el inicio del evento a Unix Epoch UTC en milisegundos.
+	uint64_t getStartMs() {
+		return ((uint64_t)start.tv_sec * 1000ULL) + (start.tv_usec / 1000ULL);
+	}
+
+	// Convierte el fin del evento a Unix Epoch UTC en milisegundos.
+	uint64_t getEndMs() {
+		return ((uint64_t)end.tv_sec * 1000ULL) + (end.tv_usec / 1000ULL);
+	}
+
+	// Devuelve el timestamp que corresponde al estado actual del evento.
+	uint64_t getTimestampMs() {
+		return active ? getStartMs() : getEndMs();
+	}
+
+	// Devuelve la duracion real del evento electrico en milisegundos.
+	uint64_t getDurationMs() {
+		if (active) return 0;
+		uint64_t startMs = getStartMs();
+		uint64_t endMs = getEndMs();
+		return endMs >= startMs ? endMs - startMs : 0;
+	}
+
 	String getJson() {
-		char str[128];
-		timeval timeStamp;
+		char str[192];
 		const char *action;
 		if (active) {
-			timeStamp = start;
 			action = "start";
 		}
 		else {
-			timeStamp = end;
 			action = "end";
 		}
 
-		snprintf(str, 128, "{\"phase\": \"%s\", \"type\": \"%s\",\"action\": \"%s\", \"time\": %d%d, \"val\": %.2f}", 
-			phaseName2String(name), eventType2String(type), action, timeStamp.tv_sec, timeStamp.tv_usec / 1000, value);
+		snprintf(str, sizeof(str), "{\"phase\": \"%s\", \"type\": \"%s\",\"action\": \"%s\", \"time\": %llu, \"durationMs\": %llu, \"val\": %.2f}", 
+			phaseName2String(name), eventType2String(type), action, (unsigned long long)getTimestampMs(), (unsigned long long)getDurationMs(), value);
 		return String(str);
 	};
 
@@ -492,10 +557,18 @@ void MeterReadEnergyRegisters();
 void MeterLoadOptions();
 
 void MeterLoop();
+uint64_t MeterGetLastSampleTimestampMs();
+
+// Solicita generar un evento virtual usando el flujo real de captura.
+bool MeterTriggerTestEvent();
 
 void MeterTask(void* arg);
 
+// Copia una mitad Wave usando la seleccion original del osciloscopio; sin parametros.
 void readWaveBuffer();
+
+// Devuelve las ultimas lecturas Wave para diagnostico; dest recibe el JSON.
+void meterGetWaveDiagnostics(String& dest);
 
 void scaleBuffer(WFBFixedDataRate_t* samplesBuffer, int32_t samplesCount, float voltage, float current);
 

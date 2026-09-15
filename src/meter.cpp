@@ -5,6 +5,11 @@
 #include "freertos/task.h"
 #include "webserver.h"
 #include "bl0942/bl0942.h"
+#include "manager_api.h"
+#include "event_store.h"
+#include <memory>
+#include <new>
+#include <atomic>
 
 /*
 	Eventos de fases:
@@ -48,9 +53,200 @@ uint16_t eventsDataMaxSamples = 300;	//Cantidad máximas de muestras a guardar d
 
 scopeInfo_t scopeInfo;
 uint32_t meterUpdated = 0;
+uint64_t meterLastSampleTimestampMs = 0;
 portMUX_TYPE meterMutex = portMUX_INITIALIZER_UNLOCKED;
 
 Preferences meterOptions;
+extern capturedEvent EventsData;
+static volatile bool meterTestEventRequested = false;
+static volatile uint32_t meterIrq0Us = 0;
+static volatile uint32_t meterIrq0Sequence = 0;
+static uint32_t waveIrqSequence = 0;
+static uint32_t wavePageIrqUs = 0;
+static uint32_t waveReferenceUs = 0;
+static uint32_t wavePart = 0;
+static bool waveReferenceValid = false;
+static uint32_t waveFrameSequence = 0;
+static uint8_t waveReadPage = 0, waveAfterPage = 0, waveReadHalf = 0;
+static uint32_t waveReadIntervalUs = 0;
+static std::atomic<uint32_t> waveStoreLastUs{0}, waveStoreMaxUs{0};
+static portMUX_TYPE waveTraceMutex = portMUX_INITIALIZER_UNLOCKED;
+
+struct WaveReadTrace {
+	char eventId[48];
+	uint32_t block;
+	uint32_t irqSequence;
+	uint32_t irqUs;
+	uint32_t readUs;
+	uint32_t intervalUs;
+	uint32_t partHash;
+	uint8_t half;
+	uint8_t part;
+	uint8_t beforePage;
+	uint8_t afterPage;
+	const char* result;
+};
+static const uint8_t waveTraceCapacity = 48;
+static WaveReadTrace waveTrace[waveTraceCapacity] = {};
+static uint32_t waveTraceCount = 0;
+
+// Registra un fragmento sin imprimir en la tarea de adquisicion.
+// before/after: paginas antes/despues; readUs: duracion SPI; partData: 1344 bytes comprimidos.
+static void meterTraceWave(uint8_t before, uint8_t after, uint32_t readUs, const uint8_t* partData)
+{
+	if (!EventsData.getEventId().length()) return;
+	portENTER_CRITICAL(&waveTraceMutex);
+	bool complete = waveTraceCount == waveTraceCapacity &&
+		strcmp(waveTrace[0].eventId, EventsData.getEventId().c_str()) == 0;
+	portEXIT_CRITICAL(&waveTraceMutex);
+	if (complete) return;
+	WaveReadTrace trace = {};
+	snprintf(trace.eventId, sizeof(trace.eventId), "%s", EventsData.getEventId().c_str());
+	trace.block = waveFrameSequence;
+	trace.part = wavePart;
+	trace.irqSequence = waveIrqSequence;
+	trace.irqUs = wavePageIrqUs;
+	trace.readUs = readUs;
+	trace.intervalUs = waveReadIntervalUs;
+	trace.half = waveReadHalf;
+	trace.partHash = 2166136261u;
+	for (size_t i = 0; i < 1344; i++) trace.partHash = (trace.partHash ^ partData[i]) * 16777619u;
+	trace.beforePage = before;
+	trace.afterPage = after;
+	trace.result = "observed";
+	portENTER_CRITICAL(&waveTraceMutex);
+	if (waveTraceCount && strcmp(waveTrace[0].eventId, trace.eventId) != 0) waveTraceCount = 0;
+	if (waveTraceCount < waveTraceCapacity) waveTrace[waveTraceCount++] = trace;
+	portEXIT_CRITICAL(&waveTraceMutex);
+}
+
+// Copia el inicio de la ultima captura sin ocupar el stack de AsyncTCP; dest recibe el JSON.
+void meterGetWaveDiagnostics(String& dest)
+{
+	std::unique_ptr<WaveReadTrace[]> snapshot(new (std::nothrow) WaveReadTrace[waveTraceCapacity]);
+	if (!snapshot) {
+		dest = "{\"schemaVersion\":1,\"error\":\"insufficient_heap\"}";
+		return;
+	}
+	portENTER_CRITICAL(&waveTraceMutex);
+	uint32_t count = waveTraceCount;
+	memcpy(snapshot.get(), waveTrace, count * sizeof(WaveReadTrace));
+	portEXIT_CRITICAL(&waveTraceMutex);
+	dest = "{\"schemaVersion\":1,\"lastStoreUs\":" + String(waveStoreLastUs.load()) +
+		",\"maxStoreUs\":" + String(waveStoreMaxUs.load()) + ",\"fragments\":[";
+	for (uint32_t i = 0; i < count; i++) {
+		const auto& trace = snapshot[i];
+		char item[384];
+		snprintf(item, sizeof(item), "%s{\"eventId\":\"%s\",\"block\":%u,\"part\":%u,\"half\":%u,\"beforePage\":%u,\"afterPage\":%u,\"irqSequence\":%u,\"irqUs\":%u,\"readUs\":%u,\"intervalUs\":%u,\"partHashFnv1a\":%u,\"result\":\"%s\"}",
+			i ? "," : "", trace.eventId, trace.block, trace.part, trace.half,
+			trace.beforePage, trace.afterPage, trace.irqSequence, trace.irqUs, trace.readUs, trace.intervalUs, trace.partHash, trace.result);
+		dest += item;
+	}
+	dest += "]}";
+}
+
+// Estima el inicio en el frame actual; lookbackUs es la demora del detector.
+// Sin IRQ precisa conservamos la frontera de 128 muestras, no descartamos el indice.
+static int64_t meterWaveTriggerOffset(uint64_t lookbackUs = 0)
+{
+	uint32_t elapsedUs = micros() - waveReferenceUs;
+	return estimateWaveTriggerOffset(wavePart, elapsedUs, waveReferenceValid, lookbackUs);
+}
+
+// Busca el primer cambio en el mismo orden que meterPushEvent; oi habilita las fases OC cambiadas.
+// Descuenta la confirmacion nominal y, para un cierre aislado, la duracion ya conocida.
+static uint64_t meterEventLookbackUs(const ADE_OISTATUS_t& oi)
+{
+	phaseEvent_t* origins[] = {
+		&meterVals.phaseR.voltageDip, &meterVals.phaseS.voltageDip, &meterVals.phaseT.voltageDip,
+		&meterVals.phaseR.voltageSwell, &meterVals.phaseS.voltageSwell, &meterVals.phaseT.voltageSwell,
+		oi.OIPHASEA ? &meterVals.phaseR.overCurrent : nullptr,
+		oi.OIPHASEB ? &meterVals.phaseS.overCurrent : nullptr,
+		oi.OIPHASEC ? &meterVals.phaseT.overCurrent : nullptr,
+		oi.OIPHASEN ? &meterVals.neutral.overCurrent : nullptr
+	};
+	for (auto* origin : origins) {
+		if (!origin || !origin->hasChanged()) continue;
+		uint64_t lookbackUs = origin->active ? 0 : origin->getDurationMs() * 1000ULL;
+		if (origin->type != eventType::overCurrent)
+			lookbackUs += uint64_t(EventsData.getConfirmationHalfCycles(origin->type == eventType::voltageSwell)) * 10000ULL;
+		return lookbackUs;
+	}
+	return 0;
+}
+
+// Devuelve el tipo de evento usado por Power Meter Manager.
+// event: tipo interno del medidor.
+static const char* meterManagerEventType(eventType event)
+{
+	if (event == eventType::voltageDip) return "voltage_dip";
+	if (event == eventType::voltageSwell) return "voltage_swell";
+	return "over_current";
+}
+
+// Devuelve el nombre corto de fase usado por Power Meter Manager.
+// phase: fase interna del medidor.
+static const char* meterManagerPhaseName(phaseName phase)
+{
+	if (phase == phaseName::phaseR) return "R";
+	if (phase == phaseName::phaseS) return "S";
+	if (phase == phaseName::phaseT) return "T";
+	return "N";
+}
+
+// Devuelve la unidad principal del evento.
+// event: tipo interno del medidor.
+static const char* meterManagerEventUnit(eventType event)
+{
+	if (event == eventType::overCurrent) return "A";
+	return "V";
+}
+
+// Registra una transicion del evento que se esta capturando.
+// event: evento de fase detectado.
+static void meterPushEvent(phaseEvent_t& event)
+{
+	if (!event.hasChanged()) return;
+	uint64_t durationMs = event.getDurationMs();
+	String eventId = EventsData.getEventId();
+	if (!eventId.length()) eventId = eventStoreNextEventId();
+	EventsData.pushEvent(event.getJson().c_str(), durationMs);
+	uint64_t eventTimestamp = managerClockSynchronized() ? event.getTimestampMs() : 0;
+	eventStoreAddMeta(eventId, meterManagerEventType(event.type), meterManagerPhaseName(event.name), event.value, meterManagerEventUnit(event.type), eventTimestamp, durationMs, !event.active);
+	if (!event.active) eventStoreEndWave(eventId, meterManagerEventType(event.type), meterManagerPhaseName(event.name));
+}
+
+// Registra una transicion virtual usando el mismo flujo que un evento real.
+// eventId: id comun. active: true para inicio. timestampMs: Unix ms o 0. durationMs: duracion real.
+static void meterPushVirtualEvent(const String& eventId, bool active, uint64_t timestampMs, uint64_t durationMs)
+{
+	const char* action = active ? "start" : "end";
+	String eventJson = "{\"phase\":\"Fase R\",\"type\":\"Dip\",\"action\":\"";
+	eventJson += action;
+	eventJson += "\",\"time\":";
+	if (timestampMs) managerAppendUint64(eventJson, timestampMs);
+	else eventJson += "null";
+	eventJson += ",\"durationMs\":";
+	managerAppendUint64(eventJson, durationMs);
+	eventJson += ",\"val\":";
+	eventJson += String(active ? meterVals.phaseR.FastVrms : meterVals.phaseR.FastVrms * 0.75, 2);
+	eventJson += "}";
+	EventsData.pushEvent(eventJson.c_str(), durationMs);
+	eventStoreAddMeta(eventId, "manual_capture", "R", meterVals.phaseR.FastVrms * 0.75, "V", timestampMs, durationMs, !active);
+	if (!active) eventStoreEndWave(eventId, "manual_capture", "R");
+}
+
+uint64_t MeterGetLastSampleTimestampMs()
+{
+	return meterLastSampleTimestampMs;
+}
+
+bool MeterTriggerTestEvent()
+{
+	meterTestEventRequested = true;
+	if (meterHandle != NULL) xTaskNotifyGive(meterHandle);
+	return true;
+}
 
 
 void MeterInit()
@@ -58,8 +254,6 @@ void MeterInit()
 	Serial.println("Iniciando ADE9000!");
 	pinMode(pinAdeInt0, INPUT_PULLUP);
 	pinMode(pinAdeInt1, INPUT_PULLUP);
-
-	ade.restoreCalibration();	//Cargar calibración por defecto
 
 	ade.initADE9000(pinAdeClk, pinAdeSdi, pinAdeSdo);
 	ade.ADC_Redirect(adeChannel_IA, adeChannel_IC);	//Cruzar los canales A con C
@@ -72,11 +266,12 @@ void MeterInit()
 	// ade.setNoCurrentCutoff(0.01);
 
 
-	scopeInfo.currentScale = 1.0;
-	scopeInfo.voltageScale = 1.0;
+	scopeInfo.currentScale = 0.1;
+	scopeInfo.voltageScale = 0.25;
 	scopeInfo.sampleFreq = 8000;
 	webServerSetMeterEvents(scopeWSevents);		//Callback para eventos del websocket del scope
 	webServerSetAcEvents(acEventsWSevents);		//Callback para eventos del websocket de los eventos
+	eventStoreInit();
 
 
 	MeterLoadOptions();				//Cargar configuración de los eventos del medidor
@@ -93,6 +288,8 @@ void MeterInit()
 		| ADE_MASK0_BITS_RMS1012RDY | ADE_MASK0_BITS_THD_PF_RDY);
 
 	attachInterrupt(pinAdeInt0, []() {
+		meterIrq0Us = micros();
+		meterIrq0Sequence++;
 		BaseType_t switchToMeterTask = pdFALSE; //
 		vTaskNotifyGiveFromISR(meterHandle, &switchToMeterTask);
 		portYIELD_FROM_ISR(switchToMeterTask);
@@ -125,7 +322,7 @@ void MeterInit()
 
 }
 
-capturedEvent EventsData(400);
+capturedEvent EventsData(300);
 
 void MeterTask(void* arg)
 {
@@ -135,6 +332,9 @@ void MeterTask(void* arg)
 	uint32_t firstEventMs = 0, lastEventMs = 0;
 	uint32_t lastEvent, newEvent;
 	bool recording = false;
+	bool testEventActive = false;
+	uint32_t testEventStartMs = 0;
+	String testEventId = "";
 	ADE_OISTATUS_t lastOI = { .raw = 0 }, oi, overCurrentEvent;
 
 
@@ -158,8 +358,9 @@ void MeterTask(void* arg)
 			waitingTime = runningTime = 0;
 		}
 
-		if (EventsCount == 0)
-			debugI("Algo ha ocurrido y no se recibieron interrupciones dentro los 50ms de espera!");
+		// Sin salida Serial/RemoteDebug en adquisicion: puede demorar la siguiente lectura Wave.
+		// if (EventsCount == 0)
+		// 	debugI("Algo ha ocurrido y no se recibieron interrupciones dentro los 50ms de espera!");
 
 		/*
 			Usar un bloque while para leer los flags de las interrupciones porque se da el caso de que se produce una nueva interrupcion
@@ -167,6 +368,8 @@ void MeterTask(void* arg)
 			correspondiente. De esta manera se asegura que se limpien todos los bits y se sigen generando interrupciones.
 		*/
 		while (digitalRead(pinAdeInt0) == 0) {		//Leer que causó la interrupcion
+			uint32_t interruptUs = meterIrq0Us;
+			uint32_t interruptSequence = meterIrq0Sequence;
 			ADE_STATUS0_t status0 = ade.readStatus0();
 
 			if (ade.isCalibrating(calPhaseGain)) status0.EGYRDY = 0;	//Si está calibrando no se puede leer la energía.
@@ -174,6 +377,14 @@ void MeterTask(void* arg)
 			ade.clearStatusBit0(status0.raw);
 			// if (EventsCount == 0) Serial.printf("Status0=0x%x\n", status0.raw);
 			// Serial.printf("Status 0= 0x%X. time: %uus\n", status0, t);
+
+			// Leer la mitad Wave pendiente antes de RMS, potencia, THD y energia.
+			if (status0.PAGE_FULL) {
+				wavePageIrqUs = interruptUs;
+				waveIrqSequence = interruptSequence;
+				meterReadWaveBuffer();
+				meterUpdated++;
+			}
 
 			if (status0.RMSONERDY) {
 				meterReadHalfRMS();
@@ -205,17 +416,44 @@ void MeterTask(void* arg)
 				meterReadEnergy();
 				meterUpdated++;
 			}
-			if (status0.PAGE_FULL) {
-				meterReadWaveBuffer();
+		}
+
+		// Reservas, finalizacion y comandos manuales solo despues de atender IRQ0 pendiente.
+		eventStoreServiceCapture();
+		if (meterTestEventRequested && !EventsData.isCapturing() && !ade.isCalibrating()) {
+			meterTestEventRequested = false;
+			lastEventMs = firstEventMs = millis();
+			testEventStartMs = millis();
+			testEventId = eventStoreNextEventId();
+			uint64_t eventTimestamp = managerNowMs();
+			int64_t triggerOffset = meterWaveTriggerOffset();
+			if (EventsData.startCapture(eventsDataPrevSamples, testEventId)) {
+				eventStoreBeginEvent(testEventId, eventTimestamp);
+				if (webServerGetMeterWS()->count() == 0) eventStoreStartWave(testEventId, eventTimestamp, triggerOffset);
+				else eventStoreSetWaveUnavailable(testEventId, "scope_active");
+				for (int32_t i = (eventsDataPrevSamples - 1); i >= 0; i--) {
+					EventsData.pushSamples(meterGetFastDataSample(i));
+				}
+				meterPushVirtualEvent(testEventId, true, eventTimestamp, 0);
+				EventsData.markTriggerSample();
+				testEventActive = true;
 				meterUpdated++;
 			}
+		}
+
+		if (testEventActive && millis() - testEventStartMs >= 300) {
+			lastEventMs = millis();
+			uint64_t eventTimestamp = managerNowMs();
+			meterPushVirtualEvent(testEventId, false, eventTimestamp, 300);
+			testEventActive = false;
+			meterUpdated++;
 		}
 
 		oi .raw = ade.SPI_Read_16(ADDR_OISTATUS);
 		overCurrentEvent.raw = 0;
 
 		if (oi.OIPHASE != lastOI.OIPHASE) {
-			debugI("overCurrent -> R:%u, S:%u, T:%u, N:%u", oi.OIPHASEA, oi.OIPHASEB, oi.OIPHASEC, oi.OIPHASEN);
+			// debugI("overCurrent -> R:%u, S:%u, T:%u, N:%u", oi.OIPHASEA, oi.OIPHASEB, oi.OIPHASEC, oi.OIPHASEN);
 			CurrentRMSRegs current;
 			ade.readOverCurrentLevels(&current);
 			if (oi.OIPHASEA != lastOI.OIPHASEA) {
@@ -264,12 +502,21 @@ void MeterTask(void* arg)
 			if (!ade.isCalibrating()) {
 				if (!EventsData.isCapturing()) {
 					lastEventMs = firstEventMs = millis();
-					EventsData.startCapture(eventsDataPrevSamples);
-					//Guardar datos actuales en la primer parte del buffer e iniciar la grabación
-					for (int32_t i = (eventsDataPrevSamples - 1); i >= 0; i--) {
-						EventsData.pushSamples(meterGetFastDataSample(i));
+					String eventId = eventStoreNextEventId();
+					uint64_t eventTimestamp = managerNowMs();
+					uint64_t lookbackUs = meterEventLookbackUs(overCurrentEvent);
+					int64_t triggerOffset = meterWaveTriggerOffset(lookbackUs);
+					if (EventsData.startCapture(eventsDataPrevSamples, eventId)) {
+						eventStoreBeginEvent(eventId, eventTimestamp);
+						if (webServerGetMeterWS()->count() == 0) eventStoreStartWave(eventId, eventTimestamp, triggerOffset);
+						else eventStoreSetWaveUnavailable(eventId, "scope_active");
+						//Guardar datos actuales en la primer parte del buffer e iniciar la grabación
+						for (int32_t i = (eventsDataPrevSamples - 1); i >= 0; i--) {
+							EventsData.pushSamples(meterGetFastDataSample(i));
+						}
+						saveEvent = true;
+						EventsData.markTriggerSample(lookbackUs);
 					}
-					saveEvent = true;
 				}
 				else {
 					lastEventMs = millis();
@@ -279,18 +526,18 @@ void MeterTask(void* arg)
 
 			//Guardar el evento en el registro
 			if (saveEvent) {
-				if (meterVals.phaseR.voltageDip.hasChanged()) EventsData.pushEvent(meterVals.phaseR.voltageDip.getJson().c_str());
-				if (meterVals.phaseS.voltageDip.hasChanged()) EventsData.pushEvent(meterVals.phaseS.voltageDip.getJson().c_str());
-				if (meterVals.phaseT.voltageDip.hasChanged()) EventsData.pushEvent(meterVals.phaseT.voltageDip.getJson().c_str());
+				meterPushEvent(meterVals.phaseR.voltageDip);
+				meterPushEvent(meterVals.phaseS.voltageDip);
+				meterPushEvent(meterVals.phaseT.voltageDip);
 
-				if (meterVals.phaseR.voltageSwell.hasChanged()) EventsData.pushEvent(meterVals.phaseR.voltageSwell.getJson().c_str());
-				if (meterVals.phaseS.voltageSwell.hasChanged()) EventsData.pushEvent(meterVals.phaseS.voltageSwell.getJson().c_str());
-				if (meterVals.phaseT.voltageSwell.hasChanged()) EventsData.pushEvent(meterVals.phaseT.voltageSwell.getJson().c_str());
+				meterPushEvent(meterVals.phaseR.voltageSwell);
+				meterPushEvent(meterVals.phaseS.voltageSwell);
+				meterPushEvent(meterVals.phaseT.voltageSwell);
 
-				if (overCurrentEvent.OIPHASEA) EventsData.pushEvent(meterVals.phaseR.overCurrent.getJson().c_str());
-				if (overCurrentEvent.OIPHASEB) EventsData.pushEvent(meterVals.phaseS.overCurrent.getJson().c_str());
-				if (overCurrentEvent.OIPHASEC) EventsData.pushEvent(meterVals.phaseT.overCurrent.getJson().c_str());
-				if (overCurrentEvent.OIPHASEN) EventsData.pushEvent(meterVals.neutral.overCurrent.getJson().c_str());
+				if (overCurrentEvent.OIPHASEA) meterPushEvent(meterVals.phaseR.overCurrent);
+				if (overCurrentEvent.OIPHASEB) meterPushEvent(meterVals.phaseS.overCurrent);
+				if (overCurrentEvent.OIPHASEC) meterPushEvent(meterVals.phaseT.overCurrent);
+				if (overCurrentEvent.OIPHASEN) meterPushEvent(meterVals.neutral.overCurrent);
 			}
 			overCurrentEvent.OIPHASE = 0;	//Poner a 0 para salir del loop
 			meterUpdated++;
@@ -338,21 +585,33 @@ void MeterReadEnergyRegisters()
 		debugE("No se pudo abrir la partición de opciones del medidor para leer los registros de energía");
 		return;
 	}
-	Meter.phaseR.Watt_H =  meterOptions.getFloat("rWattH", 0.0);
-	Meter.phaseR.VAR_H =  meterOptions.getFloat("rVarH", 0.0);
-	Meter.phaseR.VA_H =  meterOptions.getFloat("rVaH", 0.0);
+	MeterEnergy.PhaseR.Watt_H = meterOptions.getFloat("rWattH", 0.0);
+	MeterEnergy.PhaseR.VAR_H = meterOptions.getFloat("rVarH", 0.0);
+	MeterEnergy.PhaseR.VA_H = meterOptions.getFloat("rVaH", 0.0);
 	
-	Meter.phaseS.Watt_H =  meterOptions.getFloat("sWattH", 0.0);
-	Meter.phaseS.VAR_H =  meterOptions.getFloat("sVarH", 0.0);
-	Meter.phaseS.VA_H =  meterOptions.getFloat("sVaH", 0.0);
+	MeterEnergy.PhaseS.Watt_H = meterOptions.getFloat("sWattH", 0.0);
+	MeterEnergy.PhaseS.VAR_H = meterOptions.getFloat("sVarH", 0.0);
+	MeterEnergy.PhaseS.VA_H = meterOptions.getFloat("sVaH", 0.0);
 
-	Meter.phaseT.Watt_H =  meterOptions.getFloat("tWattH", 0.0);
-	Meter.phaseT.VAR_H =  meterOptions.getFloat("tVarH", 0.0);
-	Meter.phaseT.VA_H =  meterOptions.getFloat("tVaH", 0.0);
+	MeterEnergy.PhaseT.Watt_H = meterOptions.getFloat("tWattH", 0.0);
+	MeterEnergy.PhaseT.VAR_H = meterOptions.getFloat("tVarH", 0.0);
+	MeterEnergy.PhaseT.VA_H = meterOptions.getFloat("tVaH", 0.0);
 	
-	Meter.energy.Watt_H =  meterOptions.getFloat("WattH", 0.0);
-	Meter.energy.VAR_H =  meterOptions.getFloat("VarH", 0.0);
-	Meter.energy.VA_H =  meterOptions.getFloat("VaH", 0.0);
+	meterVals.phaseR.Watt_H = Meter.phaseR.Watt_H = MeterEnergy.PhaseR.Watt_H;
+	meterVals.phaseR.VAR_H = Meter.phaseR.VAR_H = MeterEnergy.PhaseR.VAR_H;
+	meterVals.phaseR.VA_H = Meter.phaseR.VA_H = MeterEnergy.PhaseR.VA_H;
+	
+	meterVals.phaseS.Watt_H = Meter.phaseS.Watt_H = MeterEnergy.PhaseS.Watt_H;
+	meterVals.phaseS.VAR_H = Meter.phaseS.VAR_H = MeterEnergy.PhaseS.VAR_H;
+	meterVals.phaseS.VA_H = Meter.phaseS.VA_H = MeterEnergy.PhaseS.VA_H;
+
+	meterVals.phaseT.Watt_H = Meter.phaseT.Watt_H = MeterEnergy.PhaseT.Watt_H;
+	meterVals.phaseT.VAR_H = Meter.phaseT.VAR_H = MeterEnergy.PhaseT.VAR_H;
+	meterVals.phaseT.VA_H = Meter.phaseT.VA_H = MeterEnergy.PhaseT.VA_H;
+	
+	meterVals.energy.Watt_H = Meter.energy.Watt_H = meterOptions.getFloat("WattH", 0.0);
+	meterVals.energy.VAR_H = Meter.energy.VAR_H = meterOptions.getFloat("VarH", 0.0);
+	meterVals.energy.VA_H = Meter.energy.VA_H = meterOptions.getFloat("VaH", 0.0);
 
 	meterOptions.end();
 }
@@ -377,7 +636,13 @@ void MeterLoadOptions()
 		meterOptions.putInt("swellCicles", 5);
 		meterOptions.putBool("overcurrent", true);
 		meterOptions.putFloat("ocCurrent", 85.0);
+		meterOptions.putUInt("eventPrevSamples", eventsDataPrevSamples);
+		meterOptions.putUInt("eventPostSamples", eventsDataPostSamples);
+		meterOptions.putUInt("eventMaxSamples", eventsDataMaxSamples);
 	}
+	if (!meterOptions.isKey("eventPrevSamples")) meterOptions.putUInt("eventPrevSamples", eventsDataPrevSamples);
+	if (!meterOptions.isKey("eventPostSamples")) meterOptions.putUInt("eventPostSamples", eventsDataPostSamples);
+	if (!meterOptions.isKey("eventMaxSamples")) meterOptions.putUInt("eventMaxSamples", eventsDataMaxSamples);
 
 	dipEnabled = meterOptions.getBool("dipEnabled", true);
 	dipVoltage = meterOptions.getFloat("dipVoltage", 0.0);
@@ -389,6 +654,9 @@ void MeterLoadOptions()
 
 	ocEnabled = meterOptions.getBool("overcurrent", true);
 	ocCurrent = meterOptions.getFloat("ocCurrent", ade.getMaxInputCurrent());
+	eventsDataPrevSamples = meterOptions.getUInt("eventPrevSamples", eventsDataPrevSamples);
+	eventsDataPostSamples = meterOptions.getUInt("eventPostSamples", eventsDataPostSamples);
+	eventsDataMaxSamples = meterOptions.getUInt("eventMaxSamples", eventsDataMaxSamples);
 
 	meterOptions.end();
 
@@ -444,6 +712,7 @@ fastRMSData_t* meterGetFastDataSample(uint32_t sample)
 {
 	if (sample > halfCycleSamplesCount) return nullptr;
 	int32_t pos = (int32_t)halfCycleSamplesIndex - (int32_t)sample;
+	// TODO: revisar posible borde del buffer circular cuando sample == halfCycleSamplesCount o pos < 0.
 	if (pos < 0) pos += (fastDataSamplesCount - 1);	//Si es negativo es porque hay que empezar por el final
 	return &halfCycleSamples[pos];
 }
@@ -557,6 +826,7 @@ void MeterLoop()
 		taskENTER_CRITICAL(&meterMutex);
 		meterUpdated = 0;
 		Meter = meterVals;
+		meterLastSampleTimestampMs = managerNowMs();
 		if (EventsData.isDataReady()) dataReady = true;
 		taskEXIT_CRITICAL(&meterMutex);
 	}
@@ -567,6 +837,7 @@ void MeterLoop()
 	if (dataReady) {
 		String events;
 		EventsData.getEvents(events);
+		if (!eventStoreFinishFastRms(EventsData.getEventId(), (const uint8_t*)EventsData.getBuffer(), EventsData.getSampleCount() * sizeof(fastRMSData_t), EventsData.getTriggerSample())) return;
 		acEventsWS.textAll(events);		//Enviar eventos 
 		if (mqtt.connected()) {
 			mqtt.publish("PowerMeter9000/events", 0, false, events.c_str());
@@ -583,6 +854,7 @@ void MeterLoop()
 		// }
 	}
 	else index = 0;
+	eventStoreLoop();
 
 	if (millis() - energyUpdateTime >= 3600 * 8 * 1000) {	//Cada 8 horas actualizar los registros de energía
 		if (MeterWriteEnergyRegisters(false)) {
@@ -593,9 +865,34 @@ void MeterLoop()
 }
 
 
+// Envia una onda solo con margen de heap; data/size describen el frame de 96 ms.
+static void meterSendScopeFrame(const uint8_t* data, size_t size)
+{
+	static bool gapPending = false;
+	auto* socket = webServerGetMeterWS();
+	if (socket->count() == 0) {
+		gapPending = false;
+		return;
+	}
+	if (ESP.getFreeHeap() < 50 * 1024 || !socket->availableForWriteAll()) {
+		gapPending = true;
+		return;
+	}
+	// El aviso se encola al recuperarse, antes de las muestras nuevas, nunca con heap bajo.
+	if (gapPending) {
+		if (socket->textAll("scope_gap") != AsyncWebSocket::ENQUEUED) return;
+		gapPending = false;
+		if (ESP.getFreeHeap() < 50 * 1024 || !socket->availableForWriteAll()) {
+			gapPending = true;
+			return;
+		}
+	}
+	if (socket->binaryAll(data, size) != AsyncWebSocket::ENQUEUED) gapPending = true;
+}
+
 void meterReadWaveBuffer()
 {
-	static uint32_t lastTime = 0, part = 0, timeRead, timeScale, timeCompress, timeSend;
+	static uint32_t lastTime = 0, timeRead, timeScale, timeCompress, timeSend;
 	timeRead = micros();
 	readWaveBuffer();
 	timeRead = micros() - timeRead;
@@ -605,16 +902,24 @@ void meterReadWaveBuffer()
 	timeScale = micros() - timeScale;
 
 	timeCompress = micros();
-	compressWaveBuffer12(readBuffer[0].buffer, outputSamples, part++);
+	compressWaveBuffer12(readBuffer[0].buffer, outputSamples, wavePart);
+	meterTraceWave(waveReadPage, waveAfterPage, timeRead, outputSamples + wavePart * 1344);
+	wavePart++;
 	timeCompress = micros() - timeCompress;
 	
-	if (part == 6) {	//Buffer de 96ms comprimido listo para enviar
-		part = 0;
+	if (wavePart == 6) {	//Buffer de 96ms comprimido listo para enviar
+		wavePart = 0;
+		waveFrameSequence++;
 
 		timeSend = micros();
 		size_t size = sizeof(outputSamples);
-		if (webServerGetMeterWS()->count() > 0 )
-			webServerGetMeterWS()->binaryAll(outputSamples, size);
+		bool scopeActive = webServerGetMeterWS()->count() > 0;
+		uint32_t storeStartedUs = micros();
+		eventStoreProcessWaveFrame(outputSamples, size, scopeActive);
+		uint32_t storeElapsedUs = micros() - storeStartedUs;
+		waveStoreLastUs = storeElapsedUs;
+		if (storeElapsedUs > waveStoreMaxUs.load()) waveStoreMaxUs = storeElapsedUs;
+		meterSendScopeFrame(outputSamples, size);
 
 		timeSend = micros() - timeSend;
 
@@ -850,18 +1155,21 @@ ADE_OISTATUS_t meterReadOverCurrent()
 }
 
 
+// Lee la mitad con el criterio original del osciloscopio; sin parametros.
 void readWaveBuffer()
 {
-	uint32_t time = micros();
-	int32_t lastPage = ade.SPI_Read_16(ADDR_WFB_TRG_STAT);
-	lastPage >>= 12;
-
-	if (lastPage >= 14 || lastPage < 3)		//Se terminó de escribir la página 15. leer de la 8 a la 15
-		lastPage = 8;
-	else
-		lastPage = 0;
-	ade.SPI_Burst_Read_FixedDT_Buffer(lastPage * 128, WFB_SAMPLES_PER_CHANNEL / 2, readBuffer);
-	time = micros() - time;
+	static uint32_t previousReadUs = 0;
+	uint32_t nowUs = micros();
+	waveReadIntervalUs = previousReadUs ? nowUs - previousReadUs : 0;
+	previousReadUs = nowUs;
+	uint8_t lastPage = (ade.SPI_Read_16(ADDR_WFB_TRG_STAT) >> 12) & 15;
+	waveReadPage = lastPage;
+	waveReadHalf = lastPage >= 14 || lastPage < 3 ? 1 : 0;
+	ade.SPI_Burst_Read_FixedDT_Buffer(waveReadHalf * 1024, WFB_SAMPLES_PER_CHANNEL / 2, readBuffer);
+	waveAfterPage = (ade.SPI_Read_16(ADDR_WFB_TRG_STAT) >> 12) & 15;
+	waveReferenceUs = wavePageIrqUs;
+	waveReferenceValid = (lastPage == 7 || lastPage == 15) &&
+		(uint32_t)(micros() - waveReferenceUs) < 2000;
 }
 
 /*
