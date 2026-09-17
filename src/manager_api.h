@@ -41,12 +41,9 @@ void managerPublishTelemetry(const char* relativeTopic, const String& dataPayloa
 // Devuelve el proximo contador de publicacion MQTT.
 uint32_t managerNextSequence();
 
-// Publica una notificacion MQTT de evento para Manager.
+// Publica una notificacion MQTT de evento y devuelve su packet id, o 0 si no pudo encolarla.
 // notificationPayload: JSON completo de la notificacion.
-void managerPublishEventNotification(const String& notificationPayload);
-
-// Devuelve el proximo id persistente para eventos.
-uint32_t managerNextEventId();
+uint16_t managerPublishEventNotification(const String& notificationPayload);
 
 // Arma la respuesta de discovery para Power Meter Manager.
 // dest: String donde se escribe el JSON.

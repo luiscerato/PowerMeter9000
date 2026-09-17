@@ -6,7 +6,7 @@
 #include <SPI.h>
 
 // ----------------------------------------------------------------
-ST7920_SPI::ST7920_SPI(int8_t cs, int8_t sclk, int8_t mosi, int8_t miso)
+ST7920_SPI::ST7920_SPI(SPIClass& spiPort, int8_t cs, int8_t sclk, int8_t mosi, int8_t miso) : spi(spiPort)
 {
 	if (cs > -1) csPin = cs;
 	if (sclk > -1) sclkPin = sclk;
@@ -24,7 +24,7 @@ void ST7920_SPI::init()
 	dualChar = 0;
 	pinMode(csPin, OUTPUT);
 	digitalWrite(csPin, LOW);
-	SPI.begin(sclkPin, misoPin, mosiPin);
+	spi.begin(sclkPin, misoPin, mosiPin);
 
 	sendCmd(LCD_BASIC);
 	sendCmd(LCD_BASIC);
@@ -36,25 +36,25 @@ void ST7920_SPI::init()
 // ----------------------------------------------------------------
 void ST7920_SPI::sendCmd(byte b)
 {
-	SPI.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+	spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
 	digitalWrite(csPin, HIGH);
-	SPI.transfer(0xF8);
-	SPI.transfer(b & 0xF0);
-	SPI.transfer(b << 4);
+	spi.transfer(0xF8);
+	spi.transfer(b & 0xF0);
+	spi.transfer(b << 4);
 	digitalWrite(csPin, LOW);
-	SPI.endTransaction();
+	spi.endTransaction();
 }
 // ----------------------------------------------------------------
 
 void ST7920_SPI::sendData(byte b)
 {
-	SPI.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+	spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
 	digitalWrite(csPin, HIGH);
-	SPI.transfer(0xFA);
-	SPI.transfer(b & 0xF0);
-	SPI.transfer(b << 4);
+	spi.transfer(0xFA);
+	spi.transfer(b & 0xF0);
+	spi.transfer(b << 4);
 	digitalWrite(csPin, LOW);
-	SPI.endTransaction();
+	spi.endTransaction();
 }
 
 // ----------------------------------------------------------------
@@ -108,19 +108,19 @@ void ST7920_SPI::display(int buf)
 	byte i, j, b;
 	for (j = 0;j < 64 / 2;j++) {
 		gotoXY(0, j + buf * 64);
-		SPI.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+		spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
 		digitalWrite(csPin, HIGH);
-		SPI.transfer(0xFA); // data
+		spi.transfer(0xFA); // data
 		for (i = 0;i < 16;i++) {  // 16 bytes from line #0+
 			b = scr[i + j * 16];
-			SPI.transfer(b & 0xF0);  SPI.transfer(b << 4);
+			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
 		}
 		for (i = 0;i < 16;i++) {  // 16 bytes from line #32+
 			b = scr[i + (j + 32) * 16];
-			SPI.transfer(b & 0xF0);  SPI.transfer(b << 4);
+			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
 		}
 		digitalWrite(csPin, LOW);
-		SPI.endTransaction();
+		spi.endTransaction();
 	}
 }
 
@@ -130,19 +130,19 @@ void ST7920_SPI::display(int buf, int part)
 	part &= 0x7;	//Solo 8 partes
 	for (j = part * 4;j < ((part + 1) * 4);j++) {
 		gotoXY(0, j + buf * 64);
-		SPI.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+		spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
 		digitalWrite(csPin, HIGH);
-		SPI.transfer(0xFA); // data
+		spi.transfer(0xFA); // data
 		for (i = 0;i < 16;i++) {  // 16 bytes from line #0+
 			b = scr[i + j * 16];
-			SPI.transfer(b & 0xF0);  SPI.transfer(b << 4);
+			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
 		}
 		for (i = 0;i < 16;i++) {  // 16 bytes from line #32+
 			b = scr[i + (j + 32) * 16];
-			SPI.transfer(b & 0xF0);  SPI.transfer(b << 4);
+			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
 		}
 		digitalWrite(csPin, LOW);
-		SPI.endTransaction();
+		spi.endTransaction();
 	}
 }
 // ----------------------------------------------------------------
@@ -152,17 +152,17 @@ void ST7920_SPI::copy(uint8_t x16, uint8_t y, uint8_t w16, uint8_t h, uint8_t bu
 	byte i, j, b;
 	for (j = 0;j < h;j++) {
 		gotoXY(x16, y + j + buf * 64);
-		SPI.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+		spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
 		digitalWrite(csPin, HIGH);
-		SPI.transfer(0xFA); // data
+		spi.transfer(0xFA); // data
 		for (i = 0;i < w16;i++) {
 			b = scr[(i + j * w16) * 2 + 0];
-			SPI.transfer(b & 0xF0);  SPI.transfer(b << 4);
+			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
 			b = scr[(i + j * w16) * 2 + 1];
-			SPI.transfer(b & 0xF0);  SPI.transfer(b << 4);
+			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
 		}
 		digitalWrite(csPin, LOW);
-		SPI.endTransaction();
+		spi.endTransaction();
 	}
 }
 // ----------------------------------------------------------------

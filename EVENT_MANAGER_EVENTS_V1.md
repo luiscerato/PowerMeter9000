@@ -1,9 +1,10 @@
 # Power Meter ADE9000 - eventos locales v1
 
 Este documento define el contrato actual entre el firmware y Power Meter Manager.
-La implementacion es local por HTTP y MQTT: no escribe eventos en flash, NVS ni
-memoria externa y no realiza HTTP POST. Los eventos pendientes se pierden cuando
-el ESP32 se reinicia.
+La implementacion es local por HTTP y MQTT y no realiza HTTP POST. Los artefactos
+Fast RMS/Wave y sus colas viven solamente en RAM y se pierden al reiniciar. Los
+eventos de estado `grid` guardan en NVS unicamente el ultimo estado conocido y
+su inicio como contexto orientativo para el proximo arranque.
 
 ## Flujo del firmware
 
@@ -92,7 +93,8 @@ Ejemplo:
 
 Todos los timestamps de metadata son Unix Epoch UTC en milisegundos y se
 serializan como enteros JSON. Si el reloj no esta sincronizado, `timestamp` es
-`null`. La zona horaria solo se aplica al mostrar datos.
+`null`. Como excepcion, Grid omite `timestamp` y usa `ageMs` despues de su espera
+maxima por NTP. La zona horaria solo se aplica al mostrar datos.
 
 `durationMs` es la duracion electrica observada, no el largo de los buffers. Es
 `null` si la condicion todavia no finalizo antes de cerrar las capturas.
@@ -112,6 +114,149 @@ Esto no detecta ni corrige por si solo una discontinuidad originada en la lectur
 Si un bloque Wave posterior no puede asignarse, se conservan los bloques
 anteriores validos; por eso `wave.available` sigue siendo `true` y el tamano
 real se obtiene de `blockCount`, `samplesPerChannel` y `size`.
+
+## Eventos de estado de red
+
+Los eventos de estado usan el mismo topic MQTT y se distinguen con
+`category: "grid"`. No tienen artefactos Fast RMS/Wave ni rutas de descarga:
+cada mensaje representa una unica transicion confirmada de una fase o de la red
+general. Es inmutable: no existe una segunda publicacion para cerrarlo.
+
+Ejemplo de transicion de fase `normal -> undervoltage`:
+
+```json
+{
+  "schemaVersion": 1,
+  "sequence": 1301,
+  "eventId": "boot-a41f-57",
+  "deviceId": "pm-ade9000-c4c07612cfa4",
+  "category": "grid",
+  "type": "undervoltage",
+  "previousState": "normal",
+  "state": "undervoltage",
+  "timestamp": 1788457847186,
+  "previousStateStartedAt": 1788450000000,
+  "previousStateDurationMs": 7847186,
+  "phases": ["R"],
+  "value": 181.35,
+  "unit": "V"
+}
+```
+
+Semantica temporal:
+
+- `timestamp`: instante en que comenzo `state`, es decir, cuando ocurrio la
+  transicion.
+- `previousStateStartedAt`: instante conocido en que habia comenzado
+  `previousState`.
+- `previousStateDurationMs`: duracion calculada del estado anterior.
+
+Los dos campos del estado anterior pueden ser null si un reinicio sin RTC impide
+reconstruirlos. Si el medidor no obtiene NTP durante cinco minutos, omite
+`timestamp` y envia `ageMs`, que indica cuantos milisegundos transcurrieron desde
+el evento hasta esa publicacion. El Manager puede estimar el instante como
+`horaDeRecepcion - ageMs`; no debe interpretar `ageMs` como Unix Epoch.
+
+Tipos por fase:
+
+- `phase_normal`
+- `undervoltage`
+- `overvoltage`
+- `phase_loss`
+
+Tipos generales, siempre con `phases: ["R", "S", "T"]`:
+
+- `grid_normal`: las tres fases estan normales.
+- `grid_abnormal`: al menos una fase esta fuera de rango, pero no se perdieron
+  las tres.
+- `grid_outage`: las tres fases estan en `phase_loss`.
+
+Configuracion inicial del detector, modificable desde la web del medidor:
+
+| Ajuste | Valor inicial |
+| --- | --- |
+| Bajo voltaje R/S/T | 185 V |
+| Alto voltaje R/S/T | 250 V |
+| Sin tension | 20 V |
+| Histeresis comun | 5 V |
+| Confirmacion de perdida de fase | 250 ms |
+| Confirmacion de bajo/alto voltaje | 5000 ms |
+| Confirmacion de recuperacion normal | 250 ms |
+
+La histeresis mantiene `phase_loss` hasta superar 25 V, `undervoltage` hasta
+superar 190 V y `overvoltage` hasta bajar de 245 V. El estado general no agrega
+otra demora: es `normal` si las tres fases son normales, `outage` si las tres
+estan en `phase_loss`, y `abnormal` en cualquier otra combinacion confirmada.
+El Manager debe guardar los valores recibidos y no reclasificar historicos con
+sus propios umbrales.
+
+Los eventos por fase y el evento general son intencionalmente independientes.
+Por ejemplo, un corte completo puede generar tres transiciones hacia
+`phase_loss` y una hacia `grid_outage`. Esto permite consultar el historial
+general o el detalle de una fase. El filtrado de notificaciones corresponde al
+Manager.
+
+NVS guarda cuatro snapshots fijos para R, S, T y red general. Cada snapshot
+contiene el ultimo estado conocido y su fecha de inicio si era conocida. Es
+informacion auxiliar y puede quedar desactualizada si la alimentacion desaparece
+antes de completar la escritura. No guarda la cola ni las muestras Fast RMS/Wave.
+
+Al arrancar:
+
+1. El firmware espera cinco segundos para que las mediciones se estabilicen.
+2. Con `ESP_RST_POWERON` o `ESP_RST_BROWNOUT`, publica un registro inicial para
+   cada fase y otro para la red general. Todos llevan `source: "startup"` y
+   `resetReason: "power_on"` o `"brownout"`.
+3. `previousState` proviene del snapshot NVS o vale `unknown`; `state` contiene
+   la medicion estable actual. Es valido que ambos estados sean iguales.
+4. Un reset de software, panic, watchdog, externo o desconocido solo establece
+   la linea base y no genera registros electricos.
+5. La nueva linea base se guarda en NVS inmediatamente, sin depender de MQTT.
+6. Los registros esperan MQTT y NTP hasta cinco minutos. Si aparece NTP se
+   reconstruye `timestamp` usando el `millis()` capturado. Si vence el plazo,
+   pueden publicarse con `ageMs`.
+
+Ejemplo de registro inicial por fase:
+
+```json
+{
+  "schemaVersion": 1,
+  "sequence": 1302,
+  "eventId": "boot-a41f-58",
+  "deviceId": "pm-ade9000-c4c07612cfa4",
+  "category": "grid",
+  "type": "phase_normal",
+  "previousState": "phase_loss",
+  "state": "normal",
+  "timestamp": 1788457847186,
+  "previousStateStartedAt": 1788450000000,
+  "previousStateDurationMs": 7847186,
+  "phases": ["R"],
+  "value": 229.4,
+  "unit": "V",
+  "source": "startup",
+  "resetReason": "power_on"
+}
+```
+
+El firmware conserva hasta 16 registros grid pendientes en una cola estatica de RAM,
+publica uno por vez con QoS 1 y lo retira al recibir PUBACK. Tras una desconexion
+reintenta el mismo cambio. Puede haber duplicados, por lo que `sequence` no debe
+usarse como clave y el upsert por `deviceId + eventId` es obligatorio. Si se
+llena, descarta el pendiente mas antiguo para conservar la informacion reciente.
+La cola RAM se pierde al reiniciar, pero los snapshots NVS permanecen.
+
+### Diferencias entre Wave y Grid
+
+| Campo/comportamiento | `category: "wave"` | `category: "grid"` |
+| --- | --- | --- |
+| Identidad | `deviceId + eventId` | `deviceId + eventId` |
+| Topic | `events/notification` | `events/notification` |
+| Cuerpo comun | schemaVersion, sequence, eventId, deviceId, category, type, timestamp y phases | Grid agrega state, previousState, previousStateStartedAt y previousStateDurationMs; sin NTP usa ageMs; value/unit se omiten en estados generales |
+| Detalles | `fastRms`, `wave`, `links` | No tiene artefactos ni links |
+| Ciclo de vida | Se repite completo hasta `clear` HTTP | Un mensaje inmutable por transicion |
+| Confirmacion | Descarga, CRC y `clear` | No hay `clear`; la cola avanza al recibir PUBACK |
+| Persistencia | Hasta cinco capturas descargables en RAM | Ultimo estado por fase/red en NVS y hasta 16 mensajes pendientes en RAM |
 
 ## Rutas HTTP
 
@@ -410,14 +555,34 @@ la parte Wave se descarta con `reason: "scope_active"`; Fast RMS continua.
 
 ## Implementacion requerida en el Manager
 
-1. Obtener la direccion HTTP del medidor desde su configuracion local; los links
-   son relativos a esa direccion, nunca a la direccion del Manager. Obtener
-   deviceId y baseTopic con GET /api/v1/manager/discovery.
-2. Suscribirse al topic events/notification y consultar GET /api/v1/events al
-   arrancar o reconectar. Asi se recupera la cola aunque se haya perdido MQTT.
-   Se puede repetir la consulta cada cinco segundos; desactivar cache HTTP.
-3. Crear o actualizar un unico evento por deviceId + eventId, conservando el
-   JSON completo. Aceptar tipos nuevos como texto; no rechazar un tipo desconocido.
+### Enrutamiento comun
+
+1. Obtener `deviceId` y `baseTopic` con `GET /api/v1/manager/discovery` y
+   suscribirse a `<baseTopic>/events/notification`.
+2. Parsear primero `schemaVersion` y `category`. En v1, `category` puede ser
+   `wave` o `grid`. Aceptar tipos nuevos como texto y no descartar todo el
+   mensaje por un `type` desconocido.
+3. Usar `deviceId + eventId` como identidad durable. `sequence` sirve para
+   diagnostico y orden aproximado, pero no es clave: puede saltar, reiniciarse o
+   cambiar al reintentar una publicacion.
+4. Hacer el procesamiento idempotente. QoS 1, las repeticiones Wave y los
+   reintentos Grid pueden entregar el mismo evento mas de una vez.
+5. Guardar el JSON original junto con los campos normalizados para incorporar
+   tipos o campos futuros sin perder informacion.
+
+La base de datos puede usar una tabla comun con columnas especificas opcionales,
+o tablas separadas para Wave y Grid. En ambos casos debe existir una restriccion
+unica por `deviceId + eventId` y una operacion de upsert.
+
+### Procesamiento de category wave
+
+1. Obtener la direccion HTTP local del medidor desde su configuracion. Los links
+   del JSON son relativos a esa direccion, nunca a la direccion del Manager.
+2. Consultar `GET /api/v1/events` al arrancar o reconectar para recuperar la cola
+   Wave aunque se haya perdido MQTT. Se puede repetir cada cinco segundos y se
+   debe desactivar cache HTTP. El catalogo no contiene eventos Grid.
+3. Crear o actualizar un unico evento Wave por `deviceId + eventId`. Una
+   repeticion no genera otra alerta ni otra descarga simultanea.
 4. Encolar una sola descarga por evento. Procesar eventos y archivos
    secuencialmente por medidor, primero Fast RMS y luego Wave, para limitar
    conexiones y consumo de memoria del ESP32.
@@ -445,6 +610,35 @@ la parte Wave se descarta con `reason: "scope_active"`; Fast RMS continua.
     solamente al mostrar timestamp. Si timestamp es null, conservarlo como
     desconocido y guardar por separado la hora de recepcion del Manager.
 
+### Procesamiento de category grid
+
+1. No consultar `GET /api/v1/events` ni descargar archivos: Grid llega solamente
+   por MQTT y no contiene `fastRms`, `wave` ni `links`.
+2. Cada `eventId` representa una transicion inmutable. Insertarla una vez y usar
+   upsert solamente para hacer idempotentes los duplicados QoS 1.
+3. Guardar `previousState`, `state`, `timestamp` o `ageMs`, `previousStateStartedAt`,
+   `previousStateDurationMs`, `phases`, `value` y `unit`. Los dos ultimos se
+   omiten en estados generales; los tres campos temporales pueden ser null.
+4. `timestamp` inicia el estado nuevo. Si solo existe `ageMs`, estimarlo desde la
+   hora de recepcion y conservar que su origen fue relativo. Los campos
+   `previousState*` describen el tramo que acaba de terminar y permiten dibujarlo
+   sin buscar necesariamente la transicion anterior.
+5. Un `eventId` nuevo puede generar una notificacion al usuario. Un duplicado del
+   mismo id solo confirma/actualiza la fila y no genera otra alerta. No existen
+   mensajes separados de apertura y cierre.
+6. Los registros con `source: "startup"` son observaciones posteriores a un
+   `POWERON` o `BROWNOUT`. Deben aparecer en el historial de su fase, pero no
+   garantizan que NVS haya registrado el ultimo cambio antes del apagado.
+7. Los eventos de fase llevan una sola fase. Los estados generales llevan
+   `phases: ["R", "S", "T"]`. Es valido recibir tres eventos `phase_loss` y un
+   `grid_outage` para el mismo episodio: son vistas independientes, no duplicados.
+8. Para una linea de tiempo, el segmento anterior va desde
+   `previousStateStartedAt` hasta `timestamp`; el estado nuevo queda vigente
+   desde `timestamp` hasta la siguiente transicion. Aplicar zona horaria solo al
+   visualizar y conservar null cuando el firmware no conocia la hora.
+9. El Manager puede agrupar notificaciones para evitar avisos repetitivos, pero
+   debe conservar todos los registros por fase y el registro general.
+
 Las rutas actuales sirven archivos completos: no implementan HTTP Range,
 paginacion, descarga por offset ni reanudacion. El fragmentado interno de
 AsyncWebServer es transparente al cliente. No usar las rutas anteriores
@@ -456,7 +650,8 @@ Usar timeout de descarga finito (por ejemplo 15 segundos) y reintento limitado.
 El topic legado PowerMeter9000/events y el websocket /acevents pueden seguir
 existiendo para la web/Node-RED. El Manager nuevo debe consumir exclusivamente
 events/notification y estas rutas, para evitar duplicados de contratos distintos.
-No existe confirmacion por MQTT ni POST binario desde el medidor en este flujo.
+No existe HTTP POST binario desde el medidor. Wave se confirma con `clear`; Grid
+no requiere una confirmacion de aplicacion del Manager.
 
 ## Limites de esta version
 
@@ -489,5 +684,23 @@ terminada; puede esperar si ya hay una captura o calibracion en curso.
 Repetir con Manager desconectado y luego reconectado, notificaciones duplicadas,
 Wave ausente, timestamp null y evento eliminado durante descarga. Comprobar que
 hay una sola alerta por evento y que no se elimina antes de guardar sus datos.
+
+Para Grid, verificar por separado:
+
+1. Una transicion normal a bajo/alto voltaje o perdida de fase produce una
+   unica notificacion con `state`, `previousState` y una sola fase.
+2. La recuperacion produce otro `eventId` que describe la transicion inversa y
+   la duracion del estado anterior cuando pudo calcularse.
+3. Perder las tres fases produce tres transiciones de fase y una transicion
+   `grid_outage`; no deben deduplicarse entre si.
+4. Un `POWERON` o `BROWNOUT` produce tres registros de fase y uno general luego
+   de los cinco segundos de estabilizacion, aun si el estado no cambio.
+5. Un reset de software, panic, watchdog o causa desconocida no produce registros
+   Grid de arranque.
+6. Sin NTP durante cinco minutos pero con MQTT disponible, el registro usa
+   `ageMs` en lugar de `timestamp`.
+7. Desconectar MQTT, generar varios cambios y reconectar conserva su orden hasta
+   el limite de 16 pendientes.
+8. Enviar dos veces el mismo `eventId` produce una sola fila por upsert.
 La captura manual usa muestras reales con metadata de prueba; no provoca una
 caida de tension fisica y no debe esperarse ver un dip artificial en las curvas.

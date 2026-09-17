@@ -13,12 +13,17 @@
 #include "AsyncMqttClient.h"
 #include "ui/lcd_ui.h"
 #include "manager_api.h"
+#include "w25n02kv.h"
 
 
 TactSwitch BtnEnter, BtnUp, BtnDown, BtnEsc, BtnNext; // Interfase de 5 botones
 keyboard Keyboard;                           // Interfase de teclado
 
-ST7920_SPI lcd(pinLcdSS, pinSpiClk, pinSpiSdo);
+SPIClass peripheralSpi(HSPI);
+ST7920_SPI lcd(peripheralSpi, pinLcdSS, pinSpiClk, pinSpiSdo, pinSpiSdi);
+W25N02Kv eventFlash(peripheralSpi, pinMemSS);
+W25N02KvInfo flashInfo;
+bool flashDetected = false;
 
 lcd_ui ui(lcd, Keyboard, pinBuzzer);
 
@@ -96,8 +101,8 @@ void setup(void)
 	pinMode(pinMem2SS, OUTPUT);
 	analogWrite(pinLcdBL, 128);
 
-	digitalWrite(pinMemSS, 0);
-	digitalWrite(pinMem2SS, 0);
+	digitalWrite(pinMemSS, HIGH);
+	digitalWrite(pinMem2SS, HIGH);
 	digitalWrite(pinBuzzer, 0);
 	digitalWrite(pinRelay, 0);
 
@@ -121,6 +126,11 @@ void setup(void)
 	lcd.init();
 	lcd.cls();
 	lcd.display(0);
+
+	flashDetected = eventFlash.begin() && eventFlash.readInfo(flashInfo);
+	Serial.printf("W25N02KV: %s, JEDEC %02X %04X, PROT %02X, CFG %02X, STAT %02X\n",
+		flashDetected ? "detectada" : "no detectada", flashInfo.manufacturerId, flashInfo.deviceId,
+		flashInfo.protection, flashInfo.configuration, flashInfo.status);
 
 	ui.begin();
 	ui.Add_UI(ui.getNewID(), "main", &Draw_Main);
@@ -240,26 +250,21 @@ void loop(void)
 		else
 			strip.setLedColorData(0, 0x1F, 0, 0);
 
-		float vNom = 230.0;
 		for (uint32_t fase = 0; fase < 3; fase++) {
-			float volt = Meter.phaseR.FastVrms;
-			if (fase == 1) volt = Meter.phaseS.FastVrms;
-			else if (fase == 2) volt = Meter.phaseT.FastVrms;
-
-
-			if (volt < 10.0) {  //Si no hay tension parpadear en rojo
+			auto state = Meter.phaseR.gridState.state;
+			if (fase == 1) state = Meter.phaseS.gridState.state;
+			else if (fase == 2) state = Meter.phaseT.gridState.state;
+			if (state == phaseCondition::phaseLoss) {
 				strip.setLedColorData(fase + 1, millis() & 0x200 ? 0x1F : 0, 0, 0);
 			}
-			else if (volt < vNom * .85)  //Muy bajo voltaje, prender en rojo
+			else if (state == phaseCondition::undervoltage)
 				strip.setLedColorData(fase + 1, 0x1F, 0, 0);
-			else if (volt < vNom * .90)  //Bajo voltaje, prender en amarillo
-				strip.setLedColorData(fase + 1, 0, 0x1F, 0x1F);
-			else if (volt < vNom * 1.10)  //Voltaje normal, prender en verde
+			else if (state == phaseCondition::normal)
 				strip.setLedColorData(fase + 1, 0, 0x1F, 0);
-			else if (volt < vNom * 1.15)  //Alto Voltaje, prender en rojo+azul
+			else if (state == phaseCondition::overvoltage)
 				strip.setLedColorData(fase + 1, 0x1F, 0, 0x1F);
-			else //if (volt > vNom*1.15)  //Muy Alto Voltaje, prender en azul
-				strip.setLedColorData(fase + 1, 0, 0, 0x1F);
+			else
+				strip.setLedColorData(fase + 1, 0, 0, 0);
 		}
 
 		strip.setLedColorData(4, 0, 0, 0);
@@ -376,6 +381,10 @@ bool Draw_Main(lcd_ui* ui, UI_Action action)
 			lcd.printStr(c2, l4, ade.format(Meter.phaseT.AngleV, 5, "°", formatNoPrefix).c_str(), TextAling::TopRight);
 			lcd.printStr(c3, l4, ade.format(Meter.phaseT.AngleVI, 4, "°", formatNoPrefix).c_str(), TextAling::TopRight);
 			lcd.printStr(c4, l4, ade.format(Meter.phaseT.AngleI, 4, "°", formatNoPrefix).c_str(), TextAling::TopRight);
+
+			snprintf(str, sizeof(str), "NAND:%s %02X %04X", flashDetected ? "OK" : "ERROR",
+				flashInfo.manufacturerId, flashInfo.deviceId);
+			lcd.printStr(c1, l5, str);
 			break;
 		}
 

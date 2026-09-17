@@ -17,6 +17,54 @@ body {
     min-width: 300px;
 }
 
+.appSidebar { background: #f4f6f6; border-bottom: 1px solid #d5dcdc; }
+.appSidebar .nav-link { padding: 10px 14px; border-radius: 4px; }
+.appSidebar .nav-link.active { background: #d5eeee; color: #075a60; font-weight: 600; }
+.pageHeading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; padding: 20px 20px 12px; border-bottom: 1px solid #e1e6e6; margin-bottom: 12px; }
+.pageHeading h1 { font-size: 24px; margin: 0; }
+#mainContent { min-width: 0; padding-bottom: 95px; }
+#settingsTabs { gap: 4px; }
+#settingsTabs .nav-link { padding: 8px 12px; }
+.settingsPane { padding-top: 16px; }
+.settingsPane fieldset { min-width: 0; }
+.settingsSection { max-width: 1120px; }
+.settingsSectionHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 4px; }
+.settingsSectionHeader h2 { font-size: 18px; margin: 0 0 3px; }
+.settingsSectionHeader p { color: #6c757d; margin: 0; }
+.settingsActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.settingsStatusLine { min-height: 24px; padding: 3px 0; }
+.settingsGroupGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+.settingsGroupGridTwo { grid-template-columns: repeat(2, minmax(280px, 1fr)); }
+.settingsGroup { min-width: 0; padding: 12px; border: 1px solid #d8dede; border-radius: 6px; background: #fbfcfc; }
+.settingsGroup h3, .optionGroup legend { float: none; width: auto; color: #263536; font-size: 15px; font-weight: 600; margin: 0 0 10px; }
+.settingsFieldsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
+.settingsField { display: grid; grid-template-columns: minmax(0, 1fr) minmax(92px, 34%); align-items: center; gap: 10px; margin-bottom: 7px; }
+.settingsField:last-child { margin-bottom: 0; }
+.settingsFieldStack { display: block; margin: 0; }
+.settingsFieldStack label { display: block; min-height: 18px; margin-bottom: 3px; }
+.settingsSwitch { grid-column: 1 / -1; margin: 2px 0; }
+.settingsTable { margin-bottom: 8px; }
+.settingsTable > :not(caption) > * > * { padding: 5px; }
+.calibrationTable input { min-width: 110px; }
+@media (min-width: 768px) {
+    .appSidebar { position: fixed; inset: 0 auto 0 0; width: 200px; align-items: flex-start; border-right: 1px solid #d5dcdc; overflow-y: auto; }
+    .appSidebar > .container-fluid { flex-direction: column; align-items: stretch; }
+    .appSidebar .navbar-brand { margin: 12px 0 24px; padding-left: 12px; }
+    .appSidebar .navbar-collapse { flex-grow: 0; }
+    .navbar.appSidebar .navbar-nav { flex-direction: column; }
+    #mainContent { margin-left: 200px; }
+    #divFooter .fixed-bottom { left: 200px; }
+}
+@media (max-width: 767.98px) {
+    .settingsSectionHeader { display: block; }
+    .settingsActions { justify-content: flex-start; margin-top: 10px; }
+    .settingsGroupGridTwo { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+    .settingsFieldsGrid { grid-template-columns: 1fr; }
+    .settingsField { grid-template-columns: minmax(0, 1fr) 110px; }
+}
+
 .txtEstado {
     font-size: 25px;
 }

@@ -2,7 +2,7 @@ $(document).ready(function () {
     setupNav();
     setupFooter();
     initMeterUI();
-    showAppPage(location.hash == "#scopePage" ? "scopePage" : "meterPage");
+    showAppPage(location.hash.slice(1));
 });
 
 // Configura la barra de navegacion embebida en la pagina.
@@ -18,23 +18,35 @@ function setupNav() {
         event.preventDefault();
         showAppPage($(this).data("page"));
     });
+    $(window).on("hashchange", () => showAppPage(location.hash.slice(1)));
 }
 
 // Muestra una seccion principal de la app sin recargar la pagina.
 // pageId: id de la seccion a mostrar.
 function showAppPage(pageId) {
-    $(".appPage").addClass("d-none");
-    $("#" + pageId).removeClass("d-none");
-    $(".app-page-link").removeClass("active");
-
+    const titles = {home: "Resumen", allMeasures: "Mediciones", events: "Eventos", scopePage: "Osciloscopio", settings: "Configuración"};
+    if (!Object.prototype.hasOwnProperty.call(titles, pageId)) pageId = "home";
+    if (showAppPage.current === pageId) return;
+    showAppPage.current = pageId;
+    $("#meterPage").toggleClass("d-none", pageId === "scopePage");
+    $("#scopePage").toggleClass("d-none", pageId !== "scopePage");
+    $("#mainViews > .tab-pane").removeClass("active");
+    if (pageId !== "scopePage") $("#" + pageId).addClass("active");
+    $(".app-page-link").removeClass("active").removeAttr("aria-current");
+    $('.app-page-link[data-page="' + pageId + '"]').addClass("active").attr("aria-current", "page");
+    $("#pageTitle").text(titles[pageId]);
+    location.hash = pageId;
+    const menu = document.getElementById("navbarNavAltMarkup");
+    if (menu.classList.contains("show")) bootstrap.Collapse.getOrCreateInstance(menu, {toggle: false}).hide();
     if (pageId == "scopePage") {
-        $("#navscope").addClass("active");
-        location.hash = "scopePage";
         initScopeUI();
     } else {
         if (typeof Scope != "undefined" && Scope.mode == "scope") Scope.stop();
-        $("#navindex").addClass("active");
-        location.hash = "meterPage";
+        if (pageId === "settings") loadSettings();
+        if (pageId === "events") {
+            loadRamEventsList();
+            meterLoadEventsList();
+        }
     }
 }
 

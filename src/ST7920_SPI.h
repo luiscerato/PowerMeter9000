@@ -18,6 +18,8 @@
 #ifndef _ST7920_SPI_H
 #define _ST7920_SPI_H 
 
+#include <SPI.h>
+
 #include <Arduino.h>
 //#include <avr/pgmspace.h>
 
@@ -96,7 +98,9 @@ public:
 // ---------------------------------
 class ST7920_SPI {
 public:
-  ST7920_SPI(int8_t cs, int8_t sclk = -1, int8_t mosi = -1, int8_t miso = -1);
+  // Configura la pantalla sobre un bus SPI ya elegido por la aplicacion.
+  // spiPort: puerto compartido; cs, sclk, mosi y miso: pines fisicos del bus.
+  ST7920_SPI(SPIClass& spiPort, int8_t cs, int8_t sclk = -1, int8_t mosi = -1, int8_t miso = -1);
   int32_t getScreenWidth() { return SCR_WD; };
   int32_t getScreenHeight() { return SCR_HT; };
 
@@ -162,6 +166,7 @@ public:
   void setIsNumberFun(bool (*fun)(uint8_t)) { isNumberFun = fun; }
 
 public:
+  SPIClass& spi;
   byte scr[SCR_WD * SCR_HT / 8];
   uint32_t scrWd = 128 / 8;
   uint32_t scrHt = 64;
@@ -195,4 +200,3 @@ public:
   uint8_t spacing = 1;
 };
 #endif
-

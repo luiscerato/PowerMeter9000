@@ -1,0 +1,481 @@
+#include "grid_events.h"
+#include "event_store.h"
+#include "manager_api.h"
+#include "wifiUtils.h"
+#include <Arduino.h>
+#include <Preferences.h>
+#include <atomic>
+#include <cstring>
+#include <esp_system.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+
+static const uint8_t gridNoticeQueueSize = 16;
+static const uint32_t gridPublishRetryMs = 1000;
+static const uint32_t gridStartupGuardMs = 5000;
+static const uint32_t gridClockWaitMs = 5 * 60 * 1000;
+static const uint32_t persistedGridMagic = 0x47524431;
+static const char* gridStorageName = "gridEvents";
+static const char* gridStorageKeys[] = { "phaseR", "phaseS", "phaseT", "overall" };
+
+struct gridStateSnapshot {
+	char state[16];
+	uint64_t startedAtMs;
+	uint32_t startedMs;
+	bool localStartValid;
+};
+
+struct gridTracker {
+	gridStateSnapshot snapshot = {};
+	bool initialized = false;
+};
+
+struct gridNotice {
+	char eventId[48];
+	char type[24];
+	char state[16];
+	char previousState[16];
+	char resetReason[12];
+	uint32_t sequence;
+	uint64_t timestampMs;
+	uint64_t previousStateStartedAtMs;
+	uint64_t previousStateDurationMs;
+	uint32_t eventMs;
+	uint32_t previousStateStartedMs;
+	float value;
+	uint8_t phaseMask;
+	bool previousStartLocal;
+	bool hasPreviousDuration;
+	bool hasValue;
+	bool startup;
+};
+
+struct persistedGridState {
+	uint32_t magic;
+	uint8_t version;
+	uint8_t valid;
+	uint8_t reserved[2];
+	char state[16];
+	uint64_t startedAtMs;
+};
+
+static QueueHandle_t gridNoticeQueue = nullptr;
+static StaticQueue_t gridNoticeQueueControl;
+alignas(4) static uint8_t gridNoticeQueueStorage[gridNoticeQueueSize * sizeof(gridNotice)];
+static gridTracker trackers[4];
+static bool startupResolved = false;
+static uint32_t startupGuardDeadlineMs = 0;
+static bool startupGuardStarted = false;
+static uint32_t clockWaitDeadlineMs = 0;
+static esp_reset_reason_t startupResetReason = ESP_RST_UNKNOWN;
+static std::atomic<uint16_t> inFlightPacketId{0};
+static std::atomic<bool> publishAcknowledged{false};
+static std::atomic<bool> publishRetryRequested{false};
+
+// Copia text dentro de un campo fijo y garantiza su terminacion.
+// dest/destSize describen el destino; text es el texto de origen.
+static void copyText(char* dest, size_t destSize, const char* text)
+{
+	if (!destSize) return;
+	strncpy(dest, text ? text : "", destSize - 1);
+	dest[destSize - 1] = '\0';
+}
+
+// Convierte sampleMs monotonico a Unix ms, o devuelve cero sin reloj valido.
+// sampleMs es el instante local que se quiere convertir.
+static uint64_t unixTimestampAt(uint32_t sampleMs)
+{
+	const uint64_t now = managerNowMs();
+	if (!now) return 0;
+	const uint32_t elapsed = uint32_t(millis() - sampleMs);
+	return now > elapsed ? now - elapsed : 0;
+}
+
+// Devuelve true cuando deadlineMs ya vencio, incluyendo el wrap de millis.
+// deadlineMs es el limite monotonicamente calculado.
+static bool deadlineReached(uint32_t deadlineMs)
+{
+	return int32_t(millis() - deadlineMs) >= 0;
+}
+
+// Devuelve el nombre compacto de un motivo de reinicio electrico.
+// reason es el valor informado por ESP-IDF.
+static const char* resetReasonName(esp_reset_reason_t reason)
+{
+	return reason == ESP_RST_BROWNOUT ? "brownout" : "power_on";
+}
+
+// Indica si el reinicio merece snapshots iniciales de red.
+// reason es el motivo informado por ESP-IDF.
+static bool isElectricalStartup(esp_reset_reason_t reason)
+{
+	return reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT;
+}
+
+// Guarda el ultimo estado conocido del slot indicado.
+// slot identifica R, S, T o red general; snapshot contiene el estado.
+static void saveSnapshot(uint8_t slot, const gridStateSnapshot& snapshot)
+{
+	persistedGridState stored = {};
+	stored.magic = persistedGridMagic;
+	stored.version = 4;
+	stored.valid = 1;
+	stored.startedAtMs = snapshot.startedAtMs;
+	copyText(stored.state, sizeof(stored.state), snapshot.state);
+	Preferences prefs;
+	if (!prefs.begin(gridStorageName, false)) return;
+	if (prefs.putBytes(gridStorageKeys[slot], &stored, sizeof(stored)) != sizeof(stored))
+		debugE("No se pudo guardar estado grid %s", snapshot.state);
+	prefs.end();
+}
+
+// Restaura el ultimo estado conocido del slot indicado.
+// tracker recibe el estado; slot identifica R, S, T o red general.
+static bool loadSnapshot(gridTracker& tracker, uint8_t slot)
+{
+	Preferences prefs;
+	if (!prefs.begin(gridStorageName, true)) return false;
+	persistedGridState stored = {};
+	const bool validSize = prefs.getBytesLength(gridStorageKeys[slot]) == sizeof(stored);
+	if (validSize) prefs.getBytes(gridStorageKeys[slot], &stored, sizeof(stored));
+	prefs.end();
+	if (!validSize || stored.magic != persistedGridMagic || stored.version != 4 || !stored.valid)
+		return false;
+	stored.state[sizeof(stored.state) - 1] = '\0';
+	if (!stored.state[0]) return false;
+	tracker = gridTracker{};
+	tracker.initialized = true;
+	tracker.snapshot.startedAtMs = stored.startedAtMs;
+	copyText(tracker.snapshot.state, sizeof(tracker.snapshot.state), stored.state);
+	return true;
+}
+
+// Actualiza el estado RAM/NVS que sirve como referencia para la proxima transicion.
+// slot identifica el tracker; state/startedMs describen el nuevo estado.
+static void setCurrentState(uint8_t slot, const char* state, uint32_t startedMs)
+{
+	gridTracker& tracker = trackers[slot];
+	tracker = gridTracker{};
+	tracker.initialized = true;
+	tracker.snapshot.startedMs = startedMs;
+	tracker.snapshot.startedAtMs = unixTimestampAt(startedMs);
+	tracker.snapshot.localStartValid = true;
+	copyText(tracker.snapshot.state, sizeof(tracker.snapshot.state), state);
+	saveSnapshot(slot, tracker.snapshot);
+}
+
+// Completa en NVS una fecha de inicio cuando NTP aparece durante el mismo arranque.
+// slot identifica el tracker que se actualiza una sola vez.
+static void refreshStartTimestamp(uint8_t slot)
+{
+	gridTracker& tracker = trackers[slot];
+	if (!tracker.initialized || !tracker.snapshot.localStartValid ||
+		tracker.snapshot.startedAtMs || !managerClockSynchronized()) return;
+	tracker.snapshot.startedAtMs = unixTimestampAt(tracker.snapshot.startedMs);
+	saveSnapshot(slot, tracker.snapshot);
+}
+
+// Agrega notice sin bloquear; si se llena conserva los eventos mas recientes.
+// notice es la notificacion inmutable que se quiere encolar.
+static bool enqueueNotice(const gridNotice& notice)
+{
+	if (!gridNoticeQueue) return false;
+	if (xQueueSend(gridNoticeQueue, &notice, 0) == pdTRUE) return true;
+	gridNotice discarded = {};
+	if (xQueueReceive(gridNoticeQueue, &discarded, 0) != pdTRUE ||
+		xQueueSend(gridNoticeQueue, &notice, 0) != pdTRUE) {
+		debugW("Cola grid llena: no se pudo encolar %s", notice.eventId);
+		return false;
+	}
+	debugW("Cola grid llena: se descarto %s", discarded.eventId);
+	return true;
+}
+
+// Devuelve el tipo MQTT correspondiente al nuevo estado de una fase.
+// state es la condicion confirmada.
+static const char* phaseEventType(phaseCondition state)
+{
+	switch (state) {
+	case phaseCondition::normal: return "phase_normal";
+	case phaseCondition::undervoltage: return "undervoltage";
+	case phaseCondition::overvoltage: return "overvoltage";
+	case phaseCondition::phaseLoss: return "phase_loss";
+	default: return nullptr;
+	}
+}
+
+// Devuelve el tipo MQTT correspondiente al nuevo estado general.
+// state es la condicion general confirmada.
+static const char* gridEventType(gridCondition state)
+{
+	switch (state) {
+	case gridCondition::normal: return "grid_normal";
+	case gridCondition::abnormal: return "grid_abnormal";
+	case gridCondition::outage: return "grid_outage";
+	default: return nullptr;
+	}
+}
+
+// Crea una notificacion usando el estado actual del tracker como referencia.
+// Los parametros describen origen, destino, valor y si proviene del arranque.
+static bool queueTransition(uint8_t slot, uint8_t phaseMask, const char* type,
+	const char* state, bool hasValue, float value, uint32_t eventMs,
+	bool startup = false, const char* resetReason = nullptr)
+{
+	gridTracker& tracker = trackers[slot];
+	gridNotice notice = {};
+	copyText(notice.eventId, sizeof(notice.eventId), eventStoreNextEventId().c_str());
+	copyText(notice.type, sizeof(notice.type), type);
+	copyText(notice.state, sizeof(notice.state), state);
+	copyText(notice.previousState, sizeof(notice.previousState),
+		tracker.initialized ? tracker.snapshot.state : "unknown");
+	copyText(notice.resetReason, sizeof(notice.resetReason), resetReason);
+	notice.sequence = managerNextSequence();
+	notice.timestampMs = unixTimestampAt(eventMs);
+	notice.eventMs = eventMs;
+	notice.value = value;
+	notice.phaseMask = phaseMask;
+	notice.hasValue = hasValue;
+	notice.startup = startup;
+	if (tracker.initialized) {
+		notice.previousStateStartedAtMs = tracker.snapshot.startedAtMs;
+		notice.previousStateStartedMs = tracker.snapshot.startedMs;
+		notice.previousStartLocal = tracker.snapshot.localStartValid;
+		if (tracker.snapshot.localStartValid) {
+			notice.previousStateDurationMs = uint32_t(eventMs - tracker.snapshot.startedMs);
+			notice.hasPreviousDuration = true;
+		}
+		else if (notice.timestampMs && notice.previousStateStartedAtMs &&
+			notice.timestampMs >= notice.previousStateStartedAtMs) {
+			notice.previousStateDurationMs = notice.timestampMs - notice.previousStateStartedAtMs;
+			notice.hasPreviousDuration = true;
+		}
+	}
+	return enqueueNotice(notice);
+}
+
+// Registra una transicion de fase y avanza el tracker sin esperar MQTT.
+// slot identifica R/S/T; phase/value contienen el estado medido.
+static void updatePhase(uint8_t slot, const phaseState& phase, float value)
+{
+	gridTracker& tracker = trackers[slot];
+	const char* state = phaseStateName(phase.state);
+	if (!tracker.initialized) {
+		setCurrentState(slot, state, phase.changedAtMs);
+		return;
+	}
+	if (!strcmp(tracker.snapshot.state, state)) {
+		refreshStartTimestamp(slot);
+		return;
+	}
+	queueTransition(slot, 1 << slot, phaseEventType(phase.state), state, true,
+		value, phase.changedAtMs);
+	setCurrentState(slot, state, phase.changedAtMs);
+}
+
+// Devuelve el instante mas reciente en que cambio alguna fase.
+// phases contiene R/S/T y sampleMs se usa si no hay referencia valida.
+static uint32_t latestPhaseChangeMs(const phaseState* phases[3], uint32_t sampleMs)
+{
+	uint32_t changedMs = sampleMs;
+	uint32_t shortestAge = UINT32_MAX;
+	for (uint8_t i = 0; i < 3; i++) {
+		const uint32_t age = uint32_t(sampleMs - phases[i]->changedAtMs);
+		if (age < shortestAge) {
+			shortestAge = age;
+			changedMs = phases[i]->changedAtMs;
+		}
+	}
+	return changedMs;
+}
+
+// Registra una transicion general y avanza el tracker sin esperar MQTT.
+// overall es el estado derivado; phases/sampleMs permiten estimar su inicio.
+static void updateOverall(gridCondition overall, const phaseState* phases[3], uint32_t sampleMs)
+{
+	gridTracker& tracker = trackers[3];
+	const char* state = gridStateName(overall);
+	const uint32_t changedMs = latestPhaseChangeMs(phases, sampleMs);
+	if (!tracker.initialized) {
+		setCurrentState(3, state, changedMs);
+		return;
+	}
+	if (!strcmp(tracker.snapshot.state, state)) {
+		refreshStartTimestamp(3);
+		return;
+	}
+	queueTransition(3, 0x07, gridEventType(overall), state, false, 0, changedMs);
+	setCurrentState(3, state, changedMs);
+}
+
+// Genera snapshots iniciales por POWERON/BROWNOUT y establece la nueva linea base.
+// phases/overall contienen la medicion estable; values y sampleMs describen la captura.
+static void resolveStartup(const phaseState* phases[3], gridCondition overall,
+	const float values[3], uint32_t sampleMs)
+{
+	const bool publish = isElectricalStartup(startupResetReason);
+	const char* reason = publish ? resetReasonName(startupResetReason) : nullptr;
+	for (uint8_t i = 0; i < 3; i++) {
+		const char* state = phaseStateName(phases[i]->state);
+		if (publish) queueTransition(i, 1 << i, phaseEventType(phases[i]->state),
+			state, true, values[i], sampleMs, true, reason);
+		setCurrentState(i, state, sampleMs);
+	}
+	const char* overallState = gridStateName(overall);
+	if (publish) queueTransition(3, 0x07, gridEventType(overall), overallState,
+		false, 0, sampleMs, true, reason);
+	setCurrentState(3, overallState, sampleMs);
+	startupResolved = true;
+}
+
+// Completa timestamps diferidos cuando NTP se sincroniza.
+// notice es el evento pendiente que se prepara para serializar.
+static void resolveNoticeTime(gridNotice& notice)
+{
+	if (!managerClockSynchronized()) return;
+	if (!notice.timestampMs) notice.timestampMs = unixTimestampAt(notice.eventMs);
+	if (!notice.previousStateStartedAtMs && notice.previousStartLocal)
+		notice.previousStateStartedAtMs = unixTimestampAt(notice.previousStateStartedMs);
+	if (!notice.hasPreviousDuration && notice.timestampMs && notice.previousStateStartedAtMs &&
+		notice.timestampMs >= notice.previousStateStartedAtMs) {
+		notice.previousStateDurationMs = notice.timestampMs - notice.previousStateStartedAtMs;
+		notice.hasPreviousDuration = true;
+	}
+}
+
+// Escapa y agrega un texto JSON simple.
+// dest es el JSON parcial; value es el texto a agregar.
+static void appendJsonText(String& dest, const char* value)
+{
+	dest += '"';
+	for (const char* c = value; c && *c; c++) {
+		if (*c == '"' || *c == '\\') dest += '\\';
+		dest += *c;
+	}
+	dest += '"';
+}
+
+// Construye el JSON compacto de una transicion Grid.
+// dest recibe el JSON final; notice contiene la transicion pendiente.
+static void buildNoticeJson(String& dest, const gridNotice& notice)
+{
+	dest = "{\"schemaVersion\":1,\"sequence\":" + String(notice.sequence);
+	dest += ",\"eventId\":";
+	appendJsonText(dest, notice.eventId);
+	dest += ",\"deviceId\":";
+	appendJsonText(dest, managerGetDeviceId().c_str());
+	dest += ",\"category\":\"grid\",\"type\":";
+	appendJsonText(dest, notice.type);
+	dest += ",\"previousState\":";
+	appendJsonText(dest, notice.previousState);
+	dest += ",\"state\":";
+	appendJsonText(dest, notice.state);
+	if (notice.timestampMs) {
+		dest += ",\"timestamp\":";
+		managerAppendUint64(dest, notice.timestampMs);
+	}
+	else {
+		dest += ",\"ageMs\":";
+		managerAppendUint64(dest, uint32_t(millis() - notice.eventMs));
+	}
+	dest += ",\"previousStateStartedAt\":";
+	if (notice.previousStateStartedAtMs) managerAppendUint64(dest, notice.previousStateStartedAtMs);
+	else dest += "null";
+	dest += ",\"previousStateDurationMs\":";
+	if (notice.hasPreviousDuration) managerAppendUint64(dest, notice.previousStateDurationMs);
+	else dest += "null";
+	dest += ",\"phases\":[";
+	bool first = true;
+	const char* names[] = { "R", "S", "T" };
+	for (uint8_t i = 0; i < 3; i++) {
+		if (!(notice.phaseMask & (1 << i))) continue;
+		if (!first) dest += ',';
+		first = false;
+		appendJsonText(dest, names[i]);
+	}
+	dest += ']';
+	if (notice.hasValue) {
+		dest += ",\"value\":" + String(notice.value, 2);
+		dest += ",\"unit\":\"V\"";
+	}
+	if (notice.startup) {
+		dest += ",\"source\":\"startup\",\"resetReason\":";
+		appendJsonText(dest, notice.resetReason);
+	}
+	dest += '}';
+}
+
+void gridEventsInit()
+{
+	if (!gridNoticeQueue) gridNoticeQueue = xQueueCreateStatic(gridNoticeQueueSize,
+		sizeof(gridNotice), gridNoticeQueueStorage, &gridNoticeQueueControl);
+	if (!gridNoticeQueue) debugE("No se pudo crear la cola de eventos grid");
+	for (uint8_t i = 0; i < 4; i++) loadSnapshot(trackers[i], i);
+	startupResetReason = esp_reset_reason();
+	clockWaitDeadlineMs = millis() + gridClockWaitMs;
+}
+
+void gridEventsUpdate(const phaseState& r, const phaseState& s, const phaseState& t,
+	gridCondition overall, float vr, float vs, float vt, uint32_t sampleMs)
+{
+	const phaseState* phases[] = { &r, &s, &t };
+	if (r.state == phaseCondition::unknown || s.state == phaseCondition::unknown ||
+		t.state == phaseCondition::unknown || overall == gridCondition::unknown) return;
+	if (!startupResolved) {
+		if (!startupGuardStarted) {
+			startupGuardDeadlineMs = sampleMs + gridStartupGuardMs;
+			startupGuardStarted = true;
+			return;
+		}
+		if (!deadlineReached(startupGuardDeadlineMs)) return;
+		const float values[] = { vr, vs, vt };
+		resolveStartup(phases, overall, values, sampleMs);
+		return;
+	}
+	updatePhase(0, r, vr);
+	updatePhase(1, s, vs);
+	updatePhase(2, t, vt);
+	updateOverall(overall, phases, sampleMs);
+}
+
+void gridEventNotificationLoop()
+{
+	static gridNotice current = {};
+	static bool hasCurrent = false;
+	static bool inFlight = false;
+	static uint32_t lastAttemptMs = 0;
+
+	if (publishAcknowledged.exchange(false) && inFlight) {
+		hasCurrent = false;
+		inFlight = false;
+		inFlightPacketId = 0;
+	}
+	if (publishRetryRequested.exchange(false)) {
+		inFlight = false;
+		inFlightPacketId = 0;
+	}
+	if (!hasCurrent && gridNoticeQueue && xQueueReceive(gridNoticeQueue, &current, 0) == pdTRUE)
+		hasCurrent = true;
+	if (!hasCurrent || inFlight || !mqtt.connected() ||
+		(!managerClockSynchronized() && !deadlineReached(clockWaitDeadlineMs)) ||
+		uint32_t(millis() - lastAttemptMs) < gridPublishRetryMs) return;
+
+	lastAttemptMs = millis();
+	resolveNoticeTime(current);
+	String payload;
+	buildNoticeJson(payload, current);
+	const uint16_t packetId = managerPublishEventNotification(payload);
+	if (!packetId) return;
+	inFlightPacketId = packetId;
+	inFlight = true;
+}
+
+void gridEventNotificationAck(uint16_t packetId)
+{
+	if (packetId && packetId == inFlightPacketId.load()) publishAcknowledged = true;
+}
+
+void gridEventNotificationDisconnected()
+{
+	publishRetryRequested = true;
+}

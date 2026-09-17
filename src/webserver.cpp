@@ -7,6 +7,7 @@
 #include "meter.h"
 #include "manager_api.h"
 #include "event_store.h"
+#include <math.h>
 
 
 // Create AsyncWebServer object on port 80
@@ -31,6 +32,55 @@ static int64_t parseSignedOption(const String& value)
 static uint64_t parseUnsignedOption(const String& value)
 {
 	return strtoull(value.c_str(), nullptr, 0);
+}
+
+// Atiende lectura/guardado del formulario de red; request contiene los 11 campos completos al guardar.
+static void handleGridSettings(AsyncWebServerRequest* request) {
+	gridSettings config;
+	meterGetGridSettings(config);
+	if (request->method() == HTTP_POST) {
+		const char* keys[] = {"lowR", "highR", "lowS", "highS", "lowT", "highT",
+			"noVoltage", "hysteresis", "lossConfirmMs", "voltageConfirmMs", "recoveryConfirmMs"};
+		double values[11];
+		for (unsigned i = 0; i < 11; ++i) {
+			if (!request->hasParam(keys[i], true)) {
+				request->send(400, "text/plain", "Faltan ajustes de red"); return;
+			}
+			const String& text = request->getParam(keys[i], true)->value();
+			char* end;
+			values[i] = strtod(text.c_str(), &end);
+			if (end == text.c_str() || *end || !isfinite(values[i]) || values[i] < 0 ||
+				values[i] > 600000 || (i >= 8 && floor(values[i]) != values[i])) {
+				request->send(400, "text/plain", "Valor de red invalido"); return;
+			}
+		}
+		for (unsigned i = 0; i < 3; ++i) {
+			config.phases[i].lowVoltage = values[i * 2];
+			config.phases[i].highVoltage = values[i * 2 + 1];
+		}
+		config.noVoltage = values[6]; config.hysteresis = values[7];
+		config.lossConfirmMs = values[8]; config.voltageConfirmMs = values[9];
+		config.recoveryConfirmMs = values[10];
+		if (!validGridSettings(config)) {
+			request->send(400, "text/plain", "Limites o tiempos de red incompatibles"); return;
+		}
+		if (!meterSaveGridSettings(config)) {
+			request->send(500, "text/plain", "No se pudieron guardar los ajustes"); return;
+		}
+	}
+	char json[384];
+	snprintf(json, sizeof(json), "{\"schemaVersion\":1,\"lowR\":%.2f,\"highR\":%.2f,"
+		"\"lowS\":%.2f,\"highS\":%.2f,\"lowT\":%.2f,\"highT\":%.2f,"
+		"\"noVoltage\":%.2f,\"hysteresis\":%.2f,\"lossConfirmMs\":%u,"
+		"\"voltageConfirmMs\":%u,\"recoveryConfirmMs\":%u}",
+		config.phases[0].lowVoltage, config.phases[0].highVoltage,
+		config.phases[1].lowVoltage, config.phases[1].highVoltage,
+		config.phases[2].lowVoltage, config.phases[2].highVoltage,
+		config.noVoltage, config.hysteresis, config.lossConfirmMs,
+		config.voltageConfirmMs, config.recoveryConfirmMs);
+	auto* response = request->beginResponse(200, "application/json", json);
+	response->addHeader("Cache-Control", "no-store");
+	request->send(response);
 }
 
 // Obtiene el identificador requerido por las rutas de artefactos de eventos.
@@ -291,13 +341,6 @@ void Init_WebServer()
 		});
 
 	server.on("/meter", HTTP_GET, [](AsyncWebServerRequest* request) {
-		Serial.printf("params: %i\n", request->params());
-		for (int x = 0; x < request->params(); x++) {
-			Serial.printf(" p%i-> %i '%s'='%s'\n", x,
-				request->getParam(x)->isPost(),
-				request->getParam(x)->name().c_str(),
-				request->getParam(x)->value().c_str());
-		}
 		String Value = "";
 		if (request->params() > 0) {
 			const String& param = request->getParam(0)->name();
@@ -351,6 +394,7 @@ void Init_WebServer()
 		MeterLoadOptions();
 		request->send(200, "text/plain", "opciones recargadas");
 		});
+	server.on("/gridopts", HTTP_GET | HTTP_POST, handleGridSettings);
 
 
 	server.on("/opts", HTTP_GET, [](AsyncWebServerRequest* request) {

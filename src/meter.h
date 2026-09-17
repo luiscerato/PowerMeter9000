@@ -5,6 +5,7 @@
 #include "time.h"
 #include "wifiUtils.h"
 #include "event_trigger.h"
+#include "grid_state.h"
 
 #define fastDataSamplesCount 200
 
@@ -321,6 +322,7 @@ private:
 
 struct phaseValues
 {
+	phaseState gridState;
 	/* data */
 	char Name[8];		//Nombre de fase
 	float Vrms;			//Voltaje RMS
@@ -404,6 +406,7 @@ struct phaseValues
 
 struct meterValues
 {
+	gridCondition gridState = gridCondition::unknown;
 	phaseValues phaseR;
 	phaseValues phaseS;
 	phaseValues phaseT;
@@ -469,7 +472,9 @@ struct meterValues
 		return res;
 	}
 
-	void getJsonBasic(String& dest) {
+	// Mantener los serializadores separados evita acumular sus buffers en la pila de async_tcp.
+	// dest recibe el JSON de las mediciones actuales.
+	__attribute__((noinline)) void getJsonBasic(String& dest) {
 		const uint32_t strSize = 1280;
 		char* str = (char*)malloc(strSize);
 		if (str == nullptr) {
@@ -483,19 +488,22 @@ struct meterValues
 			"\"watt\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
 			"\"var\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
 			"\"va\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
-			"\"wattH\":%.3f,\"varH\":%.3f,\"vaH\":%.3f,\"freq\":%.2f}",
+			"\"wattH\":%.3f,\"varH\":%.3f,\"vaH\":%.3f,\"freq\":%.2f,"
+			"\"gridState\":{\"r\":\"%s\",\"s\":\"%s\",\"t\":\"%s\",\"overall\":\"%s\"}}",
 			phaseR.Vrms, phaseS.Vrms, phaseT.Vrms, neutral.Vrms, average.Vrms,
 			phaseR.VVrms, phaseS.VVrms, phaseT.VVrms, average.VVrms,
 			phaseR.Irms, phaseS.Irms, phaseT.Irms, neutral.Irms, average.Irms,
 			phaseR.Watt, phaseS.Watt, phaseT.Watt, average.Watt, power.Watt,
 			phaseR.VAR, phaseS.VAR, phaseT.VAR, average.VAR, power.VAR,
 			phaseR.VA, phaseS.VA, phaseT.VA, average.VA, power.VA,
-			energy.Watt_H, energy.VAR_H, energy.VA_H, average.Freq);
+			energy.Watt_H, energy.VAR_H, energy.VA_H, average.Freq,
+			phaseStateName(phaseR.gridState.state), phaseStateName(phaseS.gridState.state),
+			phaseStateName(phaseT.gridState.state), gridStateName(gridState));
 		dest = str;
 		free(str);
 	}
 
-	void getJsonFastMeasures(String& dest) {
+	__attribute__((noinline)) void getJsonFastMeasures(String& dest) {
 		char str[128];
 		snprintf(str, sizeof(str), "{\"fastV\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f},"
 			"\"fastI\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f}}",
@@ -504,7 +512,7 @@ struct meterValues
 		dest = str;
 	}
 
-	void getJsonEnergy(String& dest) {
+	__attribute__((noinline)) void getJsonEnergy(String& dest) {
 		char str[256];
 		snprintf(str, sizeof(str), "{\"wattH\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"tot\":%.3f},"
 			"\"varH\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"tot\":%.3f},"
@@ -515,7 +523,7 @@ struct meterValues
 		dest = str;
 	}
 
-	void getJsonAngles(String& dest) {
+	__attribute__((noinline)) void getJsonAngles(String& dest) {
 		char str[256];
 		snprintf(str, sizeof(str), "{\"voltage\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f},"
 			"\"vi\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f},"
@@ -526,7 +534,7 @@ struct meterValues
 		dest = str;
 	}
 
-	void getJsonTHD(String& dest) {
+	__attribute__((noinline)) void getJsonTHD(String& dest) {
 		char str[256];
 		snprintf(str, sizeof(str), "{\"voltageTHD\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f},"
 			"\"currentTHD\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f}}",
@@ -555,6 +563,10 @@ bool MeterWriteEnergyRegisters( bool reset = false);
 void MeterReadEnergyRegisters();
 
 void MeterLoadOptions();
+// Copia los ajustes actuales en config.
+void meterGetGridSettings(gridSettings& config);
+// Valida y persiste config; devuelve false ante un error.
+bool meterSaveGridSettings(const gridSettings& config);
 
 void MeterLoop();
 uint64_t MeterGetLastSampleTimestampMs();

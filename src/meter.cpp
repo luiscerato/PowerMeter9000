@@ -7,6 +7,7 @@
 #include "bl0942/bl0942.h"
 #include "manager_api.h"
 #include "event_store.h"
+#include "grid_events.h"
 #include <memory>
 #include <new>
 #include <atomic>
@@ -38,6 +39,46 @@ const uint8_t ACCUMULATION_TIME = 1;/* Accumulation time in seconds when EGY_TIM
 
 meterValues meterVals;		//Contiene los datos leidos por taskMeter, por lo que no se deben usar fuera de esa tarea
 meterValues Meter;			//Contiene datos que se pueden leer de manera segura por otro task
+static gridSettings gridConfig, requestedGridConfig;
+static bool gridConfigPending = false;
+static portMUX_TYPE gridConfigMutex = portMUX_INITIALIZER_UNLOCKED;
+
+// Copia en config los ajustes pedidos, sin exponer memoria compartida al servidor.
+void meterGetGridSettings(gridSettings& config) {
+	taskENTER_CRITICAL(&gridConfigMutex);
+	config = requestedGridConfig;
+	taskEXIT_CRITICAL(&gridConfigMutex);
+}
+
+// Guarda config validada en un unico registro NVS y solicita su aplicacion a MeterTask.
+bool meterSaveGridSettings(const gridSettings& config) {
+	if (!validGridSettings(config)) return false;
+	Preferences prefs;
+	if (!prefs.begin("grid", false)) return false;
+	const bool saved = prefs.putBytes("settingsV1", &config, sizeof(config)) == sizeof(config);
+	prefs.end();
+	if (!saved) return false;
+	taskENTER_CRITICAL(&gridConfigMutex);
+	requestedGridConfig = config;
+	gridConfigPending = true;
+	taskEXIT_CRITICAL(&gridConfigMutex);
+	return true;
+}
+
+// Restaura ajustes validos antes de iniciar MeterTask; sin parametros.
+static void meterLoadGridSettings() {
+	gridSettings config;
+	Preferences prefs;
+	if (prefs.begin("grid", true)) {
+		if (prefs.getBytesLength("settingsV1") == sizeof(config))
+			prefs.getBytes("settingsV1", &config, sizeof(config));
+		prefs.end();
+	}
+	if (!validGridSettings(config)) config = gridSettings{};
+	taskENTER_CRITICAL(&gridConfigMutex);
+	gridConfig = requestedGridConfig = config;
+	taskEXIT_CRITICAL(&gridConfigMutex);
+}
 struct TotalEnergyVals MeterEnergy;
 
 TaskHandle_t meterHandle = NULL;
@@ -272,10 +313,12 @@ void MeterInit()
 	webServerSetMeterEvents(scopeWSevents);		//Callback para eventos del websocket del scope
 	webServerSetAcEvents(acEventsWSevents);		//Callback para eventos del websocket de los eventos
 	eventStoreInit();
+	gridEventsInit();
 
 
 	MeterLoadOptions();				//Cargar configuración de los eventos del medidor
-	MeterReadEnergyRegisters();		//Leer los registros de energía 
+	MeterReadEnergyRegisters();		//Leer los registros de energía
+	meterLoadGridSettings();
 
 	xTaskCreatePinnedToCore(MeterTask, "meterTask", 8192, NULL, 10, &meterHandle, APP_CPU_NUM);
 
@@ -855,6 +898,7 @@ void MeterLoop()
 	}
 	else index = 0;
 	eventStoreLoop();
+	gridEventNotificationLoop();
 
 	if (millis() - energyUpdateTime >= 3600 * 8 * 1000) {	//Cada 8 horas actualizar los registros de energía
 		if (MeterWriteEnergyRegisters(false)) {
@@ -967,6 +1011,27 @@ void meterReadHalfRMS()
 	meterVals.phaseS.FastIrms = curr.CurrentRMS_B;
 	meterVals.phaseT.FastIrms = curr.CurrentRMS_C;
 	meterVals.neutral.FastIrms = curr.CurrentRMS_N;
+	const uint32_t sampleMs = millis();
+	taskENTER_CRITICAL(&gridConfigMutex);
+	const bool settingsChanged = gridConfigPending;
+	if (settingsChanged) {
+		gridConfig = requestedGridConfig;
+		gridConfigPending = false;
+	}
+	taskEXIT_CRITICAL(&gridConfigMutex);
+	if (settingsChanged) {
+		meterVals.phaseR.gridState = phaseState{};
+		meterVals.phaseS.gridState = phaseState{};
+		meterVals.phaseT.gridState = phaseState{};
+	}
+	updatePhaseState(meterVals.phaseR.gridState, volts.VoltageRMS_A, sampleMs, gridConfig.phases[0], gridConfig);
+	updatePhaseState(meterVals.phaseS.gridState, volts.VoltageRMS_B, sampleMs, gridConfig.phases[1], gridConfig);
+	updatePhaseState(meterVals.phaseT.gridState, volts.VoltageRMS_C, sampleMs, gridConfig.phases[2], gridConfig);
+	meterVals.gridState = deriveGridState(meterVals.phaseR.gridState.state,
+		meterVals.phaseS.gridState.state, meterVals.phaseT.gridState.state);
+	gridEventsUpdate(meterVals.phaseR.gridState, meterVals.phaseS.gridState,
+		meterVals.phaseT.gridState, meterVals.gridState, volts.VoltageRMS_A,
+		volts.VoltageRMS_B, volts.VoltageRMS_C, sampleMs);
 
 	meterVals.average.FastVrms = (meterVals.phaseR.FastVrms + meterVals.phaseS.FastVrms + meterVals.phaseT.FastVrms) / 3.0;
 	meterVals.average.FastIrms = (meterVals.phaseR.FastIrms + meterVals.phaseS.FastIrms + meterVals.phaseT.FastIrms) / 3.0;

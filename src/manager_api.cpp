@@ -6,13 +6,14 @@
 #include <SPIFFS.h>
 #include <WiFi.h>
 #include <sys/time.h>
+#include <atomic>
 
 static const char* managerSettingsName = "manager";
 static const char* managerFirmwareVersion = "0.9.0";
 static bool clockIsSynchronized = false;
 static const char* clockSource = "none";
 static uint64_t clockLastSyncMs = 0;
-static uint32_t telemetrySequence = 0;
+static std::atomic<uint32_t> telemetrySequence{0};
 
 struct managerTelemetrySample_t {
 	const char* relativeTopic;
@@ -201,23 +202,11 @@ uint32_t managerNextSequence()
 	return ++telemetrySequence;
 }
 
-void managerPublishEventNotification(const String& notificationPayload)
+uint16_t managerPublishEventNotification(const String& notificationPayload)
 {
-	if (!mqtt.connected()) return;
+	if (!mqtt.connected()) return 0;
 	String topic = String(managerMqttBaseTopic) + "/events/notification";
-	mqtt.publish(topic.c_str(), 1, false, notificationPayload.c_str());
-}
-
-uint32_t managerNextEventId()
-{
-	Preferences prefs;
-	uint32_t eventId = 1;
-	if (prefs.begin(managerSettingsName, false)) {
-		eventId = prefs.getUInt("eventId", 0) + 1;
-		prefs.putUInt("eventId", eventId);
-		prefs.end();
-	}
-	return eventId;
+	return mqtt.publish(topic.c_str(), 1, false, notificationPayload.c_str());
 }
 
 void managerGetDiscoveryJson(String& dest)

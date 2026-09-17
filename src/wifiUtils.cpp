@@ -5,6 +5,7 @@
 #include "AsyncMqttClient.h"
 #include "ST7920_SPI.h"
 #include "manager_api.h"
+#include "grid_events.h"
 
 Preferences Settings;
 const char* settingsName = "wifi-stuff";
@@ -142,6 +143,11 @@ void MQTTStart()
 
 		mqtt.onDisconnect([](AsyncMqttClientDisconnectReason reason) {
 			debugI("Desconectado de servidor MQTT!");
+			gridEventNotificationDisconnected();
+			});
+
+		mqtt.onPublish([](uint16_t packetId) {
+			gridEventNotificationAck(packetId);
 			});
 	}
 	else {
@@ -455,6 +461,8 @@ void TimeSetServer()
 	}
 	// Setear el servidor de tiempo
 	configTime(0, 0, server);
+	// configTime reemplaza TZ; restaurarla solo cambia localtime, no el reloj UTC ni los timestamps.
+	setTimeZone(&localTimeZone);
 
 	//Agregar un callback para cuando se sincronice la hora 
 	sntp_set_time_sync_notification_cb([](struct timeval* tv) {

@@ -16,7 +16,7 @@
 <script>
 const bootStyles = ["style.css","lib/bootstrap.min.css","lib/jquery.simplegauge.css"];
 const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","lib/char-lcd.js","board.js","scope.js","index.js","scope_ui.js","script.js"];
-const bootBuild = "20260619-3";
+const bootBuild = "20260916-settings-ui";
 
 // Agrega una linea al progreso de carga.
 // message: texto que se muestra en el textarea.
@@ -76,47 +76,33 @@ async function bootApp() {
 bootApp();
 </script>
         <div id="appRoot" style="display: none;">
-        <div id="navbar"><nav id="codeNavBar" class="navbar fixed-top navbar-expand-sm navbar-dark bg-dark pt-1 pb-1">
-    <div class="container-fluid nav_bar">
-        <a class="navbar-brand"><h3 class="navBarText">PowerMeter</h3></a>
+        <div id="navbar"><nav id="codeNavBar" class="navbar navbar-expand-md navbar-light appSidebar" aria-label="Navegación principal">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="#home">PowerMeter <small class="d-block text-muted">ADE9000</small></a>
         <form class="d-flex align-items-center d-none p-1" style="height: 30px" role="search" id="navServerIP">
             <input class="form-control form-control-sm me-2" type="text" placeholder="IP de la placa ESP32" value="192.168.1.0" id="inputBoardURL" aria-label="IP de la placa" required />
             <button class="btn btn-sm btn-outline-light p-1" type="button" id="btnReloadIP">↻</button>
         </form>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNavAltMarkup" aria-controls="navbarNavAltMarkup" aria-expanded="false" aria-label="Toggle navigation">
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNavAltMarkup" aria-controls="navbarNavAltMarkup" aria-expanded="false" aria-label="Abrir navegación">
             <span class="navbar-toggler-icon"></span>
         </button>
-        <div class="collapse navbar-collapse justify-content-end" id="navbarNavAltMarkup">
-            <div class="navbar-nav">
-                <a class="nav-link app-page-link" href="#meterPage" id="navindex" data-page="meterPage"><h5>Inicio</h5></a>
-                <a class="nav-link app-page-link" href="#scopePage" id="navscope" data-page="scopePage"><h5>Osciloscopio</h5></a>
+        <div class="collapse navbar-collapse" id="navbarNavAltMarkup">
+            <div class="navbar-nav w-100">
+                <a class="nav-link app-page-link" href="#home" id="navindex" data-page="home">Resumen</a>
+                <a class="nav-link app-page-link" href="#allMeasures" id="allMeasures-tab" data-page="allMeasures">Mediciones</a>
+                <a class="nav-link app-page-link" href="#events" id="events-tab" data-page="events">Eventos</a>
+                <a class="nav-link app-page-link" href="#scopePage" id="navscope" data-page="scopePage">Osciloscopio</a>
+                <a class="nav-link app-page-link" href="#settings" id="settings-tab" data-page="settings">Configuración</a>
             </div>
         </div>
     </div>
 </nav></div>
 
-        <div id="meterPage" class="appPage nav_sep container-xl">
-            <div class="row text-center mt-4">
-                <h2>Power Meter ADE9000 - Mediciones en tiempo real</h2>
-            </div>
-
-            <ul class="nav nav-tabs" id="myTab" role="tablist">
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="home-tab" data-bs-toggle="tab" data-bs-target="#home" type="button" role="tab" aria-controls="home" aria-selected="true">Resumen</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="events-tab" data-bs-toggle="tab" data-bs-target="#events" type="button" role="tab" aria-controls="profile" aria-selected="false">Eventos</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="allMeasures-tab" data-bs-toggle="tab" data-bs-target="#allMeasures" type="button" role="tab" aria-controls="messages" aria-selected="false">Todas las mediciones</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings" type="button" role="tab" aria-controls="settings" aria-selected="false">Opciones</button>
-                </li>
-            </ul>
-
-            <div class="tab-content">
-                <div class="tab-pane active" id="home" role="tabpanel" aria-labelledby="home-tab">
+        <main id="mainContent">
+            <header class="pageHeading"><h1 id="pageTitle">Resumen</h1><span class="text-muted small">Power Meter ADE9000</span></header>
+        <div id="meterPage" class="appPage container-fluid">
+            <div class="tab-content" id="mainViews">
+                <div class="tab-pane active" id="home" role="region" aria-labelledby="navindex">
                     <div class="row">
                         <div class="col mt-2 mb-2">
                             <div class="d-flex flex-wrap justify-content-center">
@@ -140,6 +126,12 @@ bootApp();
                         </div>
                     </div>
 
+                    <div class="d-flex flex-wrap gap-3 px-2 py-2" aria-live="polite">
+                        <span>Red: <span id="gridState_overall" class="text-muted">Sin datos</span></span>
+                        <span>Fase R: <span id="gridState_r" class="text-muted">Sin datos</span></span>
+                        <span>Fase S: <span id="gridState_s" class="text-muted">Sin datos</span></span>
+                        <span>Fase T: <span id="gridState_t" class="text-muted">Sin datos</span></span>
+                    </div>
                     <div class="row p-2">
                         <div class="col-md-6 col-sm-12">
                             <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
@@ -355,7 +347,7 @@ bootApp();
                         </div>
                     </div>
                 </div>
-                <div class="tab-pane" id="events" role="tabpanel" aria-labelledby="events-tab">
+                <div class="tab-pane" id="events" role="region" aria-labelledby="events-tab">
                     <div class="row">
                         <div class="col-sm-12 col-md-3 p-1 pt-2 pb-2">
                             <div class="border rounded p-2 mb-2">
@@ -379,17 +371,17 @@ bootApp();
                         </div> -->
                     </div>
                 </div>
-                <div class="tab-pane" id="allMeasures" role="tabpanel" aria-labelledby="allMeasures-tab">
+                <div class="tab-pane" id="allMeasures" role="region" aria-labelledby="allMeasures-tab">
                     <div class="row p-2">
                         <div class="col divScrollX">
                             <div id="powerTable" class="powerTable"></div>
                         </div>
                     </div>
                 </div>
-                <div class="tab-pane" id="settings" role="tabpanel" aria-labelledby="settings-tab"></div>
+                <div class="tab-pane" id="settings" role="region" aria-labelledby="settings-tab"></div>
             </div>
         </div>
-        <div id="scopePage" class="appPage container-fluid nav_sep d-none">
+        <div id="scopePage" class="appPage container-fluid d-none" role="region" aria-labelledby="navscope">
             <div class="row p-2" id="scopeUI">
                 <div class="col-sm-12 col-md-9 p-1 pt-2 pb-2">
                     <div class="card p-1">
@@ -568,6 +560,7 @@ bootApp();
                 </div>
             </div>
         </div>
+        </main>
         <div id="divFooter">
     <div style="margin-bottom: 40px; height: 2px"></div>
     <nav class="navbar fixed-bottom navbar-dark bg-dark mt-0 mb-0 pt-0 pb-0">

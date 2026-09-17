@@ -76,17 +76,6 @@ function initMeterUI() {
         console.log(width, height, size);
     });
 
-    // Escuchar el evento en los botones de los tabs
-    $('button[data-bs-toggle="tab"]').on("shown.bs.tab", function (e) {
-        // Obtener el ID del tab panel objetivo (data-bs-target)
-        const tabTarget = $(e.target).attr("data-bs-target");
-
-        // Verificar si es el tab "Events"
-        if (tabTarget !== "#events") return;
-
-        loadRamEventsList();
-        meterLoadEventsList();
-    });
 }
 
 // Mantiene compatibilidad si el navegador conserva un script viejo.
@@ -177,15 +166,15 @@ const calibrationGroups = [
 
 const meterOptionGroups = [
     {
-        title: "Eventos de voltaje",
+        title: "Perturbaciones de voltaje (Dip / Swell)",
         namespace: "meter",
         fields: [
-            {key: "dipEnabled", label: "Detectar baja tensión", type: "bool"},
-            {key: "dipVoltage", label: "Nivel baja tensión", type: "float", unit: "V"},
-            {key: "dipCicles", label: "Ciclos baja tensión", type: "int"},
-            {key: "swellEnabled", label: "Detectar sobretensión", type: "bool"},
-            {key: "swellVoltage", label: "Nivel sobretensión", type: "float", unit: "V"},
-            {key: "swellCicles", label: "Ciclos sobretensión", type: "int"},
+            {key: "dipEnabled", label: "Detectar Dip", type: "bool"},
+            {key: "dipVoltage", label: "Umbral Dip", type: "float", unit: "V"},
+            {key: "dipCicles", label: "Confirmación Dip (DIP_CYC)", type: "int"},
+            {key: "swellEnabled", label: "Detectar Swell", type: "bool"},
+            {key: "swellVoltage", label: "Umbral Swell", type: "float", unit: "V"},
+            {key: "swellCicles", label: "Confirmación Swell (SWELL_CYC)", type: "int"},
         ],
     },
     {
@@ -197,7 +186,7 @@ const meterOptionGroups = [
         ],
     },
     {
-        title: "Captura de eventos",
+        title: "Ventana de captura",
         namespace: "meter",
         fields: [
             {key: "eventPrevSamples", label: "Muestras previas", type: "int"},
@@ -210,47 +199,135 @@ const meterOptionGroups = [
 // Inicializa la pestaña de opciones.
 function initSettingsUI() {
     $("#settings").html(createSettingsHtml());
-    $("#btnLoadSettings").click(loadSettings);
-    $("#btnLoadCalibration").click(loadSettings);
+    $("#btnLoadSettings").click(() => loadSettings("capture", true));
+    $("#btnLoadCalibration").click(() => loadSettings("calibration", true));
     $("#btnSaveMeterOptions").click(saveMeterOptions);
     $("#btnSaveCalibration").click(saveCalibrationOptions);
     $("#btnRestoreCalibration").click(restoreDefaultCalibration);
-    loadSettings();
+    $("#gridSettingsForm").on("submit", saveGridSettings);
+    $("#btnLoadGridSettings").on("click", () => loadSettings("grid", true));
+    $("#btnCopyGridLimits").on("click", () => {
+        ["S", "T"].forEach((phase) => ["low", "high"].forEach((limit) => {
+            $("#grid_" + limit + phase).val($("#grid_" + limit + "R").val());
+        }));
+    });
+    $("#settingsTabs button").on("shown.bs.tab", () => loadSettings());
 }
 
 // Crea el HTML base de las opciones.
 function createSettingsHtml() {
-    let html = '<div class="row p-2 g-2">';
-    html += '<div class="col-12"><span class="text-muted" id="settingsStatus"></span></div>';
-    html += '<div class="col-12 col-xl-4">' + createMeterSettingsHtml() + "</div>";
-    html += '<div class="col-12 col-xl-8">' + createCalibrationSettingsHtml() + "</div>";
-    html += "</div>";
+    let html = '<div class="p-2"><ul class="nav nav-tabs" id="settingsTabs" role="tablist">';
+    const sections = [["grid", "Estados de red"], ["capture", "Captura de eventos"], ["calibration", "Calibración"]];
+    sections.forEach(([key, label], i) => {
+        html += '<li class="nav-item" role="presentation"><button class="nav-link' + (i ? '' : ' active') + '" id="settingsTab_' + key + '" data-section="' + key + '" data-bs-toggle="tab" data-bs-target="#settings_' + key + '" type="button" role="tab" aria-controls="settings_' + key + '" aria-selected="' + !i + '">' + label + '</button></li>';
+    });
+    html += '</ul><div class="tab-content">';
+    const contents = [createGridSettingsHtml(), createMeterSettingsHtml(), createCalibrationSettingsHtml()];
+    sections.forEach(([key], i) => {
+        html += '<section class="tab-pane settingsPane' + (i ? '' : ' active') + '" id="settings_' + key + '" role="tabpanel" aria-labelledby="settingsTab_' + key + '">';
+        html += contents[i] + '</section>';
+    });
+    html += '</div></div>';
     return html;
+}
+
+// Crea el formulario compacto de estados de red; sin parametros.
+function createGridSettingsHtml() {
+    const actions = '<button id="btnLoadGridSettings" type="button" class="btn btn-sm btn-outline-secondary">Recargar</button>' +
+        '<button type="submit" class="btn btn-sm btn-success">Guardar</button>';
+    let html = '<form id="gridSettingsForm" class="settingsSection">';
+    html += createSettingsHeaderHtml("Estados de red", "Límites confirmados para las fases y los indicadores LED.", actions);
+    html += '<div id="gridSettingsStatus" class="settingsStatusLine small text-muted" role="status"></div>';
+    html += '<fieldset id="gridSettingsFields" disabled><div class="settingsGroupGrid settingsGroupGridTwo">';
+    html += '<div class="settingsGroup"><h3>Límites por fase</h3><div class="table-responsive"><table class="table table-sm align-middle settingsTable"><thead><tr><th>Fase</th><th>Bajo voltaje (V)</th><th>Alto voltaje (V)</th></tr></thead><tbody>';
+    ["R", "S", "T"].forEach((phase) => {
+        html += '<tr><th>' + phase + '</th>';
+        ["low", "high"].forEach((limit) => {
+            html += '<td><input class="form-control form-control-sm" type="number" required min="1" max="500" step="0.01" name="' + limit + phase + '" id="grid_' + limit + phase + '" aria-label="' + (limit === "low" ? "Bajo" : "Alto") + ' voltaje fase ' + phase + '"></td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table></div><button id="btnCopyGridLimits" type="button" class="btn btn-sm btn-outline-secondary">Copiar R a S/T</button></div>';
+    html += '<div class="settingsGroup"><h3>Confirmación</h3>';
+    const fields = [
+        ["noVoltage", "Sin tensión (V)", 1, 100, "0.01"],
+        ["hysteresis", "Histéresis (V)", 0, 50, "0.01"],
+        ["lossConfirmMs", "Confirmación sin tensión (ms)", 20, 60000, "1"],
+        ["voltageConfirmMs", "Confirmación bajo/alto voltaje (ms)", 20, 600000, "1"],
+        ["recoveryConfirmMs", "Confirmación normalidad (ms)", 20, 60000, "1"],
+    ];
+    fields.forEach(([key, label, min, max, step]) => {
+        html += '<div class="settingsField"><label for="grid_' + key + '">' + label + '</label><input class="form-control form-control-sm" required type="number" id="grid_' + key + '" name="' + key + '" min="' + min + '" max="' + max + '" step="' + step + '"></div>';
+    });
+    html += '</div></div></fieldset></form>';
+    return html;
+}
+
+// Crea el encabezado comun de una seccion; title y description son textos, actions contiene sus botones.
+function createSettingsHeaderHtml(title, description, actions) {
+    return '<header class="settingsSectionHeader"><div><h2>' + title + '</h2><p>' + description +
+        '</p></div><div class="settingsActions">' + actions + '</div></header>';
+}
+
+// Completa el formulario con values recibidos del medidor.
+function fillGridSettings(values) {
+    $("#gridSettingsForm input[name]").each(function () { $(this).val(values[this.name]); });
+}
+
+// Lee ajustes una sola vez por solicitud, sin consultas periodicas; sin parametros.
+function loadGridSettings() {
+    $("#gridSettingsFields").prop("disabled", true);
+    $("#gridSettingsStatus").text("Cargando...");
+    return $.ajax({url: board.IP + "/gridopts", cache: false, timeout: Math.max(board.timeout, 3000)})
+        .done((values) => {
+            fillGridSettings(values);
+            $("#gridSettingsFields").prop("disabled", false);
+            $("#gridSettingsStatus").text("Ajustes cargados.");
+        })
+        .fail(() => $("#gridSettingsStatus").text("No se pudieron cargar los ajustes de red."));
+}
+
+// Valida y guarda el formulario; event es el envio del formulario web.
+function saveGridSettings(event) {
+    event.preventDefault();
+    const form = document.getElementById("gridSettingsForm");
+    if (!form.reportValidity()) return;
+    const values = Object.fromEntries(new FormData(form));
+    const absence = Number(values.noVoltage), hysteresis = Number(values.hysteresis);
+    if (["R", "S", "T"].some((phase) => Number(values["low" + phase]) <= absence + hysteresis ||
+        Number(values["high" + phase]) <= Number(values["low" + phase]) + 2 * hysteresis)) {
+        $("#gridSettingsStatus").text("Los límites deben dejar espacio para la histéresis: sin tensión < bajo < alto.");
+        return;
+    }
+    $("#gridSettingsFields, #btnLoadGridSettings").prop("disabled", true);
+    $("#gridSettingsStatus").text("Guardando...");
+    $.ajax({type: "POST", url: board.IP + "/gridopts", data: values, timeout: Math.max(board.timeout, 5000)})
+        .done((saved) => {
+            fillGridSettings(saved);
+            $("#gridSettingsStatus").text("Guardado. Los estados se confirman nuevamente con estos ajustes.");
+        })
+        .fail((xhr) => $("#gridSettingsStatus").text(xhr.responseText || "No se pudo confirmar el guardado. Recargue los ajustes."))
+        .always(() => $("#gridSettingsFields, #btnLoadGridSettings").prop("disabled", false));
 }
 
 // Crea el bloque de opciones del medidor.
 function createMeterSettingsHtml() {
-    let html = '<div class="card mb-2">';
-    html += '<div class="card-header p-2 d-flex justify-content-between align-items-center gap-2 flex-wrap">';
-    html += '<span>Opciones de medición</span><div class="d-flex gap-2">';
-    html += '<button class="btn btn-sm btn-primary" id="btnLoadSettings" type="button">Cargar</button>';
-    html += '<button class="btn btn-sm btn-success" id="btnSaveMeterOptions" type="button">Guardar</button>';
-    html += "</div></div>";
-    html += '<div class="card-body p-2">' + createOptionGroupsHtml(meterOptionGroups, "meter") + "</div>";
-    html += "</div>";
+    const actions = '<button class="btn btn-sm btn-outline-secondary" id="btnLoadSettings" type="button">Recargar</button>' +
+        '<button class="btn btn-sm btn-success" id="btnSaveMeterOptions" type="button" disabled>Guardar</button>';
+    let html = '<div class="settingsSection">' + createSettingsHeaderHtml("Captura de eventos", "Umbrales Dip/Swell, sobrecorriente y tamaño de las capturas.", actions);
+    html += '<div class="settingsStatus settingsStatusLine small text-muted" role="status"></div>';
+    html += '<fieldset id="captureFields" disabled><div class="settingsGroupGrid">' + createOptionGroupsHtml(meterOptionGroups, "meter") + "</div></fieldset></div>";
     return html;
 }
 
 // Crea el bloque compacto de calibración.
 function createCalibrationSettingsHtml() {
-    let html = '<div class="card mb-2">';
-    html += '<div class="card-header p-2 d-flex justify-content-between align-items-center gap-2 flex-wrap">';
-    html += '<span>Calibración</span><div class="d-flex gap-2">';
-    html += '<button class="btn btn-sm btn-primary" id="btnLoadCalibration" type="button">Cargar</button>';
-    html += '<button class="btn btn-sm btn-success" id="btnSaveCalibration" type="button">Guardar</button>';
-    html += '<button class="btn btn-sm btn-warning" id="btnRestoreCalibration" type="button">Por defecto</button>';
-    html += "</div></div>";
-    html += '<div class="card-body p-2"><div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-0">';
+    const actions = '<button class="btn btn-sm btn-outline-secondary" id="btnLoadCalibration" type="button">Recargar</button>' +
+        '<button class="btn btn-sm btn-success" id="btnSaveCalibration" type="button" disabled>Guardar</button>' +
+        '<button class="btn btn-sm btn-warning" id="btnRestoreCalibration" type="button">Por defecto</button>';
+    let html = '<div class="settingsSection">' + createSettingsHeaderHtml("Calibración", "Registros ADE9000 almacenados en hexadecimal.", actions);
+    html += '<div class="settingsStatus settingsStatusLine small text-muted" role="status"></div>';
+    html += '<fieldset id="calibrationFields" disabled><div class="table-responsive settingsGroup"><table class="table table-sm table-bordered align-middle mb-0 settingsTable calibrationTable">';
     html += "<thead><tr><th>Registro</th><th>Fase R</th><th>Fase S</th><th>Fase T</th><th>Neutro</th></tr></thead><tbody>";
     getCalibrationRows().forEach((row) => {
         html += '<tr><td class="small">' + row.name + "</td>";
@@ -259,7 +336,7 @@ function createCalibrationSettingsHtml() {
         });
         html += "</tr>";
     });
-    html += "</tbody></table></div></div></div>";
+    html += "</tbody></table></div></fieldset></div>";
     return html;
 }
 
@@ -293,11 +370,11 @@ function createCalibrationCellHtml(key) {
 function createOptionGroupsHtml(groups, prefix) {
     let html = "";
     groups.forEach((group) => {
-        html += '<div class="card mb-2"><div class="card-header p-2">' + group.title + '</div><div class="card-body p-2">';
+        html += '<fieldset class="settingsGroup optionGroup"><legend>' + group.title + '</legend><div class="settingsFieldsGrid">';
         group.fields.forEach((field) => {
             html += createOptionInputHtml(field, prefix);
         });
-        html += "</div></div>";
+        html += "</div></fieldset>";
     });
     return html;
 }
@@ -307,10 +384,10 @@ function createOptionGroupsHtml(groups, prefix) {
 function createOptionInputHtml(field, prefix) {
     const id = getOptionInputId(prefix, field.key);
     if (field.type == "bool") {
-        return '<div class="form-check form-switch mb-2"><input class="form-check-input optionInput" type="checkbox" id="' + id + '" data-key="' + field.key + '" data-type="' + field.type + '"><label class="form-check-label" for="' + id + '">' + field.label + "</label></div>";
+        return '<div class="form-check form-switch settingsSwitch"><input class="form-check-input optionInput" type="checkbox" id="' + id + '" data-key="' + field.key + '" data-type="' + field.type + '"><label class="form-check-label" for="' + id + '">' + field.label + "</label></div>";
     }
     let unit = field.unit ? '<span class="input-group-text">' + field.unit + "</span>" : "";
-    return '<label class="form-label mb-1" for="' + id + '">' + field.label + '</label><div class="input-group input-group-sm mb-2"><input class="form-control optionInput" type="text" id="' + id + '" data-key="' + field.key + '" data-type="' + field.type + '">' + unit + "</div>";
+    return '<div class="settingsField settingsFieldStack"><label for="' + id + '">' + field.label + '</label><div class="input-group input-group-sm"><input class="form-control optionInput" type="text" id="' + id + '" data-key="' + field.key + '" data-type="' + field.type + '">' + unit + "</div></div>";
 }
 
 // Devuelve el id de un input de opción.
@@ -319,16 +396,39 @@ function getOptionInputId(prefix, key) {
     return "opt_" + prefix + "_" + key;
 }
 
-// Carga todas las opciones visibles.
-function loadSettings() {
-    setSettingsStatus("Cargando opciones...");
-    $.when(readOptions("meter", getMeterOptionKeys()), readOptions("ADE9000", getCalibrationKeys()))
-        .done((meterResp, calResp) => {
-            fillMeterOptions(meterResp[0]);
-            fillCalibrationOptions(calResp[0]);
-            setSettingsStatus("Opciones cargadas.");
-        })
-        .fail(() => setSettingsStatus("No se pudieron cargar las opciones.", true));
+let settingsLoadQueue = Promise.resolve();
+
+// Carga section solo al abrirla; force permite recargar explicitamente. Serializa consultas de ajustes.
+function loadSettings(section = $("#settingsTabs .active").data("section"), force = false) {
+    if (!["grid", "capture", "calibration"].includes(section)) return;
+    const panel = $("#settings_" + section);
+    if (panel.data("loading") || (!force && panel.data("loaded"))) return settingsLoadQueue;
+    panel.data("loading", true);
+    settingsLoadQueue = settingsLoadQueue.then(async () => {
+        try {
+            if (section === "grid") await loadGridSettings();
+            else {
+                $("#" + section + "Fields").prop("disabled", true);
+                $(section === "capture" ? "#btnSaveMeterOptions" : "#btnSaveCalibration").prop("disabled", true);
+                setSettingsStatus("Cargando opciones...", false, section);
+                const values = await readOptions(section === "capture" ? "meter" : "ADE9000",
+                    section === "capture" ? getMeterOptionKeys() : getCalibrationKeys());
+                if (values.error) throw new Error(values.error);
+                if (section === "capture") fillMeterOptions(values);
+                else fillCalibrationOptions(values);
+                $("#" + section + "Fields").prop("disabled", false);
+                $(section === "capture" ? "#btnSaveMeterOptions" : "#btnSaveCalibration").prop("disabled", false);
+                setSettingsStatus("Opciones cargadas.", false, section);
+            }
+            panel.data("loaded", true);
+        } catch (error) {
+            panel.data("loaded", false);
+            if (section !== "grid") setSettingsStatus("No se pudieron cargar las opciones.", true, section);
+        } finally {
+            panel.data("loading", false);
+        }
+    });
+    return settingsLoadQueue;
 }
 
 // Lee opciones de un namespace.
@@ -337,7 +437,7 @@ function readOptions(namespace, keys) {
     let params = new URLSearchParams();
     params.append("ns", namespace);
     keys.forEach((key) => params.append(key, ""));
-    return $.ajax({type: "GET", url: board.IP + "/opts?" + params.toString(), timeout: board.timeout});
+    return $.ajax({type: "GET", url: board.IP + "/opts?" + params.toString(), cache: false, timeout: Math.max(board.timeout, 3000)});
 }
 
 // Escribe opciones en un namespace.
@@ -346,7 +446,7 @@ function writeOptions(namespace, values) {
     let params = new URLSearchParams();
     params.append("ns", namespace);
     Object.keys(values).forEach((key) => params.append(key, values[key]));
-    return $.ajax({type: "GET", url: board.IP + "/opts?" + params.toString(), timeout: board.timeout});
+    return $.ajax({type: "GET", url: board.IP + "/opts?" + params.toString(), cache: false, timeout: Math.max(board.timeout, 3000)});
 }
 
 // Devuelve las claves de opciones del medidor.
@@ -381,35 +481,38 @@ function fillCalibrationOptions(values) {
 
 // Guarda las opciones del medidor y las aplica.
 function saveMeterOptions() {
-    setSettingsStatus("Guardando opciones del medidor...");
+    setSettingsStatus("Guardando opciones de captura...", false, "capture");
+    $("#btnSaveMeterOptions, #btnLoadSettings, #captureFields").prop("disabled", true);
     writeOptions("meter", collectMeterOptionValues())
-        .done(() => $.ajax({type: "GET", url: board.IP + "/reloadopts", timeout: board.timeout}))
+        .then(() => $.ajax({type: "GET", url: board.IP + "/reloadopts", timeout: Math.max(board.timeout, 3000)}))
         .done(() => {
-            setSettingsStatus("Opciones del medidor guardadas.");
-            loadSettings();
+            setSettingsStatus("Opciones de captura guardadas y aplicadas.", false, "capture");
         })
-        .fail(() => setSettingsStatus("No se pudieron guardar las opciones del medidor.", true));
+        .fail(() => setSettingsStatus("No se pudo confirmar el guardado o la aplicación. Recargue las opciones.", true, "capture"))
+        .always(() => $("#btnSaveMeterOptions, #btnLoadSettings, #captureFields").prop("disabled", false));
 }
 
 // Guarda los valores de calibración.
 function saveCalibrationOptions() {
     let values = collectCalibrationValues();
     if (values == null) return;
-    setSettingsStatus("Guardando calibración...");
+    setSettingsStatus("Guardando calibración...", false, "calibration");
+    $("#btnSaveCalibration, #btnLoadCalibration, #btnRestoreCalibration, #calibrationFields").prop("disabled", true);
     writeOptions("ADE9000", values)
-        .done(() => setSettingsStatus("Calibración guardada. Reinicie para aplicarla."))
-        .fail(() => setSettingsStatus("No se pudo guardar la calibración.", true));
+        .done(() => setSettingsStatus("Calibración guardada. Reinicie para aplicarla.", false, "calibration"))
+        .fail(() => setSettingsStatus("No se pudo guardar la calibración.", true, "calibration"))
+        .always(() => $("#btnSaveCalibration, #btnLoadCalibration, #btnRestoreCalibration, #calibrationFields").prop("disabled", false));
 }
 
 // Restaura la calibración por defecto.
 function restoreDefaultCalibration() {
-    setSettingsStatus("Restaurando calibración por defecto...");
+    if (!confirm("¿Restaurar la calibración por defecto? Se reemplazarán los valores guardados.")) return;
+    setSettingsStatus("Restaurando calibración por defecto...", false, "calibration");
     $.ajax({type: "GET", url: board.IP + "/restorecal", timeout: board.timeout})
         .done(() => {
-            setSettingsStatus("Calibración por defecto cargada. Reinicie para aplicarla.");
-            loadSettings();
+            loadSettings("calibration", true).then(() => setSettingsStatus("Calibración por defecto restaurada. Reinicie para aplicarla.", false, "calibration"));
         })
-        .fail(() => setSettingsStatus("No se pudo restaurar la calibración.", true));
+        .fail(() => setSettingsStatus("No se pudo restaurar la calibración.", true, "calibration"));
 }
 
 // Recolecta los valores de opciones del medidor.
@@ -454,8 +557,8 @@ function toHex32(value) {
 
 // Muestra el estado de la pestaña de opciones.
 // message: texto a mostrar. isError: indica si debe mostrarse como error.
-function setSettingsStatus(message, isError = false) {
-    $("#settingsStatus").text(message).toggleClass("text-danger", isError).toggleClass("text-muted", !isError);
+function setSettingsStatus(message, isError = false, section = $("#settingsTabs .active").data("section")) {
+    $("#settings_" + section + " .settingsStatus").text(message).toggleClass("text-danger", isError).toggleClass("text-muted", !isError);
 }
 
 // Inicializa el grafico de eventos cuando sus librerias estan disponibles.
@@ -712,7 +815,20 @@ function meterParseEventFile(data) {
     return resp;
 }
 
+// Muestra estados confirmados; states ausente indica que no hay informacion disponible.
+function showGridStates(states = {}) {
+    const labels = {normal: "Normal", undervoltage: "Bajo voltaje", overvoltage: "Alto voltaje",
+        phase_loss: "Sin tensión", abnormal: "Fuera de rango", outage: "Corte total"};
+    ["r", "s", "t", "overall"].forEach((key) => {
+        const state = states[key];
+        const color = state === "normal" ? "text-success" :
+            state === "phase_loss" || state === "outage" ? "text-danger" : labels[state] ? "text-warning" : "text-muted";
+        $("#gridState_" + key).attr("class", "fw-bold " + color).text(labels[state] || "Sin datos");
+    });
+}
+
 function meterOk(resp) {
+    showGridStates(resp.gridState);
     if (meterOk.fail) $(".meter").removeClass("notLoading");
     meterOk.fail = false;
 
@@ -769,6 +885,7 @@ function meterOk(resp) {
 }
 
 function meterFail(response) {
+    showGridStates();
     $(".meter").addClass("notLoading");
     meterOk.fail = true;
 }
