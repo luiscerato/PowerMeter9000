@@ -4,7 +4,8 @@
 
 enum class NandBenchmarkMode : uint8_t {
 	quick,
-	full
+	full,
+	verify
 };
 
 // Inicia una prueba destructiva en segundo plano.

@@ -62,6 +62,17 @@ static const char* phaseName(BenchmarkPhase phase)
 	}
 }
 
+// Devuelve el nombre JSON del modo de prueba.
+// mode: modo configurado para el benchmark.
+static const char* modeName(NandBenchmarkMode mode)
+{
+	switch (mode) {
+	case NandBenchmarkMode::full: return "full";
+	case NandBenchmarkMode::verify: return "verify";
+	default: return "quick";
+	}
+}
+
 // Indica si block fue marcado como defectuoso durante el escaneo.
 // block: indice fisico NAND.
 static bool isBadBlock(uint16_t block)
@@ -156,7 +167,8 @@ static void benchmarkTask(void* parameter)
 	memset(badBlockMap, 0, sizeof(badBlockMap));
 	eventFlash.setClockHz(uint32_t(config.speedMHz) * 1000000U);
 	uint8_t protection = 0, configuration = 0;
-	eventFlash.beginWriteSession(protection, configuration);
+	const bool writeSession = config.mode != NandBenchmarkMode::verify;
+	if (writeSession) eventFlash.beginWriteSession(protection, configuration);
 
 	uint16_t goodBlocks = 0, badBlocks = 0;
 	for (uint16_t offset = 0; offset < config.blockCount; ++offset) {
@@ -179,6 +191,7 @@ static void benchmarkTask(void* parameter)
 		finishBenchmark(BenchmarkPhase::failed, "no_good_blocks", startedMs);
 		goto cleanup;
 	}
+	if (config.mode == NandBenchmarkMode::verify) goto readPhase;
 
 	phaseStarted = millis();
 	for (uint16_t offset = 0; offset < config.blockCount; ++offset) {
@@ -230,6 +243,7 @@ static void benchmarkTask(void* parameter)
 	benchmarkStatus.writeCrc32 = writeCrc;
 	taskEXIT_CRITICAL(&benchmarkMutex);
 
+	readPhase:
 	phaseStarted = millis();
 	pagesDone = 0;
 	for (uint16_t offset = 0; offset < config.blockCount; ++offset) {
@@ -238,6 +252,10 @@ static void benchmarkTask(void* parameter)
 		for (uint16_t pageInBlock = 0; pageInBlock < W25N02Kv::pagesPerBlock; ++pageInBlock) {
 			const uint32_t page = uint32_t(block) * W25N02Kv::pagesPerBlock + pageInBlock;
 			uint8_t status = 0;
+			if (config.mode == NandBenchmarkMode::verify) {
+				fillPattern(pageData, page);
+				writeCrc = esp_crc32_le(writeCrc, pageData, W25N02Kv::pageDataSize);
+			}
 			updateProgress(BenchmarkPhase::read, block, pagesDone);
 			if (!eventFlash.readPage(page, pageData, W25N02Kv::pageDataSize, status)) {
 				finishBenchmark(BenchmarkPhase::failed, "read_failed", startedMs); goto cleanup;
@@ -257,13 +275,14 @@ static void benchmarkTask(void* parameter)
 	taskENTER_CRITICAL(&benchmarkMutex);
 	benchmarkStatus.readMs = millis() - phaseStarted;
 	benchmarkStatus.bytesRead = pagesDone * W25N02Kv::pageDataSize;
+	benchmarkStatus.writeCrc32 = writeCrc;
 	benchmarkStatus.readCrc32 = readCrc;
 	taskEXIT_CRITICAL(&benchmarkMutex);
 	finishBenchmark(writeCrc == readCrc ? BenchmarkPhase::complete : BenchmarkPhase::failed,
 		writeCrc == readCrc ? "" : "crc_mismatch", startedMs);
 
 cleanup:
-	eventFlash.endWriteSession(protection, configuration);
+	if (writeSession) eventFlash.endWriteSession(protection, configuration);
 	eventFlash.setClockHz(20000000);
 	delete[] pageData;
 	vTaskDelete(nullptr);
@@ -281,8 +300,8 @@ bool nandBenchmarkStart(NandBenchmarkMode mode, uint8_t speedMHz)
 	benchmarkStatus.running = true;
 	benchmarkStatus.mode = mode;
 	benchmarkStatus.speedMHz = speedMHz;
-	benchmarkStatus.startBlock = mode == NandBenchmarkMode::quick ? 2038 : 0;
-	benchmarkStatus.blockCount = mode == NandBenchmarkMode::quick ? 8 : W25N02Kv::blockCount;
+	benchmarkStatus.startBlock = mode == NandBenchmarkMode::quick ? 2038 : mode == NandBenchmarkMode::verify ? 4 : 0;
+	benchmarkStatus.blockCount = mode == NandBenchmarkMode::quick ? 8 : mode == NandBenchmarkMode::verify ? 2044 : W25N02Kv::blockCount;
 	benchmarkStatus.phase = BenchmarkPhase::scan;
 	taskEXIT_CRITICAL(&benchmarkMutex);
 
@@ -318,7 +337,7 @@ void nandBenchmarkGetJson(String& json)
 		"\"bytesWritten\":%u,\"bytesRead\":%u,\"writeMbps\":%.3f,\"readMbps\":%.3f,"
 		"\"writeCrc32\":\"%08X\",\"readCrc32\":\"%08X\",\"maxReadStatus\":\"%02X\",\"reason\":\"%s\"}",
 		status.running ? "true" : "false", status.success ? "true" : "false",
-		status.mode == NandBenchmarkMode::quick ? "quick" : "full", phaseName(status.phase), status.speedMHz,
+		modeName(status.mode), phaseName(status.phase), status.speedMHz,
 		status.startBlock, status.blockCount, status.currentBlock, status.currentPage, status.totalPages,
 		status.goodBlocks, status.badBlocks, status.eraseMs, status.writeMs, status.readMs, status.totalMs,
 		status.bytesWritten, status.bytesRead, writeMbps, readMbps, status.writeCrc32, status.readCrc32,
