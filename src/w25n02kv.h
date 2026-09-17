@@ -79,8 +79,8 @@ public:
 private:
 	static constexpr uint8_t commandReset = 0xFF;
 	static constexpr uint8_t commandJedecId = 0x9F;
-	static constexpr uint8_t commandReadStatus = 0x05;
-	static constexpr uint8_t commandWriteStatus = 0x01;
+	static constexpr uint8_t commandReadStatus = 0x0F;
+	static constexpr uint8_t commandWriteStatus = 0x1F;
 	static constexpr uint8_t commandWriteEnable = 0x06;
 	static constexpr uint8_t commandBlockErase = 0xD8;
 	static constexpr uint8_t commandProgramLoad = 0x02;
