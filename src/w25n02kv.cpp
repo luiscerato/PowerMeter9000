@@ -132,6 +132,9 @@ uint8_t W25N02Kv::readStatus(uint8_t address)
 
 void W25N02Kv::writeStatus(uint8_t address, uint8_t value)
 {
+	uint8_t status = 0;
+	if (!waitReady(100, status)) return;
+	sendCommand(commandWriteEnable);
 	spi.beginTransaction(settings);
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandWriteStatus);
@@ -139,6 +142,7 @@ void W25N02Kv::writeStatus(uint8_t address, uint8_t value)
 	spi.transfer(value);
 	digitalWrite(chipSelectPin, HIGH);
 	spi.endTransaction();
+	waitReady(100, status);
 }
 
 bool W25N02Kv::waitReady(uint32_t timeoutMs, uint8_t& status)
