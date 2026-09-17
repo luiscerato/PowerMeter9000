@@ -20,6 +20,10 @@ struct W25N02KvTestResult {
 	bool dataMatch = false;
 	uint16_t block = 0;
 	uint8_t badBlockMarker = 0;
+	uint8_t protectionBefore = 0;
+	uint8_t protectionDuring = 0;
+	uint8_t configurationBefore = 0;
+	uint8_t configurationDuring = 0;
 	uint8_t eraseStatus = 0;
 	uint8_t programStatus = 0;
 	uint8_t readStatus = 0;

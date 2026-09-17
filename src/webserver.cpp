@@ -265,11 +265,16 @@ void Init_WebServer()
 
 		char json[640];
 		snprintf(json, sizeof(json), "{\"schemaVersion\":1,\"success\":%s,\"block\":%u,"
-			"\"badBlock\":%s,\"badBlockMarker\":\"%02X\",\"erase\":{\"ok\":%s,\"status\":\"%02X\",\"timeUs\":%u},"
+			"\"badBlock\":%s,\"badBlockMarker\":\"%02X\","
+			"\"registers\":{\"protectionBefore\":\"%02X\",\"protectionDuring\":\"%02X\","
+			"\"configurationBefore\":\"%02X\",\"configurationDuring\":\"%02X\"},"
+			"\"erase\":{\"ok\":%s,\"status\":\"%02X\",\"timeUs\":%u},"
 			"\"program\":{\"ok\":%s,\"status\":\"%02X\",\"timeUs\":%u},"
 			"\"read\":{\"ok\":%s,\"status\":\"%02X\",\"timeUs\":%u},"
 			"\"dataMatch\":%s,\"expectedCrc32\":\"%08X\",\"readCrc32\":\"%08X\"}",
 			result.success ? "true" : "false", result.block, result.badBlock ? "true" : "false", result.badBlockMarker,
+			result.protectionBefore, result.protectionDuring,
+			result.configurationBefore, result.configurationDuring,
 			result.eraseOk ? "true" : "false", result.eraseStatus, result.eraseUs,
 			result.programOk ? "true" : "false", result.programStatus, result.programUs,
 			result.readOk ? "true" : "false", result.readStatus, result.readUs,

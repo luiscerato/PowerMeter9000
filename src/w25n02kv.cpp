@@ -32,7 +32,10 @@ bool W25N02Kv::runBlockTest(uint16_t block, W25N02KvTestResult& result)
 
 	const uint8_t originalProtection = readStatus(protectionRegister);
 	const uint8_t originalConfiguration = readStatus(configurationRegister);
+	result.protectionBefore = originalProtection;
+	result.configurationBefore = originalConfiguration;
 	writeStatus(configurationRegister, originalConfiguration | 0x08); // Fuerza lectura desde cache, no modo continuo.
+	result.configurationDuring = readStatus(configurationRegister);
 
 	const uint32_t page = uint32_t(block) * pagesPerBlock;
 	uint8_t status = 0;
@@ -56,6 +59,7 @@ bool W25N02Kv::runBlockTest(uint16_t block, W25N02KvTestResult& result)
 	result.expectedCrc32 = calculateCrc32(data, pageDataSize);
 
 	writeStatus(protectionRegister, 0x00);
+	result.protectionDuring = readStatus(protectionRegister);
 	uint32_t startedUs = micros();
 	result.eraseOk = eraseBlock(block, result.eraseStatus);
 	result.eraseUs = micros() - startedUs;
