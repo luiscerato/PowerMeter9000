@@ -249,7 +249,16 @@ void Init_WebServer()
 			return;
 		}
 
-		constexpr uint16_t testBlock = W25N02Kv::blockCount - 1;
+		uint16_t testBlock = W25N02Kv::blockCount - 1;
+		if (request->hasParam("block")) {
+			const long requestedBlock = request->getParam("block")->value().toInt();
+			if (requestedBlock < 0 || requestedBlock >= W25N02Kv::blockCount) {
+				nandTestRunning = false;
+				request->send(400, "application/json", "{\"schemaVersion\":1,\"success\":false,\"reason\":\"invalid_block\"}");
+				return;
+			}
+			testBlock = uint16_t(requestedBlock);
+		}
 		W25N02KvTestResult result;
 		eventFlash.runBlockTest(testBlock, result);
 		nandTestRunning = false;

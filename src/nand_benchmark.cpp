@@ -175,6 +175,10 @@ static void benchmarkTask(void* parameter)
 	benchmarkStatus.badBlocks = badBlocks;
 	benchmarkStatus.totalPages = uint32_t(goodBlocks) * W25N02Kv::pagesPerBlock;
 	taskEXIT_CRITICAL(&benchmarkMutex);
+	if (!goodBlocks) {
+		finishBenchmark(BenchmarkPhase::failed, "no_good_blocks", startedMs);
+		goto cleanup;
+	}
 
 	phaseStarted = millis();
 	for (uint16_t offset = 0; offset < config.blockCount; ++offset) {
@@ -183,14 +187,24 @@ static void benchmarkTask(void* parameter)
 		uint8_t status = 0;
 		updateProgress(BenchmarkPhase::erase, block, 0);
 		if (!eventFlash.eraseBlock(block, status)) {
-			finishBenchmark(BenchmarkPhase::failed, "erase_failed", startedMs); goto cleanup;
+			markBadBlock(block);
+			--goodBlocks;
+			++badBlocks;
+			continue;
 		}
 		if (shouldCancel()) { finishBenchmark(BenchmarkPhase::cancelled, "cancelled", startedMs); goto cleanup; }
 		vTaskDelay(1);
 	}
 	taskENTER_CRITICAL(&benchmarkMutex);
 	benchmarkStatus.eraseMs = millis() - phaseStarted;
+	benchmarkStatus.goodBlocks = goodBlocks;
+	benchmarkStatus.badBlocks = badBlocks;
+	benchmarkStatus.totalPages = uint32_t(goodBlocks) * W25N02Kv::pagesPerBlock;
 	taskEXIT_CRITICAL(&benchmarkMutex);
+	if (!goodBlocks) {
+		finishBenchmark(BenchmarkPhase::failed, "no_erasable_blocks", startedMs);
+		goto cleanup;
+	}
 
 	phaseStarted = millis();
 	for (uint16_t offset = 0; offset < config.blockCount; ++offset) {
