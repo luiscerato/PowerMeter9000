@@ -51,6 +51,31 @@ public:
 	// block: bloque reservado que sera destruido; result: diagnostico completo.
 	bool runBlockTest(uint16_t block, W25N02KvTestResult& result);
 
+	// Cambia la velocidad usada en las siguientes transacciones.
+	// clockHz: frecuencia SPI en hertz.
+	void setClockHz(uint32_t clockHz);
+
+	// Prepara buffer-read y desprotege la NAND, conservando los valores anteriores.
+	// protection y configuration reciben los registros que luego deben restaurarse.
+	void beginWriteSession(uint8_t& protection, uint8_t& configuration);
+
+	// Restaura los registros guardados al iniciar una sesion de escritura.
+	// protection y configuration son los valores originales.
+	void endWriteSession(uint8_t protection, uint8_t configuration);
+
+	// Lee el marcador de fabrica del bloque sin modificarlo.
+	// block: bloque consultado; marker y status reciben marcador y estado NAND.
+	bool readBadBlockMarker(uint16_t block, uint8_t& marker, uint8_t& status);
+
+	// Borra block completo y devuelve el registro de estado final.
+	bool eraseBlock(uint16_t block, uint8_t& status);
+
+	// Programa data en la pagina indicada por page.
+	bool programPage(uint32_t page, const uint8_t* data, size_t dataSize, uint8_t& status);
+
+	// Lee dataSize bytes de la pagina indicada por page.
+	bool readPage(uint32_t page, uint8_t* data, size_t dataSize, uint8_t& status);
+
 private:
 	static constexpr uint8_t commandReset = 0xFF;
 	static constexpr uint8_t commandJedecId = 0x9F;
@@ -89,12 +114,6 @@ private:
 
 	// Transfiere page al cache interno y espera la lectura NAND.
 	bool loadPage(uint32_t page, uint8_t& status);
-
-	// Borra block completo y devuelve el registro de estado final.
-	bool eraseBlock(uint16_t block, uint8_t& status);
-
-	// Programa data en la primera pagina indicada por page.
-	bool programPage(uint32_t page, const uint8_t* data, size_t dataSize, uint8_t& status);
 
 	// Calcula CRC32 IEEE de data con longitud dataSize.
 	static uint32_t calculateCrc32(const uint8_t* data, size_t dataSize);

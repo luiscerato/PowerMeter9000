@@ -84,6 +84,31 @@ bool W25N02Kv::runBlockTest(uint16_t block, W25N02KvTestResult& result)
 	return result.success;
 }
 
+void W25N02Kv::setClockHz(uint32_t clockHz)
+{
+	settings = SPISettings(clockHz, MSBFIRST, SPI_MODE0);
+}
+
+void W25N02Kv::beginWriteSession(uint8_t& protection, uint8_t& configuration)
+{
+	protection = readStatus(protectionRegister);
+	configuration = readStatus(configurationRegister);
+	writeStatus(configurationRegister, configuration | 0x08);
+	writeStatus(protectionRegister, 0x00);
+}
+
+void W25N02Kv::endWriteSession(uint8_t protection, uint8_t configuration)
+{
+	writeStatus(protectionRegister, protection);
+	writeStatus(configurationRegister, configuration);
+}
+
+bool W25N02Kv::readBadBlockMarker(uint16_t block, uint8_t& marker, uint8_t& status)
+{
+	if (block >= blockCount) return false;
+	return loadPage(uint32_t(block) * pagesPerBlock, status) && readCache(pageDataSize, &marker, 1);
+}
+
 void W25N02Kv::sendCommand(uint8_t command)
 {
 	spi.beginTransaction(settings);
@@ -198,6 +223,12 @@ bool W25N02Kv::programPage(uint32_t page, const uint8_t* data, size_t dataSize, 
 	digitalWrite(chipSelectPin, HIGH);
 	spi.endTransaction();
 	return waitReady(1000, status) && !(status & 0x08);
+}
+
+bool W25N02Kv::readPage(uint32_t page, uint8_t* data, size_t dataSize, uint8_t& status)
+{
+	if (!data || !dataSize || dataSize > pageDataSize) return false;
+	return loadPage(page, status) && readCache(0, data, dataSize);
 }
 
 uint32_t W25N02Kv::calculateCrc32(const uint8_t* data, size_t dataSize)

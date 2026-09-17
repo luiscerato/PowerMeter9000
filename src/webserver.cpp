@@ -8,6 +8,7 @@
 #include "manager_api.h"
 #include "event_store.h"
 #include "w25n02kv.h"
+#include "nand_benchmark.h"
 #include <math.h>
 #include <atomic>
 
@@ -267,6 +268,29 @@ void Init_WebServer()
 		auto* response = request->beginResponse(result.success ? 200 : 500, "application/json", json);
 		response->addHeader("Cache-Control", "no-store");
 		request->send(response);
+		});
+
+	server.on("/api/v1/debug/nand-benchmark", HTTP_GET | HTTP_POST, [](AsyncWebServerRequest* request) {
+		if (request->method() == HTTP_POST) {
+			const String modeText = request->hasParam("mode") ? request->getParam("mode")->value() : "quick";
+			const uint8_t speedMHz = request->hasParam("speedMHz") ? request->getParam("speedMHz")->value().toInt() : 20;
+			if (modeText != "quick" && modeText != "full") {
+				request->send(400, "application/json", "{\"schemaVersion\":1,\"started\":false,\"reason\":\"invalid_mode\"}"); return;
+			}
+			if (!nandBenchmarkStart(modeText == "full" ? NandBenchmarkMode::full : NandBenchmarkMode::quick, speedMHz)) {
+				request->send(409, "application/json", "{\"schemaVersion\":1,\"started\":false,\"reason\":\"invalid_speed_or_busy\"}"); return;
+			}
+		}
+		String json;
+		nandBenchmarkGetJson(json);
+		auto* response = request->beginResponse(request->method() == HTTP_POST ? 202 : 200, "application/json", json);
+		response->addHeader("Cache-Control", "no-store");
+		request->send(response);
+		});
+
+	server.on("/api/v1/debug/nand-benchmark/cancel", HTTP_POST, [](AsyncWebServerRequest* request) {
+		request->send(nandBenchmarkCancel() ? 202 : 409, "application/json",
+			"{\"schemaVersion\":1,\"cancelRequested\":true}");
 		});
 
 	server.on("/api/v1/telemetry/current", HTTP_GET, [](AsyncWebServerRequest* request) {
