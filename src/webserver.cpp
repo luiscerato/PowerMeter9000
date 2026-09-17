@@ -7,7 +7,9 @@
 #include "meter.h"
 #include "manager_api.h"
 #include "event_store.h"
+#include "w25n02kv.h"
 #include <math.h>
+#include <atomic>
 
 
 // Create AsyncWebServer object on port 80
@@ -15,6 +17,9 @@ AsyncWebServer server(80);
 AsyncWebSocket scopeWS("/ws");
 AsyncWebSocket remoteScreen("/screen");
 AsyncWebSocket acEventsWS("/acevents");
+extern W25N02Kv eventFlash;
+extern bool flashDetected;
+static std::atomic<bool> nandTestRunning(false);
 
 
 WSeventFunctionCallback meterEvents = nullptr, screenEvents = nullptr, acEvents = nullptr;		//Punteros a los callback de los eventos de los websockets
@@ -230,6 +235,38 @@ void Init_WebServer()
 		String response;
 		managerGetStatusJson(response);
 		request->send(200, "application/json", response);
+		});
+
+	server.on("/api/v1/debug/nand-test", HTTP_POST, [](AsyncWebServerRequest* request) {
+		if (!flashDetected) {
+			request->send(503, "application/json", "{\"schemaVersion\":1,\"success\":false,\"reason\":\"nand_not_detected\"}");
+			return;
+		}
+		bool expected = false;
+		if (!nandTestRunning.compare_exchange_strong(expected, true)) {
+			request->send(409, "application/json", "{\"schemaVersion\":1,\"success\":false,\"reason\":\"test_already_running\"}");
+			return;
+		}
+
+		constexpr uint16_t testBlock = W25N02Kv::blockCount - 1;
+		W25N02KvTestResult result;
+		eventFlash.runBlockTest(testBlock, result);
+		nandTestRunning = false;
+
+		char json[640];
+		snprintf(json, sizeof(json), "{\"schemaVersion\":1,\"success\":%s,\"block\":%u,"
+			"\"badBlock\":%s,\"badBlockMarker\":\"%02X\",\"erase\":{\"ok\":%s,\"status\":\"%02X\",\"timeUs\":%u},"
+			"\"program\":{\"ok\":%s,\"status\":\"%02X\",\"timeUs\":%u},"
+			"\"read\":{\"ok\":%s,\"status\":\"%02X\",\"timeUs\":%u},"
+			"\"dataMatch\":%s,\"expectedCrc32\":\"%08X\",\"readCrc32\":\"%08X\"}",
+			result.success ? "true" : "false", result.block, result.badBlock ? "true" : "false", result.badBlockMarker,
+			result.eraseOk ? "true" : "false", result.eraseStatus, result.eraseUs,
+			result.programOk ? "true" : "false", result.programStatus, result.programUs,
+			result.readOk ? "true" : "false", result.readStatus, result.readUs,
+			result.dataMatch ? "true" : "false", result.expectedCrc32, result.readCrc32);
+		auto* response = request->beginResponse(result.success ? 200 : 500, "application/json", json);
+		response->addHeader("Cache-Control", "no-store");
+		request->send(response);
 		});
 
 	server.on("/api/v1/telemetry/current", HTTP_GET, [](AsyncWebServerRequest* request) {
