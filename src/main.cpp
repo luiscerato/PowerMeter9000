@@ -21,7 +21,7 @@ keyboard Keyboard;                           // Interfase de teclado
 
 SPIClass peripheralSpi(HSPI);
 ST7920_SPI lcd(peripheralSpi, pinLcdSS, pinSpiClk, pinSpiSdo, pinSpiSdi);
-W25N02Kv eventFlash(peripheralSpi, pinMemSS);
+W25N02Kv eventFlash(peripheralSpi, pinMem2SS);
 W25N02KvInfo flashInfo;
 bool flashDetected = false;
 
