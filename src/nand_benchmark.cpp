@@ -38,6 +38,24 @@ struct BenchmarkStatus {
 	uint32_t totalMs = 0;
 	uint32_t writeCrc32 = 0;
 	uint32_t readCrc32 = 0;
+	uint64_t writeOperationUs = 0;
+	uint64_t writeProcessUs = 0;
+	uint64_t writeYieldUs = 0;
+	uint64_t writeBusWaitUs = 0;
+	uint64_t writeSpiActiveUs = 0;
+	uint64_t writeReadyWaitUs = 0;
+	uint64_t readOperationUs = 0;
+	uint64_t readProcessUs = 0;
+	uint64_t readYieldUs = 0;
+	uint64_t readBusWaitUs = 0;
+	uint64_t readSpiActiveUs = 0;
+	uint64_t readReadyWaitUs = 0;
+	uint32_t mismatchPages = 0;
+	uint32_t firstMismatchPage = 0;
+	uint16_t firstMismatchByte = 0;
+	uint8_t expectedByte = 0;
+	uint8_t actualByte = 0;
+	uint8_t firstMismatchStatus = 0;
 	uint8_t maxReadStatus = 0;
 	char reason[32] = "";
 };
@@ -98,14 +116,20 @@ static void fillPattern(uint8_t* data, uint32_t page)
 	}
 }
 
-// Compara una pagina leida con el patron esperado.
-// data: pagina leida; page: direccion fisica usada como semilla.
-static bool matchesPattern(const uint8_t* data, uint32_t page)
+// Compara una pagina y devuelve el primer byte diferente.
+// data y page identifican la pagina; mismatchByte, expected y actual reciben el detalle del error.
+static bool matchesPattern(const uint8_t* data, uint32_t page, uint16_t& mismatchByte,
+	uint8_t& expected, uint8_t& actual)
 {
 	uint32_t value = page * 2654435761U + 0xA5C39E17U;
 	for (uint32_t i = 0; i < W25N02Kv::pageDataSize; ++i) {
 		value = value * 1664525U + 1013904223U;
-		if (data[i] != uint8_t(value >> 24)) return false;
+		expected = uint8_t(value >> 24);
+		if (data[i] != expected) {
+			mismatchByte = uint16_t(i);
+			actual = data[i];
+			return false;
+		}
 	}
 	return true;
 }
@@ -157,6 +181,11 @@ static void benchmarkTask(void* parameter)
 	uint32_t writeCrc = 0;
 	uint32_t readCrc = 0;
 	uint32_t pagesDone = 0;
+	uint32_t mismatchPages = 0;
+	W25N02KvTiming writeTiming;
+	W25N02KvTiming readTiming;
+	uint64_t writeOperationUs = 0, writeProcessUs = 0, writeYieldUs = 0;
+	uint64_t readOperationUs = 0, readProcessUs = 0, readYieldUs = 0;
 
 	uint8_t* pageData = new (std::nothrow) uint8_t[W25N02Kv::pageDataSize];
 	if (!pageData) {
@@ -181,6 +210,7 @@ static void benchmarkTask(void* parameter)
 		if (marker == 0xFF) ++goodBlocks;
 		else { markBadBlock(block); ++badBlocks; }
 		if (shouldCancel()) { finishBenchmark(BenchmarkPhase::cancelled, "cancelled", startedMs); goto cleanup; }
+		vTaskDelay(1);
 	}
 	taskENTER_CRITICAL(&benchmarkMutex);
 	benchmarkStatus.goodBlocks = goodBlocks;
@@ -226,21 +256,37 @@ static void benchmarkTask(void* parameter)
 		for (uint16_t pageInBlock = 0; pageInBlock < W25N02Kv::pagesPerBlock; ++pageInBlock) {
 			const uint32_t page = uint32_t(block) * W25N02Kv::pagesPerBlock + pageInBlock;
 			uint8_t status = 0;
+			uint32_t measuredUs = micros();
 			fillPattern(pageData, page);
+			writeProcessUs += micros() - measuredUs;
 			updateProgress(BenchmarkPhase::write, block, pagesDone);
-			if (!eventFlash.programPage(page, pageData, W25N02Kv::pageDataSize, status)) {
+			measuredUs = micros();
+			if (!eventFlash.programPage(page, pageData, W25N02Kv::pageDataSize, status, &writeTiming)) {
 				finishBenchmark(BenchmarkPhase::failed, "program_failed", startedMs); goto cleanup;
 			}
+			writeOperationUs += micros() - measuredUs;
+			measuredUs = micros();
 			writeCrc = esp_crc32_le(writeCrc, pageData, W25N02Kv::pageDataSize);
+			writeProcessUs += micros() - measuredUs;
 			++pagesDone;
 			if (shouldCancel()) { finishBenchmark(BenchmarkPhase::cancelled, "cancelled", startedMs); goto cleanup; }
+			if ((pagesDone & 7U) == 0) {
+				measuredUs = micros();
+				vTaskDelay(1);
+				writeYieldUs += micros() - measuredUs;
+			}
 		}
-		taskYIELD();
 	}
 	taskENTER_CRITICAL(&benchmarkMutex);
 	benchmarkStatus.writeMs = millis() - phaseStarted;
 	benchmarkStatus.bytesWritten = pagesDone * W25N02Kv::pageDataSize;
 	benchmarkStatus.writeCrc32 = writeCrc;
+	benchmarkStatus.writeOperationUs = writeOperationUs;
+	benchmarkStatus.writeProcessUs = writeProcessUs;
+	benchmarkStatus.writeYieldUs = writeYieldUs;
+	benchmarkStatus.writeBusWaitUs = writeTiming.busWaitUs;
+	benchmarkStatus.writeSpiActiveUs = writeTiming.spiActiveUs;
+	benchmarkStatus.writeReadyWaitUs = writeTiming.readyWaitUs;
 	taskEXIT_CRITICAL(&benchmarkMutex);
 
 	readPhase:
@@ -252,45 +298,83 @@ static void benchmarkTask(void* parameter)
 		for (uint16_t pageInBlock = 0; pageInBlock < W25N02Kv::pagesPerBlock; ++pageInBlock) {
 			const uint32_t page = uint32_t(block) * W25N02Kv::pagesPerBlock + pageInBlock;
 			uint8_t status = 0;
-			if (config.mode == NandBenchmarkMode::verify) {
-				fillPattern(pageData, page);
-				writeCrc = esp_crc32_le(writeCrc, pageData, W25N02Kv::pageDataSize);
-			}
-			updateProgress(BenchmarkPhase::read, block, pagesDone);
-			if (!eventFlash.readPage(page, pageData, W25N02Kv::pageDataSize, status)) {
+			uint32_t measuredUs = micros();
+			if (!eventFlash.readPage(page, pageData, W25N02Kv::pageDataSize, status, &readTiming)) {
 				finishBenchmark(BenchmarkPhase::failed, "read_failed", startedMs); goto cleanup;
 			}
-			if (!matchesPattern(pageData, page)) {
-				finishBenchmark(BenchmarkPhase::failed, "data_mismatch", startedMs); goto cleanup;
+			readOperationUs += micros() - measuredUs;
+			measuredUs = micros();
+			uint16_t mismatchByte = 0;
+			uint8_t expected = 0, actual = 0;
+			if (!matchesPattern(pageData, page, mismatchByte, expected, actual)) {
+				++mismatchPages;
+				taskENTER_CRITICAL(&benchmarkMutex);
+				benchmarkStatus.mismatchPages = mismatchPages;
+				if (mismatchPages == 1) {
+					benchmarkStatus.firstMismatchPage = page;
+					benchmarkStatus.firstMismatchByte = mismatchByte;
+					benchmarkStatus.expectedByte = expected;
+					benchmarkStatus.actualByte = actual;
+					benchmarkStatus.firstMismatchStatus = status;
+				}
+				taskEXIT_CRITICAL(&benchmarkMutex);
+				if (config.mode != NandBenchmarkMode::verify) {
+					finishBenchmark(BenchmarkPhase::failed, "data_mismatch", startedMs); goto cleanup;
+				}
 			}
 			readCrc = esp_crc32_le(readCrc, pageData, W25N02Kv::pageDataSize);
+			readProcessUs += micros() - measuredUs;
 			++pagesDone;
+			updateProgress(BenchmarkPhase::read, block, pagesDone);
 			taskENTER_CRITICAL(&benchmarkMutex);
 			if ((status & 0x70) > benchmarkStatus.maxReadStatus) benchmarkStatus.maxReadStatus = status & 0x70;
 			taskEXIT_CRITICAL(&benchmarkMutex);
 			if (shouldCancel()) { finishBenchmark(BenchmarkPhase::cancelled, "cancelled", startedMs); goto cleanup; }
+			// Una pausa cada ocho paginas alimenta al idle task sin sumar un tick a cada transferencia.
+			if ((pagesDone & 7U) == 0) {
+				measuredUs = micros();
+				vTaskDelay(1);
+				readYieldUs += micros() - measuredUs;
+			}
 		}
-		taskYIELD();
 	}
 	taskENTER_CRITICAL(&benchmarkMutex);
 	benchmarkStatus.readMs = millis() - phaseStarted;
 	benchmarkStatus.bytesRead = pagesDone * W25N02Kv::pageDataSize;
 	benchmarkStatus.writeCrc32 = writeCrc;
 	benchmarkStatus.readCrc32 = readCrc;
+	benchmarkStatus.readOperationUs = readOperationUs;
+	benchmarkStatus.readProcessUs = readProcessUs;
+	benchmarkStatus.readYieldUs = readYieldUs;
+	benchmarkStatus.readBusWaitUs = readTiming.busWaitUs;
+	benchmarkStatus.readSpiActiveUs = readTiming.spiActiveUs;
+	benchmarkStatus.readReadyWaitUs = readTiming.readyWaitUs;
 	taskEXIT_CRITICAL(&benchmarkMutex);
-	finishBenchmark(writeCrc == readCrc ? BenchmarkPhase::complete : BenchmarkPhase::failed,
-		writeCrc == readCrc ? "" : "crc_mismatch", startedMs);
+	if (config.mode == NandBenchmarkMode::verify) {
+		finishBenchmark(mismatchPages == 0 ? BenchmarkPhase::complete : BenchmarkPhase::failed,
+			mismatchPages == 0 ? "" : "data_mismatch", startedMs);
+	}
+	else {
+		finishBenchmark(writeCrc == readCrc ? BenchmarkPhase::complete : BenchmarkPhase::failed,
+			writeCrc == readCrc ? "" : "crc_mismatch", startedMs);
+	}
 
 cleanup:
 	if (writeSession) eventFlash.endWriteSession(protection, configuration);
-	eventFlash.setClockHz(20000000);
+	eventFlash.setClockHz(30000000);
 	delete[] pageData;
 	vTaskDelete(nullptr);
 }
 
-bool nandBenchmarkStart(NandBenchmarkMode mode, uint8_t speedMHz)
+bool nandBenchmarkStart(NandBenchmarkMode mode, uint8_t speedMHz, uint16_t startBlock, uint16_t blockCount)
 {
-	if (speedMHz != 20 && speedMHz != 40 && speedMHz != 80) return false;
+	if (speedMHz != 20 && speedMHz != 25 && speedMHz != 30 && speedMHz != 35 && speedMHz != 40) return false;
+	const uint16_t defaultStart = mode == NandBenchmarkMode::quick ? 2038 : mode == NandBenchmarkMode::verify ? 4 : 0;
+	if (blockCount == 0) {
+		startBlock = defaultStart;
+		blockCount = mode == NandBenchmarkMode::quick ? 8 : W25N02Kv::blockCount - startBlock;
+	}
+	if (startBlock >= W25N02Kv::blockCount || blockCount > W25N02Kv::blockCount - startBlock) return false;
 	taskENTER_CRITICAL(&benchmarkMutex);
 	if (benchmarkStatus.running) {
 		taskEXIT_CRITICAL(&benchmarkMutex);
@@ -300,8 +384,8 @@ bool nandBenchmarkStart(NandBenchmarkMode mode, uint8_t speedMHz)
 	benchmarkStatus.running = true;
 	benchmarkStatus.mode = mode;
 	benchmarkStatus.speedMHz = speedMHz;
-	benchmarkStatus.startBlock = mode == NandBenchmarkMode::quick ? 2038 : mode == NandBenchmarkMode::verify ? 4 : 0;
-	benchmarkStatus.blockCount = mode == NandBenchmarkMode::quick ? 8 : mode == NandBenchmarkMode::verify ? 2044 : W25N02Kv::blockCount;
+	benchmarkStatus.startBlock = startBlock;
+	benchmarkStatus.blockCount = blockCount;
 	benchmarkStatus.phase = BenchmarkPhase::scan;
 	taskEXIT_CRITICAL(&benchmarkMutex);
 
@@ -329,18 +413,51 @@ void nandBenchmarkGetJson(String& json)
 	taskEXIT_CRITICAL(&benchmarkMutex);
 	const float writeMbps = status.writeMs ? (status.bytesWritten * 8.0f) / (status.writeMs * 1000.0f) : 0;
 	const float readMbps = status.readMs ? (status.bytesRead * 8.0f) / (status.readMs * 1000.0f) : 0;
-	char buffer[768];
-	snprintf(buffer, sizeof(buffer), "{\"schemaVersion\":1,\"running\":%s,\"success\":%s,\"mode\":\"%s\","
+	const uint64_t writeNoContentionUs = status.writeOperationUs > status.writeBusWaitUs ?
+		status.writeOperationUs - status.writeBusWaitUs : 0;
+	const uint64_t readNoContentionUs = status.readOperationUs > status.readBusWaitUs ?
+		status.readOperationUs - status.readBusWaitUs : 0;
+	const float writeNoContentionMbps = writeNoContentionUs ? status.bytesWritten * 8.0f / writeNoContentionUs : 0;
+	const float readNoContentionMbps = readNoContentionUs ? status.bytesRead * 8.0f / readNoContentionUs : 0;
+	const float writeSpiMbps = status.writeSpiActiveUs ? status.bytesWritten * 8.0f / status.writeSpiActiveUs : 0;
+	const float readSpiMbps = status.readSpiActiveUs ? status.bytesRead * 8.0f / status.readSpiActiveUs : 0;
+	char* buffer = new (std::nothrow) char[1536];
+	if (!buffer) {
+		json = "{\"schemaVersion\":1,\"reason\":\"no_memory\"}";
+		return;
+	}
+	snprintf(buffer, 1536, "{\"schemaVersion\":1,\"running\":%s,\"success\":%s,\"mode\":\"%s\"," 
 		"\"phase\":\"%s\",\"speedMHz\":%u,\"startBlock\":%u,\"blockCount\":%u,\"currentBlock\":%u,"
 		"\"currentPage\":%u,\"totalPages\":%u,\"goodBlocks\":%u,\"badBlocks\":%u,"
 		"\"eraseMs\":%u,\"writeMs\":%u,\"readMs\":%u,\"totalMs\":%u,"
 		"\"bytesWritten\":%u,\"bytesRead\":%u,\"writeMbps\":%.3f,\"readMbps\":%.3f,"
-		"\"writeCrc32\":\"%08X\",\"readCrc32\":\"%08X\",\"maxReadStatus\":\"%02X\",\"reason\":\"%s\"}",
+		"\"writeTiming\":{\"operationUs\":%llu,\"busWaitUs\":%llu,\"spiActiveUs\":%llu,"
+		"\"readyWaitUs\":%llu,\"processUs\":%llu,\"yieldUs\":%llu,"
+		"\"noContentionMbps\":%.3f,\"spiMbps\":%.3f},"
+		"\"readTiming\":{\"operationUs\":%llu,\"busWaitUs\":%llu,\"spiActiveUs\":%llu,"
+		"\"readyWaitUs\":%llu,\"processUs\":%llu,\"yieldUs\":%llu,"
+		"\"noContentionMbps\":%.3f,\"spiMbps\":%.3f},"
+		"\"writeCrc32\":\"%08X\",\"readCrc32\":\"%08X\",\"maxReadStatus\":\"%02X\","
+		"\"mismatchPages\":%u,\"firstMismatchPage\":%u,\"firstMismatchBlock\":%u,"
+		"\"firstMismatchByte\":%u,\"expectedByte\":\"%02X\",\"actualByte\":\"%02X\","
+		"\"firstMismatchStatus\":\"%02X\",\"reason\":\"%s\"}",
 		status.running ? "true" : "false", status.success ? "true" : "false",
 		modeName(status.mode), phaseName(status.phase), status.speedMHz,
 		status.startBlock, status.blockCount, status.currentBlock, status.currentPage, status.totalPages,
 		status.goodBlocks, status.badBlocks, status.eraseMs, status.writeMs, status.readMs, status.totalMs,
-		status.bytesWritten, status.bytesRead, writeMbps, readMbps, status.writeCrc32, status.readCrc32,
-		status.maxReadStatus, status.reason);
+		status.bytesWritten, status.bytesRead, writeMbps, readMbps,
+		(unsigned long long)status.writeOperationUs, (unsigned long long)status.writeBusWaitUs,
+		(unsigned long long)status.writeSpiActiveUs, (unsigned long long)status.writeReadyWaitUs,
+		(unsigned long long)status.writeProcessUs, (unsigned long long)status.writeYieldUs,
+		writeNoContentionMbps, writeSpiMbps,
+		(unsigned long long)status.readOperationUs, (unsigned long long)status.readBusWaitUs,
+		(unsigned long long)status.readSpiActiveUs, (unsigned long long)status.readReadyWaitUs,
+		(unsigned long long)status.readProcessUs, (unsigned long long)status.readYieldUs,
+		readNoContentionMbps, readSpiMbps,
+		status.writeCrc32, status.readCrc32,
+		status.maxReadStatus, status.mismatchPages, status.firstMismatchPage,
+		status.firstMismatchPage / W25N02Kv::pagesPerBlock, status.firstMismatchByte,
+		status.expectedByte, status.actualByte, status.firstMismatchStatus, status.reason);
 	json = buffer;
+	delete[] buffer;
 }

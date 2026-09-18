@@ -168,6 +168,8 @@ public:
 public:
   SPIClass& spi;
   byte scr[SCR_WD * SCR_HT / 8];
+  byte displayedScr[SCR_WD * SCR_HT / 8];
+  bool displayedScrValid = false;
   uint32_t scrWd = 128 / 8;
   uint32_t scrHt = 64;
   int8_t csPin = 5;  //Chip Select
@@ -198,5 +200,9 @@ public:
   uint8_t dualChar;
   uint8_t invertCh;
   uint8_t spacing = 1;
+
+  // Envia una fila o su pareja inferior y actualiza la copia mostrada.
+  // row: fila entre 0 y 63; includePair: incluye tambien row + 32.
+  void displayRows(uint8_t row, bool includePair);
 };
 #endif

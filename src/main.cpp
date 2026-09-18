@@ -139,7 +139,7 @@ void setup(void)
 	ui.Add_UI(ui.getNewID(), "calibration", &Draw_Calibrate);
 
 
-	ui.SetUpdateTime(100);
+	ui.SetUpdateTime(200);
 	ui.setMainScreen("main");
 	ui.setBackgroundDrawer(drawWindow);
 

@@ -25,6 +25,7 @@ void ST7920_SPI::init()
 	pinMode(csPin, OUTPUT);
 	digitalWrite(csPin, LOW);
 	spi.begin(sclkPin, misoPin, mosiPin);
+	displayedScrValid = false;
 
 	sendCmd(LCD_BASIC);
 	sendCmd(LCD_BASIC);
@@ -122,28 +123,50 @@ void ST7920_SPI::display(int buf)
 		digitalWrite(csPin, LOW);
 		spi.endTransaction();
 	}
+	if (buf == 0) {
+		memcpy(displayedScr, scr, sizeof(scr));
+		displayedScrValid = true;
+	}
+}
+
+// Envia row completa y, opcionalmente, su pareja inferior usando una sola transaccion de datos.
+// row: fila entre 0 y 63; includePair: incluye tambien row + 32.
+void ST7920_SPI::displayRows(uint8_t row, bool includePair)
+{
+	gotoXY(0, row);
+	spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+	digitalWrite(csPin, HIGH);
+	spi.transfer(0xFA);
+	const uint8_t rowCount = includePair ? 2 : 1;
+	for (uint8_t pair = 0; pair < rowCount; ++pair) {
+		const uint8_t currentRow = row + pair * 32;
+		const uint16_t offset = uint16_t(currentRow) * 16;
+		for (uint8_t i = 0; i < 16; ++i) {
+			const byte value = scr[offset + i];
+			spi.transfer(value & 0xF0);
+			spi.transfer(value << 4);
+		}
+	}
+	digitalWrite(csPin, LOW);
+	spi.endTransaction();
+	memcpy(displayedScr + uint16_t(row) * 16, scr + uint16_t(row) * 16, 16);
+	if (includePair)
+		memcpy(displayedScr + uint16_t(row + 32) * 16, scr + uint16_t(row + 32) * 16, 16);
 }
 
 void ST7920_SPI::display(int buf, int part)
 {
-	byte i, j, b;
 	part &= 0x7;	//Solo 8 partes
-	for (j = part * 4;j < ((part + 1) * 4);j++) {
-		gotoXY(0, j + buf * 64);
-		spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
-		digitalWrite(csPin, HIGH);
-		spi.transfer(0xFA); // data
-		for (i = 0;i < 16;i++) {  // 16 bytes from line #0+
-			b = scr[i + j * 16];
-			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
-		}
-		for (i = 0;i < 16;i++) {  // 16 bytes from line #32+
-			b = scr[i + (j + 32) * 16];
-			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
-		}
-		digitalWrite(csPin, LOW);
-		spi.endTransaction();
+	for (uint8_t row = part * 4; row < (part + 1) * 4; ++row) {
+		const uint16_t topOffset = uint16_t(row) * 16;
+		const uint16_t bottomOffset = uint16_t(row + 32) * 16;
+		const bool topChanged = !displayedScrValid || memcmp(scr + topOffset, displayedScr + topOffset, 16);
+		const bool bottomChanged = !displayedScrValid || memcmp(scr + bottomOffset, displayedScr + bottomOffset, 16);
+		if (topChanged && bottomChanged) displayRows(row, true);
+		else if (topChanged) displayRows(row, false);
+		else if (bottomChanged) displayRows(row + 32, false);
 	}
+	if (part == 7) displayedScrValid = true;
 }
 // ----------------------------------------------------------------
 // copy only part of framebuffer

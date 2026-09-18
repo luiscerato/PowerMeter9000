@@ -8,9 +8,10 @@ enum class NandBenchmarkMode : uint8_t {
 	verify
 };
 
-// Inicia una prueba destructiva en segundo plano.
-// mode define el rango y speedMHz acepta 20, 40 u 80 MHz.
-bool nandBenchmarkStart(NandBenchmarkMode mode, uint8_t speedMHz);
+// Inicia una prueba en segundo plano sobre el rango indicado.
+// mode define la operacion; speedMHz acepta 20, 40 u 80; startBlock y blockCount limitan el rango.
+bool nandBenchmarkStart(NandBenchmarkMode mode, uint8_t speedMHz,
+	uint16_t startBlock = 0, uint16_t blockCount = 0);
 
 // Solicita detener la prueba al terminar la operacion NAND actual; sin parametros.
 bool nandBenchmarkCancel();

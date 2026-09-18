@@ -288,12 +288,14 @@ void Init_WebServer()
 		if (request->method() == HTTP_POST) {
 			const String modeText = request->hasParam("mode") ? request->getParam("mode")->value() : "quick";
 			const uint8_t speedMHz = request->hasParam("speedMHz") ? request->getParam("speedMHz")->value().toInt() : 20;
+			const uint16_t startBlock = request->hasParam("startBlock") ? request->getParam("startBlock")->value().toInt() : 0;
+			const uint16_t blockCount = request->hasParam("blockCount") ? request->getParam("blockCount")->value().toInt() : 0;
 			if (modeText != "quick" && modeText != "full" && modeText != "verify") {
 				request->send(400, "application/json", "{\"schemaVersion\":1,\"started\":false,\"reason\":\"invalid_mode\"}"); return;
 			}
 			const NandBenchmarkMode mode = modeText == "full" ? NandBenchmarkMode::full :
 				modeText == "verify" ? NandBenchmarkMode::verify : NandBenchmarkMode::quick;
-			if (!nandBenchmarkStart(mode, speedMHz)) {
+			if (!nandBenchmarkStart(mode, speedMHz, startBlock, blockCount)) {
 				request->send(409, "application/json", "{\"schemaVersion\":1,\"started\":false,\"reason\":\"invalid_speed_or_busy\"}"); return;
 			}
 		}

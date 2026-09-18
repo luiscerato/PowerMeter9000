@@ -113,24 +113,32 @@ bool W25N02Kv::readBadBlockMarker(uint16_t block, uint8_t& marker, uint8_t& stat
 	return loadPage(uint32_t(block) * pagesPerBlock, status) && readCache(pageDataSize, &marker, 1);
 }
 
-void W25N02Kv::sendCommand(uint8_t command)
+void W25N02Kv::sendCommand(uint8_t command, W25N02KvTiming* timing)
 {
+	const uint32_t waitingStarted = micros();
 	spi.beginTransaction(settings);
+	const uint32_t activeStarted = micros();
+	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(command);
 	digitalWrite(chipSelectPin, HIGH);
 	spi.endTransaction();
+	if (timing) timing->spiActiveUs += micros() - activeStarted;
 }
 
-uint8_t W25N02Kv::readStatus(uint8_t address)
+uint8_t W25N02Kv::readStatus(uint8_t address, W25N02KvTiming* timing)
 {
+	const uint32_t waitingStarted = micros();
 	spi.beginTransaction(settings);
+	const uint32_t activeStarted = micros();
+	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandReadStatus);
 	spi.transfer(address);
 	const uint8_t value = spi.transfer(0x00);
 	digitalWrite(chipSelectPin, HIGH);
 	spi.endTransaction();
+	if (timing) timing->spiActiveUs += micros() - activeStarted;
 	return value;
 }
 
@@ -149,36 +157,58 @@ void W25N02Kv::writeStatus(uint8_t address, uint8_t value)
 	waitReady(100, status);
 }
 
-bool W25N02Kv::waitReady(uint32_t timeoutMs, uint8_t& status)
+bool W25N02Kv::waitReady(uint32_t timeoutMs, uint8_t& status, W25N02KvTiming* timing,
+	uint16_t initialDelayUs, uint16_t pollDelayUs)
 {
-	const uint32_t started = millis();
+	const uint32_t startedUs = micros();
+	if (initialDelayUs >= 1000) {
+		delay(initialDelayUs / 1000);
+		initialDelayUs %= 1000;
+	}
+	if (initialDelayUs) delayMicroseconds(initialDelayUs);
+	uint32_t lastYieldUs = micros();
 	do {
-		status = readStatus(statusRegister);
-		if (!(status & 0x01)) return true;
-		delay(1);
-	} while (millis() - started < timeoutMs);
+		status = readStatus(statusRegister, timing);
+		if (!(status & 0x01)) {
+			if (timing) timing->readyWaitUs += micros() - startedUs;
+			return true;
+		}
+		if (micros() - lastYieldUs >= 1000) {
+			delay(1);
+			lastYieldUs = micros();
+		}
+		else if (pollDelayUs) delayMicroseconds(pollDelayUs);
+	} while (micros() - startedUs < timeoutMs * 1000UL);
+	if (timing) timing->readyWaitUs += micros() - startedUs;
 	return false;
 }
 
-bool W25N02Kv::readCache(uint16_t column, uint8_t* data, size_t dataSize)
+bool W25N02Kv::readCache(uint16_t column, uint8_t* data, size_t dataSize, W25N02KvTiming* timing)
 {
 	if (!data || uint32_t(column) + dataSize > pageDataSize + 128) return false;
+	const uint32_t waitingStarted = micros();
 	spi.beginTransaction(settings);
+	const uint32_t activeStarted = micros();
+	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandReadCache);
 	spi.transfer(uint8_t(column >> 8));
 	spi.transfer(uint8_t(column));
 	spi.transfer(0x00);
-	for (size_t i = 0; i < dataSize; ++i) data[i] = spi.transfer(0x00);
+	spi.transferBytes(nullptr, data, dataSize);
 	digitalWrite(chipSelectPin, HIGH);
 	spi.endTransaction();
+	if (timing) timing->spiActiveUs += micros() - activeStarted;
 	return true;
 }
 
-bool W25N02Kv::loadPage(uint32_t page, uint8_t& status)
+bool W25N02Kv::loadPage(uint32_t page, uint8_t& status, W25N02KvTiming* timing)
 {
 	if (page >= blockCount * pagesPerBlock) return false;
+	const uint32_t waitingStarted = micros();
 	spi.beginTransaction(settings);
+	const uint32_t activeStarted = micros();
+	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandPageRead);
 	spi.transfer(uint8_t(page >> 16));
@@ -186,7 +216,8 @@ bool W25N02Kv::loadPage(uint32_t page, uint8_t& status)
 	spi.transfer(uint8_t(page));
 	digitalWrite(chipSelectPin, HIGH);
 	spi.endTransaction();
-	return waitReady(100, status);
+	if (timing) timing->spiActiveUs += micros() - activeStarted;
+	return waitReady(100, status, timing, 40, 10);
 }
 
 bool W25N02Kv::eraseBlock(uint16_t block, uint8_t& status)
@@ -204,25 +235,33 @@ bool W25N02Kv::eraseBlock(uint16_t block, uint8_t& status)
 	spi.transfer(uint8_t(page));
 	digitalWrite(chipSelectPin, HIGH);
 	spi.endTransaction();
-	return waitReady(1000, status) && !(status & 0x04);
+	return waitReady(1000, status, nullptr, 1000, 50) && !(status & 0x04);
 }
 
-bool W25N02Kv::programPage(uint32_t page, const uint8_t* data, size_t dataSize, uint8_t& status)
+bool W25N02Kv::programPage(uint32_t page, const uint8_t* data, size_t dataSize, uint8_t& status,
+	W25N02KvTiming* timing)
 {
 	if (!data || !dataSize || dataSize > pageDataSize || page >= blockCount * pagesPerBlock) return false;
 	uint8_t readyStatus = 0;
-	if (!waitReady(100, readyStatus)) return false;
-	sendCommand(commandWriteEnable);
+	if (!waitReady(100, readyStatus, timing)) return false;
+	sendCommand(commandWriteEnable, timing);
+	uint32_t waitingStarted = micros();
 	spi.beginTransaction(settings);
+	uint32_t activeStarted = micros();
+	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandProgramLoad);
 	spi.transfer(0x00);
 	spi.transfer(0x00);
-	for (size_t i = 0; i < dataSize; ++i) spi.transfer(data[i]);
+	spi.writeBytes(data, dataSize);
 	digitalWrite(chipSelectPin, HIGH);
 	spi.endTransaction();
+	if (timing) timing->spiActiveUs += micros() - activeStarted;
 
+	waitingStarted = micros();
 	spi.beginTransaction(settings);
+	activeStarted = micros();
+	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandProgramExecute);
 	spi.transfer(uint8_t(page >> 16));
@@ -230,13 +269,15 @@ bool W25N02Kv::programPage(uint32_t page, const uint8_t* data, size_t dataSize, 
 	spi.transfer(uint8_t(page));
 	digitalWrite(chipSelectPin, HIGH);
 	spi.endTransaction();
-	return waitReady(1000, status) && !(status & 0x08);
+	if (timing) timing->spiActiveUs += micros() - activeStarted;
+	return waitReady(1000, status, timing, 200, 20) && !(status & 0x08);
 }
 
-bool W25N02Kv::readPage(uint32_t page, uint8_t* data, size_t dataSize, uint8_t& status)
+bool W25N02Kv::readPage(uint32_t page, uint8_t* data, size_t dataSize, uint8_t& status,
+	W25N02KvTiming* timing)
 {
 	if (!data || !dataSize || dataSize > pageDataSize) return false;
-	return loadPage(page, status) && readCache(0, data, dataSize);
+	return loadPage(page, status, timing) && readCache(0, data, dataSize, timing);
 }
 
 uint32_t W25N02Kv::calculateCrc32(const uint8_t* data, size_t dataSize)

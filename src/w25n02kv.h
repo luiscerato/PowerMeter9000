@@ -34,6 +34,12 @@ struct W25N02KvTestResult {
 	uint32_t readUs = 0;
 };
 
+struct W25N02KvTiming {
+	uint64_t busWaitUs = 0;
+	uint64_t spiActiveUs = 0;
+	uint64_t readyWaitUs = 0;
+};
+
 class W25N02Kv {
 public:
 	static constexpr uint32_t pageDataSize = 2048;
@@ -43,7 +49,7 @@ public:
 
 	// Prepara el controlador sin inicializar ni reasignar los pines del puerto.
 	// spiPort: bus ya iniciado; chipSelectPin: CS activo en bajo; clockHz: velocidad NAND.
-	W25N02Kv(SPIClass& spiPort, uint8_t chipSelectPin, uint32_t clockHz = 20000000);
+	W25N02Kv(SPIClass& spiPort, uint8_t chipSelectPin, uint32_t clockHz = 30000000);
 
 	// Reinicia e identifica la memoria sin modificar su contenido; sin parametros.
 	bool begin();
@@ -75,10 +81,12 @@ public:
 	bool eraseBlock(uint16_t block, uint8_t& status);
 
 	// Programa data en la pagina indicada por page.
-	bool programPage(uint32_t page, const uint8_t* data, size_t dataSize, uint8_t& status);
+	bool programPage(uint32_t page, const uint8_t* data, size_t dataSize, uint8_t& status,
+		W25N02KvTiming* timing = nullptr);
 
 	// Lee dataSize bytes de la pagina indicada por page.
-	bool readPage(uint32_t page, uint8_t* data, size_t dataSize, uint8_t& status);
+	bool readPage(uint32_t page, uint8_t* data, size_t dataSize, uint8_t& status,
+		W25N02KvTiming* timing = nullptr);
 
 private:
 	static constexpr uint8_t commandReset = 0xFF;
@@ -102,22 +110,23 @@ private:
 	uint8_t chipSelectPin;
 
 	// Envia un comando sin respuesta; command es el opcode NAND.
-	void sendCommand(uint8_t command);
+	void sendCommand(uint8_t command, W25N02KvTiming* timing = nullptr);
 
 	// Lee un registro NAND; address selecciona el registro de estado.
-	uint8_t readStatus(uint8_t address);
+	uint8_t readStatus(uint8_t address, W25N02KvTiming* timing = nullptr);
 
 	// Escribe un registro NAND; address y value indican registro y valor.
 	void writeStatus(uint8_t address, uint8_t value);
 
-	// Espera que termine una operacion; timeoutMs limita la espera y status recibe el estado final.
-	bool waitReady(uint32_t timeoutMs, uint8_t& status);
+	// Espera que termine una operacion; initialDelayUs y pollDelayUs ajustan el sondeo sin bloquear de mas.
+	bool waitReady(uint32_t timeoutMs, uint8_t& status, W25N02KvTiming* timing = nullptr,
+		uint16_t initialDelayUs = 0, uint16_t pollDelayUs = 10);
 
 	// Lee dataSize bytes del cache interno desde column.
-	bool readCache(uint16_t column, uint8_t* data, size_t dataSize);
+	bool readCache(uint16_t column, uint8_t* data, size_t dataSize, W25N02KvTiming* timing = nullptr);
 
 	// Transfiere page al cache interno y espera la lectura NAND.
-	bool loadPage(uint32_t page, uint8_t& status);
+	bool loadPage(uint32_t page, uint8_t& status, W25N02KvTiming* timing = nullptr);
 
 	// Calcula CRC32 IEEE de data con longitud dataSize.
 	static uint32_t calculateCrc32(const uint8_t* data, size_t dataSize);
