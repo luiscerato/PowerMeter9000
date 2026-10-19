@@ -2,6 +2,7 @@
 #include "manager_api.h"
 #include "meter.h"
 #include "event_test_pattern.h"
+#include "memory_diagnostics.h"
 #include <WiFi.h>
 #include <cstring>
 #include <atomic>
@@ -16,7 +17,7 @@ static const uint8_t maxWaveBlocks = 6;
 static const uint16_t waveHeaderBytes = 128;
 static const uint16_t waveFrameBytes = 8064;
 static const uint16_t waveSamplesPerBlock = 768;
-static const uint16_t fastRmsSampleBytes = 16;
+static const uint16_t fastRmsSampleBytes = sizeof(fastRMSData_t);
 static const uint16_t waveChannels = 7;
 static const uint32_t waveMinFreeHeap = 30 * 1024;
 static const uint32_t eventNotifyPeriodMs = 5000;
@@ -258,7 +259,7 @@ static bool allocateWaveBlockLocked(EventEntry& entry, uint8_t blockIndex)
 {
 	if (blockIndex >= maxWaveBlocks) return false;
 	if (entry.waveBlocks[blockIndex] != nullptr) return true;
-	if (ESP.getFreeHeap() < waveFrameBytes + waveMinFreeHeap) return false;
+	if (!memoryHasRoom(waveFrameBytes, waveMinFreeHeap)) return false;
 	entry.waveBlocks[blockIndex] = (uint8_t*)malloc(waveFrameBytes);
 	if (entry.waveBlocks[blockIndex] == nullptr) return false;
 	if (blockIndex >= entry.waveReservedBlocks) entry.waveReservedBlocks = blockIndex + 1;
@@ -303,8 +304,8 @@ static size_t getWaveSizeLocked(const EventEntry& entry)
 // dest: JSON destino al que se agregan los campos.
 static void appendFastRmsLayoutJson(String& dest)
 {
-	dest += ",\"channels\":[\"vr\",\"vs\",\"vt\",\"ir\",\"is\",\"it\",\"in\"]";
-	dest += ",\"scales\":{\"voltageVPerBit\":0.01,\"currentAPerBit\":0.01}";
+	dest += ",\"channels\":[\"vr\",\"vs\",\"vt\",\"ir\",\"is\",\"it\",\"in\",\"vn\"],\"sampleBytes\":16,\"channelBits\":14,\"noData\":16383";
+	dest += ",\"scales\":{\"voltageVPerBit\":0.025,\"currentAPerBit\":0.01}";
 }
 
 // Agrega la descripcion de canales y escalas del binario Wave.
@@ -346,7 +347,7 @@ static void buildEventJsonLocked(const EventEntry& entry, String& dest, bool inc
 	dest += ",\"fastRms\":{\"available\":";
 	dest += entry.fastRmsAvailable ? "true" : "false";
 	if (entry.fastRmsAvailable) {
-		dest += ",\"channelCount\":7,\"sampleRateHz\":100,\"sampleCount\":";
+		dest += ",\"channelCount\":8,\"sampleRateHz\":100,\"sampleCount\":";
 		dest += String(entry.fastRmsSize / fastRmsSampleBytes);
 		appendFastRmsLayoutJson(dest);
 		dest += ",\"triggerSample\":";
@@ -379,13 +380,11 @@ static void buildEventJsonLocked(const EventEntry& entry, String& dest, bool inc
 		dest += ",\"reason\":";
 		appendJsonString(dest, entry.waveReason);
 	}
-	dest += "},\"links\":{\"fastRms\":\"/api/v1/events/fast-rms?eventId=";
+	dest += "},\"links\":{\"fastRms\":\"/events/fast-rms?eventId=";
 	dest += entry.eventId;
-	dest += "\",\"wave\":\"/api/v1/events/wave?eventId=";
+	dest += "\",\"wave\":\"/events/wave?eventId=";
 	dest += entry.eventId;
-	dest += "\",\"clear\":\"/api/v1/events/clear?eventId=";
-	dest += entry.eventId;
-	dest += "\"}}";
+	dest += "\",\"clear\":\"/events/clear\"}}";
 }
 
 // Publica la notificacion MQTT final de una entrada aun disponible.
@@ -440,7 +439,7 @@ bool eventStoreCreateRampTest(String& eventId, String& reason)
 	entry.fastRmsTriggerSample = 0;
 	const size_t rmsSize = 300 * fastRmsSampleBytes;
 	const size_t rawSize = 128 * 7 * sizeof(int32_t);
-	bool complete = ESP.getFreeHeap() >= waveMinFreeHeap + rmsSize + rawSize + maxWaveBlocks * waveFrameBytes;
+	bool complete = memoryHasRoom(rmsSize + rawSize + maxWaveBlocks * waveFrameBytes, waveMinFreeHeap);
 	std::unique_ptr<int32_t[]> raw(complete ? new (std::nothrow) int32_t[128 * 7] : nullptr);
 	complete = complete && raw != nullptr;
 	if (complete) entry.fastRmsData = (uint8_t*)malloc(rmsSize);
@@ -460,9 +459,11 @@ bool eventStoreCreateRampTest(String& eventId, String& reason)
 	if (complete) {
 		for (uint16_t sample = 0; sample < 300; sample++) {
 			uint16_t offset = sample * fastRmsSampleBytes;
-			writeLe16(entry.fastRmsData, offset, sample * 10);
-			for (uint8_t channel = 0; channel < 7; channel++)
-				writeLe16(entry.fastRmsData, offset + 2 + channel * 2, sample + 1);
+			fastRMSData_t packed;
+			packed.timeStamp = sample * 10;
+			for (uint8_t channel = 0; channel < 8; channel++)
+				packed.setRaw(channel, sample + 1);
+			memcpy(entry.fastRmsData + offset, &packed, sizeof(packed));
 		}
 		entry.fastRmsSize = rmsSize;
 		entry.fastRmsAvailable = entry.fastRmsFinalized = true;
@@ -600,7 +601,7 @@ bool eventStoreStartWave(const String& eventId, uint64_t timestampMs, int64_t tr
 		}
 		entry.waveReservedBlocks = 0;
 		entry.waveFinalized = true;
-		entry.waveReason = ESP.getFreeHeap() < waveFrameBytes + waveMinFreeHeap ? "insufficient_heap" : "allocation_failed";
+		entry.waveReason = !memoryHasRoom(waveFrameBytes, waveMinFreeHeap) ? "insufficient_heap" : "allocation_failed";
 	}
 	else {
 		entry.waveCapturing = true;

@@ -26,6 +26,21 @@ function body(source, signature) {
 
 const meter = readCode('src/meter.cpp');
 const task = body(meter, 'void MeterTask(');
+const record = body(meter, 'static void meterRecordFastRmsSample(');
+assert.match(record, /bl0942.startFastSample\(\)/);
+assert.doesNotMatch(record, /meterFastDataSamplePush/);
+const neutral = body(meter, 'static void meterPollNeutralSamples(');
+assert.ok(neutral.indexOf('bl0942.loop()') < neutral.indexOf('bl0942.getFastVoltage()'));
+assert.doesNotMatch(neutral, /\b(?:delay|vTaskDelay|readBytes|flush)\s*\(/);
+const finish = body(meter.replace(/\r\n/g, '\n'), 'static void meterFinishFastRmsSample(bool force)\n{');
+assert.match(finish, /bl0942.isFastSamplePending\(\)/);
+assert.match(finish, /meterFastDataSamplePush\(pendingFastSample.sampleMs, pendingFastSample.timestamp\)/);
+assert.ok(finish.indexOf('meterApplyFastRms(') < finish.indexOf('meterFastDataSamplePush('));
+const half = body(meter, 'void meterReadHalfRMS(');
+assert.ok(half.indexOf('meterFinishFastRmsSample(true)') < half.indexOf('ade.ReadHalfVoltageRMSRegs'));
+assert.match(half, /pendingFastSample.timestamp =/);
+for (const signature of ['if (status0.RMSONERDY)', 'if (forcedFastRms &&'])
+    assert.match(body(task, signature), /meterRecordFastRmsSample\(lastEventMs\)/);
 const irq = body(task, 'while (digitalRead(pinAdeInt0) == 0)');
 const wave = irq.indexOf('if (status0.PAGE_FULL)');
 assert.ok(wave > irq.indexOf('ade.clearStatusBit0(status0.raw)'));

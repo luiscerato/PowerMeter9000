@@ -197,7 +197,7 @@ board.getState = function (done = undefined, fail = undefined, async = true) {
     if (done == undefined && fail == undefined) async = false;
 
     let response;
-    $.ajax({type: "GET", url: board.IP + "/status", timeout: board.timeout, async: async})
+    const request = $.ajax({type: "GET", url: board.IP + "/status", timeout: board.timeout, async: async})
         .done((result) => {
             response = result;
             if (typeof done == "function") done(result);
@@ -206,16 +206,17 @@ board.getState = function (done = undefined, fail = undefined, async = true) {
             response = result;
             if (typeof fail == "function") fail(result);
         });
-    return response;
+    return async ? request : response;
 };
 
 board.getStateRepeat = function (done, fail, period) {
     if (period == undefined) period = board.updateTime;
-    board.getState(done, fail);
-
-    board.getStateRepeat.timer = setInterval(() => {
-        board.getState(done, fail);
-    }, period);
+    clearTimeout(board.getStateRepeat.timer);
+    const repeat = () => {
+        const request = board.getState(done, fail);
+        request.always(() => { board.getStateRepeat.timer = setTimeout(repeat, period); });
+    };
+    repeat();
 };
 
 board.getRespone = function (request, done = undefined, fail = undefined, async = true) {
@@ -250,7 +251,7 @@ board.getResponseRepeat = function (request, done, fail, period) {
 board.getWifiList = function (done, fail = () => {}) {
     if (typeof done != "function" || typeof fail != "function") return;
 
-    $.ajax({type: "GET", url: board.IP + "/wifi", timeout: board.timeout})
+    $.ajax({type: "GET", url: board.IP + "/network/scan", timeout: board.timeout})
         .done((data) => {
             if (typeof data == "object" && data.scan != "completed") {
                 board.getWifiList.timer = setTimeout(() => board.getWifiList(done, fail), board.updateTime);
@@ -269,7 +270,7 @@ board.getTime = function (done = undefined, fail = undefined, async = true) {
     if (done == undefined && fail == undefined) async = false;
 
     let response;
-    $.ajax({type: "GET", url: board.IP + "/time", timeout: board.timeout, async: async})
+    $.ajax({type: "GET", url: board.IP + "/clock", timeout: board.timeout, async: async})
         .done((result) => {
             response = result;
             if (typeof done == "function") done(result);
@@ -286,7 +287,7 @@ board.setTime = function (time = Date.now(), done = undefined, fail = undefined,
     time = (new Date(time).getTime() / 1000).toString();
 
     let response;
-    $.ajax({type: "POST", url: board.IP + "/time", timeout: board.timeout, async: async, data: time})
+    $.ajax({type: "POST", url: board.IP + "/clock", timeout: board.timeout, async: async, data: {time}})
         .done((result) => {
             response = result;
             if (typeof done == "function") done(result);

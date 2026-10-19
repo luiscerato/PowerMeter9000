@@ -57,11 +57,6 @@ void managerGetStatusJson(String& dest);
 // dest: String donde se escribe el JSON.
 void managerGetTelemetryCurrentJson(String& dest);
 
-// Arma una respuesta JSON para rutas reservadas no implementadas.
-// dest: String donde se escribe el JSON.
-// resource: nombre corto de la ruta o recurso.
-void managerGetNotImplementedJson(String& dest, const char* resource);
-
 // Escribe un entero uint64_t decimal en el String.
 // dest: String destino.
 // value: valor a serializar.

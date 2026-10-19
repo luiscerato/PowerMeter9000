@@ -6,19 +6,21 @@
 #include "wifiUtils.h"
 #include "event_trigger.h"
 #include "grid_state.h"
+#include "fast_rms_format.h"
 
-#define fastDataSamplesCount 200
+#define fastDataSamplesCount 400
 
-typedef struct {
-	uint16_t timeStamp;		//Ms de la muestra
-	uint16_t VrmsR;			//Voltaje rms de fase R con 2 decimales (rango 0-655.35Vac)
-	uint16_t VrmsS;			//Voltaje rms de fase S con 2 decimales (rango 0-655.35Vac)
-	uint16_t VrmsT;			//Voltaje rms de fase T con 2 decimales (rango 0-655.35Vac)
-	uint16_t IrmsR;			//Corriente rms de fase R con 2 decimales (rango 0-655.35A)
-	uint16_t IrmsS;			//Corriente rms de fase S con 2 decimales (rango 0-655.35A)
-	uint16_t IrmsT;			//Corriente rms de fase T con 2 decimales (rango 0-655.35A)
-	uint16_t IrmsN;			//Corriente rms de neutro con 2 decimales (rango 0-655.35A)
-} fastRMSData_t;
+// Formatea value como numero JSON o null; buffer y size indican el espacio de salida.
+inline const char* meterJsonNumber(float value, char* buffer, size_t size) {
+	snprintf(buffer, size, isfinite(value) ? "%.4f" : "null", value);
+	return buffer;
+}
+
+
+struct fastRmsRingSample {
+	fastRMSData_t data;
+	uint32_t sampleMs;
+};
 
 class capturedEvent {
 	fastRMSData_t* data;
@@ -140,9 +142,9 @@ public:
  
 		for (uint32_t i = start; i < end; i++) {
 			fastRMSData_t sample = data[i];
-			debugI("[%03d] %6d -> %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f", i, sample.timeStamp,
-			(float)sample.VrmsR*0.01, (float)sample.VrmsS*0.01,(float)sample.VrmsT*0.01,
-			(float)sample.IrmsR*0.01, (float)sample.IrmsS*0.01, (float)sample.IrmsT*0.01, (float)sample.IrmsN*0.01);
+			debugI("[%03d] %6d -> %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f %3.3f", i, sample.timeStamp,
+			sample.getValue(0), sample.getValue(1), sample.getValue(2),
+			sample.getValue(3), sample.getValue(4), sample.getValue(5), sample.getValue(6), sample.getValue(7));
 		}
 	};
 
@@ -349,12 +351,12 @@ struct phaseValues
 	phaseEvent_t overCurrent;
 
 	phaseValues() {
-		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = AngleV = AngleI = 0.0;
+		Vrms = VVrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = AngleV = AngleI = Watt_H = VAR_H = VA_H = 0.0;
 		Name[0] = 0;
 	};
 
 	phaseValues(const char* name) {
-		Vrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = 0.0;
+		Vrms = VVrms = Irms = Watt = VAR = VA = PowerFactor = Vthd = Ithd = AngleVI = AngleV = AngleI = Watt_H = VAR_H = VA_H = 0.0;
 		strncpy(Name, name, sizeof(Name) - 1);
 		Name[7] = 0;
 
@@ -386,15 +388,17 @@ struct phaseValues
 
 	String getJson() {
 		const uint32_t strSize = 1024;
+		char voltageJson[24], fastVoltageJson[24];
 		String res;
 		char* str = (char*)malloc(strSize);
 		if (str == nullptr) return res;
 
-		snprintf(str, strSize, "{\"name\":\"%s\",\"vrms\":%.4f,\"vvrms\":%.4f,\"irms\":%.4f,\"fvrms\":%.4f,\"firms\":%.4f,"
+		snprintf(str, strSize, "{\"name\":\"%s\",\"vrms\":%s,\"vvrms\":%.4f,\"irms\":%.4f,\"fvrms\":%s,\"firms\":%.4f,"
 			"\"freq\":%.2f,\"pf\":%.4f,\"angle\":%.2f,\"vthd\":%.2f,\"ithd\":%.2f,"
 			"\"watt\":%.4f,\"var\":%.4f,\"va\":%.4f,"
 			"\"watth\":%.4f,\"varh\":%.4f,\"vah\":%.4f}",
-			Name, Vrms, VVrms, Irms, FastVrms, FastIrms,
+			Name, meterJsonNumber(Vrms, voltageJson, sizeof(voltageJson)), VVrms, Irms,
+			meterJsonNumber(FastVrms, fastVoltageJson, sizeof(fastVoltageJson)), FastIrms,
 			Freq, PowerFactor, AngleVI, Vthd, Ithd,
 			Watt, VAR, VA,
 			Watt_H, VAR_H, VA_H);
@@ -407,10 +411,12 @@ struct phaseValues
 struct meterValues
 {
 	gridCondition gridState = gridCondition::unknown;
+	uint32_t gridStateChangedAtMs = 0;
 	phaseValues phaseR;
 	phaseValues phaseS;
 	phaseValues phaseT;
 	phaseValues neutral;
+	bool neutralFastValid = false;
 	struct {
 		float Watt;
 		float VAR;
@@ -475,6 +481,7 @@ struct meterValues
 	// Mantener los serializadores separados evita acumular sus buffers en la pila de async_tcp.
 	// dest recibe el JSON de las mediciones actuales.
 	__attribute__((noinline)) void getJsonBasic(String& dest) {
+		char neutralJson[24], fastNeutralJson[24];
 		const uint32_t strSize = 1280;
 		char* str = (char*)malloc(strSize);
 		if (str == nullptr) {
@@ -482,32 +489,39 @@ struct meterValues
 			return;
 		};
 
-		snprintf(str, strSize, "{\"vrms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f,\"avg\":%.3f},"
+		snprintf(str, strSize, "{\"vrms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%s,\"avg\":%.3f},"
 			"\"vvrms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f},"
 			"\"irms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f,\"avg\":%.3f},"
+			"\"pf\":{\"r\":%.4f,\"s\":%.4f,\"t\":%.4f,\"tot\":%.4f},"
 			"\"watt\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
 			"\"var\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
 			"\"va\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
-			"\"wattH\":%.3f,\"varH\":%.3f,\"vaH\":%.3f,\"freq\":%.2f,"
-			"\"gridState\":{\"r\":\"%s\",\"s\":\"%s\",\"t\":\"%s\",\"overall\":\"%s\"}}",
-			phaseR.Vrms, phaseS.Vrms, phaseT.Vrms, neutral.Vrms, average.Vrms,
+			"\"wattH\":%.3f,\"varH\":%.3f,\"vaH\":%.3f,\"freq\":%.2f,\"fastVn\":%s,"
+			"\"gridState\":{\"r\":\"%s\",\"s\":\"%s\",\"t\":\"%s\",\"overall\":\"%s\"},"
+			"\"gridStateAgeMs\":{\"r\":%lu,\"s\":%lu,\"t\":%lu,\"overall\":%lu}}",
+			phaseR.Vrms, phaseS.Vrms, phaseT.Vrms, meterJsonNumber(neutral.Vrms, neutralJson, sizeof(neutralJson)), average.Vrms,
 			phaseR.VVrms, phaseS.VVrms, phaseT.VVrms, average.VVrms,
 			phaseR.Irms, phaseS.Irms, phaseT.Irms, neutral.Irms, average.Irms,
+			phaseR.PowerFactor, phaseS.PowerFactor, phaseT.PowerFactor, average.PowerFactor,
 			phaseR.Watt, phaseS.Watt, phaseT.Watt, average.Watt, power.Watt,
 			phaseR.VAR, phaseS.VAR, phaseT.VAR, average.VAR, power.VAR,
 			phaseR.VA, phaseS.VA, phaseT.VA, average.VA, power.VA,
-			energy.Watt_H, energy.VAR_H, energy.VA_H, average.Freq,
+			energy.Watt_H, energy.VAR_H, energy.VA_H, average.Freq, meterJsonNumber(neutral.FastVrms, fastNeutralJson, sizeof(fastNeutralJson)),
 			phaseStateName(phaseR.gridState.state), phaseStateName(phaseS.gridState.state),
-			phaseStateName(phaseT.gridState.state), gridStateName(gridState));
+			phaseStateName(phaseT.gridState.state), gridStateName(gridState),
+			static_cast<unsigned long>(millis() - phaseR.gridState.changedAtMs),
+			static_cast<unsigned long>(millis() - phaseS.gridState.changedAtMs),
+			static_cast<unsigned long>(millis() - phaseT.gridState.changedAtMs),
+			static_cast<unsigned long>(millis() - gridStateChangedAtMs));
 		dest = str;
 		free(str);
 	}
 
 	__attribute__((noinline)) void getJsonFastMeasures(String& dest) {
-		char str[128];
-		snprintf(str, sizeof(str), "{\"fastV\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f},"
+		char str[192], neutralJson[24];
+		snprintf(str, sizeof(str), "{\"fastV\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%s},"
 			"\"fastI\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f}}",
-			phaseR.FastVrms, phaseS.FastVrms, phaseT.FastVrms, neutral.Vrms,
+			phaseR.FastVrms, phaseS.FastVrms, phaseT.FastVrms, meterJsonNumber(neutral.FastVrms, neutralJson, sizeof(neutralJson)),
 			phaseR.FastIrms, phaseS.FastIrms, phaseT.FastIrms, neutral.FastIrms);
 		dest = str;
 	}
@@ -579,7 +593,7 @@ void MeterTask(void* arg);
 // Copia una mitad Wave usando la seleccion original del osciloscopio; sin parametros.
 void readWaveBuffer();
 
-// Devuelve las ultimas lecturas Wave para diagnostico; dest recibe el JSON.
+// Devuelve metricas del osciloscopio y fragmentos Wave recientes; dest recibe el JSON.
 void meterGetWaveDiagnostics(String& dest);
 
 void scaleBuffer(WFBFixedDataRate_t* samplesBuffer, int32_t samplesCount, float voltage, float current);
@@ -595,12 +609,17 @@ void acEventsWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
 
 void meterCheckEvents();
 
-void meterFastDataSamplePush();
+// Guarda los canales actuales; sampleMs es monotono y timestamp conserva la hora ADE original.
+void meterFastDataSamplePush(uint32_t sampleMs, uint16_t timestamp);
 
 uint16_t meterFastDataSampleGetIndex();
 
 
 fastRMSData_t *meterGetFastDataSample(uint32_t sample);
+
+// Copia muestras Fast dentro del intervalo monotónico inclusivo, ordenadas de antigua a nueva.
+// fromMs/toMs delimitan el rango y dest/maxSamples describen el destino disponible.
+uint16_t meterCopyFastSamples(uint32_t fromMs, uint32_t toMs, fastRmsRingSample* dest, uint16_t maxSamples);
 
 void meterReadWaveBuffer();
 
@@ -613,8 +632,6 @@ void meterRead1012RMS();
 void meterReadPower();
 
 void meterReadTHD();
-
-void meterReadPowerFactor();
 
 void meterReadPeriods();
 

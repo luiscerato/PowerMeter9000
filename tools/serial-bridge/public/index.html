@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Power Meter Serial Bridge</title>
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<main>
+		<header>
+			<div>
+				<h1>Serial Bridge</h1>
+				<p>Monitor USB del Power Meter</p>
+			</div>
+			<span id="status" class="status">Desconectado</span>
+		</header>
+
+		<section class="controls" aria-label="Controles del puerto serie">
+			<button id="connect" type="button">Abrir puerto serie</button>
+			<button id="disconnect" type="button" disabled>Cerrar</button>
+			<button id="clear" type="button" class="secondary">Limpiar</button>
+			<button id="save" type="button" class="secondary">Guardar log</button>
+			<span class="baud">115200 baudios</span>
+		</section>
+
+		<p id="notice" class="notice" role="status"></p>
+		<textarea id="console" aria-label="Salida del puerto serie" readonly spellcheck="false"></textarea>
+		<footer><span id="received">0 bytes</span><span>Conecta el monitor antes de iniciar la prueba.</span></footer>
+	</main>
+	<script type="module" src="/app.js"></script>
+</body>
+</html>

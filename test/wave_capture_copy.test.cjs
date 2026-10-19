@@ -54,6 +54,8 @@ struct Heap {
     constexpr size_t getFreeHeap() const { return 160000; }
 };
 constexpr Heap ESP;
+// Simula margen suficiente; size/margin describen la reserva, las fallas se inyectan en el pool.
+constexpr bool memoryHasRoom(size_t size, size_t margin) { return size + margin <= ESP.getFreeHeap(); }
 // Copia count bytes de src a dest; reemplaza memcpy para evaluar C++ en compilacion.
 constexpr void copyBytes(uint8_t* dest, const uint8_t* src, size_t count) {
     for (size_t i = 0; i < count; i++) dest[i] = src[i];

@@ -1,157 +1,138 @@
-#ifndef __BL0942H
-#define __BL0942H
+#pragma once
 
-#include "Arduino.h"
+#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
-
-
-// The BL0942 IC is "calibration-free", which means that it doesn't care
-// at all about calibration, and that's left to software. It measures a
-// voltage differential on its IP/IN pins which linearly proportional to
-// the current flow, and another on its VP pin which is proportional to
-// the line voltage. It never knows the actual calibration; the values
-// it reports are solely in terms of those inputs.
-//
-// The datasheet refers to the input voltages as I(A) and V(V), both
-// in millivolts. It measures them against a reference voltage Vref,
-// which is typically 1.218V (but that absolute value is meaningless
-// without the actual calibration anyway).
-//
-// The reported I_RMS value is 305978 I(A)/Vref, and the reported V_RMS
-// value is 73989 V(V)/Vref. So we can calibrate those by applying a
-// simple meter with a resistive load.
-//
-// The chip also measures the phase difference between voltage and
-// current, and uses it to calculate the power factor (cos φ). It
-// reports the WATT value of 3537 * I_RMS * V_RMS * cos φ).
-//
-// It also integrates total energy based on the WATT value. The time for
-// one CF_CNT pulse is 1638.4*256 / WATT.
-//
-// So... how do we calibrate that?
-//
-// Using a simple resistive load and an external meter, we can measure
-// the true voltage and current for a given V_RMS and I_RMS reading,
-// to calculate BL0942_UREF and BL0942_IREF. Those are in units of
-// "305978 counts per amp" or "73989 counts per volt" respectively.
-//
-// We can derive BL0942_PREF from those. Let's eliminate the weird
-// factors and express the calibration in plain counts per volt/amp:
-// UREF1 = UREF/73989, IREF1 = IREF/305978.
-//
-// Next... the true power in Watts is V * I * cos φ, so that's equal
-// to WATT/3537 * IREF1 * UREF1. Which means
-// BL0942_PREF = BL0942_UREF * BL0942_IREF * 3537 / 305978 / 73989.
-//
-// Finally the accumulated energy. The period of a CF_CNT count is
-// 1638.4*256 / WATT seconds, or 419230.4 / WATT seconds. Which means
-// the energy represented by a CN_CNT pulse is 419230.4 WATT-seconds.
-// Factoring in the calibration, that's 419230.4 / BL0942_PREF actual
-// Watt-seconds (or Joules, as the physicists like to call them).
-//
-// But we're not being physicists today; we we're being engineers, so
-// we want to convert to kWh instead. Which we do by dividing by 1000
-// and then by 3600, so the energy in kWh is
-// CF_CNT * 419230.4 / BL0942_PREF / 3600000
-//
-// Which makes BL0952_EREF = BL0942_PREF * 3600000 / 419430.4
-
-static const float BL0942_PREF = 596;              // taken from tasmota
-static const float BL0942_UREF = 15873.35944299;   // should be 73989/1.218
-static const float BL0942_IREF = 251213.46469622;  // 305978/1.218
-static const float BL0942_EREF = 3304.61127328;    // Measured
-
-struct DataPacket {
-    uint8_t frame_header;
-    uint8_t i_rms[3];
-    uint8_t v_rms[3];
-    uint8_t i_fast_rms[3];
-    uint8_t watt[3];
-    uint8_t cf_cnt[3];
-    uint8_t frequency[2];
-    uint8_t reserved1;
-    uint8_t status;
-    uint8_t reserved2;
-    uint8_t reserved3;
-    uint8_t checksum;
+struct bl0942Status {
+    uint32_t baud = 0;
+    uint32_t fastRaw = 0;
+    uint32_t voltageRaw = 0; // I_RMS: el canal de corriente mide ahora la tension auxiliar.
+    uint32_t fastSampleUs = 0;
+    uint32_t voltageSampleUs = 0;
+    uint32_t fastReads = 0;
+    uint32_t voltageReads = 0;
+    uint32_t checksumErrors = 0;
+    uint32_t timeouts = 0;
+    uint32_t unexpectedBytes = 0;
+    uint32_t rxBytes = 0, partialResponses = 0;
+    uint32_t fastRequests = 0, rmsRequests = 0, completeResponses = 0;
+    uint32_t emptyTimeouts = 0, lateResponses = 0, maxServiceGapUs = 0;
+    uint32_t txBusy = 0;
+    uint32_t missedPolls = 0;
+    uint32_t maxLatenessUs = 0;
+    uint32_t maxResponseUs = 0;
+    uint32_t maxGapUs = 0;
+    float voltage = NAN;
+    float fastVoltage = NAN;
+    bool ready = false;
 };
 
-enum LineFrequency : uint8_t {
-    LINE_FREQUENCY_50HZ = 50,
-    LINE_FREQUENCY_60HZ = 60,
+struct neutralCalibration {
+    const char* status = "idle";
+    const char* error = "";
+    uint8_t phase = 0;
+    uint32_t samples = 0, rmsSamples = 0;
+    float reference = 0;
+    float rmsFactor = 1, fastFactor = 1;
 };
 
-
-class BL0942 : private HardwareSerial
-{
+class BL0942 : private HardwareSerial {
 public:
-    BL0942(uint8_t serialPortNumber) :HardwareSerial(serialPortNumber) {
-    };
+    // Selecciona el periferico UART; serialPortNumber identifica la UART del ESP32.
+    explicit BL0942(uint8_t serialPortNumber) : HardwareSerial(serialPortNumber) {}
 
-    void begin();
+    // Detecta la UART y configura el chip antes de iniciar MeterTask; rx y tx son los pines.
     void begin(int32_t rx, int32_t tx);
-    void loop();
-    void dump_config();
 
-    float getVoltage() { return v_rms; };
-    float getCurrent() { return i_rms; };
-    float getPower() { return watt; };
-    float getEnergy() { return watt; };
-    float getFrequency() { return frequency; };
+    // Atiende UART sin bloquear; allowSlowRead permite intercalar RMS comun despues de Fast.
+    bool loop(bool allowSlowRead = true);
 
-    void setLineFreq(LineFrequency freq) { this->line_freq_ = freq; }
-    void setChipAddress(uint8_t address) { this->address_ = address; }
-    void setReset(bool reset) { this->reset_ = reset; }
-    void setCurrentReference(float current_ref) {
-        this->current_reference_ = current_ref;
-        this->current_reference_set_ = true;
-    }
-    void setEnergyReference(float energy_ref) {
-        this->energy_reference_ = energy_ref;
-        this->energy_reference_set_ = true;
-    }
-    void setPowerReference(float power_ref) {
-        this->power_reference_ = power_ref;
-        this->power_reference_set_ = true;
-    }
-    void setVoltageReference(float voltage_ref) {
-        this->voltage_reference_ = voltage_ref;
-        this->voltage_reference_set_ = true;
+    // Inicia el turno disparado por el ADE; sin parametros, no espera la respuesta UART.
+    bool startFastSample();
+    // Indica si el turno actual sigue esperando; sin parametros, solo MeterTask.
+    bool isFastSamplePending() const { return fastCyclePending; }
+    // Devuelve exclusivamente el resultado del turno actual; sin parametros, NAN si fallo.
+    float getCycleFastVoltage() const { return fastCycleVoltage; }
+
+    // Devuelve la espera hasta el proximo servicio UART; sin parametros, usar solo desde MeterTask.
+    uint32_t timeUntilPollUs() const;
+
+    // Devuelve I_RMS escalado a voltios; sin parametros, usar desde MeterTask.
+    float getVoltage() const { return state.voltage; }
+
+    // Devuelve la estimacion rapida con la escala actual; sin parametros, usar desde MeterTask.
+    float getFastVoltage() const { return state.fastVoltage; }
+
+    // Verifica antiguedad maxima maxAgeUs de la ultima muestra; usar solo desde MeterTask.
+    bool hasFastSample(uint32_t maxAgeUs) const {
+        return state.fastReads && uint32_t(micros() - state.fastSampleUs) <= maxAgeUs;
     }
 
+    // Copia valores y contadores para diagnostico desde cualquier tarea; sin parametros.
+    bl0942Status getStatus();
+
+    // Informa cambios de conexion y metricas verbose desde el loop principal; sin parametros.
+    void pollDiagnostics();
+
+    // Solicita calibracion asincrona; phase selecciona R=0, S=1 o T=2.
+    bool startCalibration(uint8_t phase);
+    // Copia el resultado y los factores vigentes; sin parametros, admite cualquier tarea.
+    neutralCalibration getCalibration();
+    // Acumula un segundo desde MeterTask; r/s/t son los voltajes RMS actuales del ADE.
+    void pollCalibration(float r, float s, float t);
 
 private:
-    float v_rms = 0.0;
-    float i_rms = 0.0;
-    float watt = 0.0;
-    float total_energy_consumption = 0.0;
-    float frequency = 0.0;
+    // Configura UART y recepcion inmediata de tramas cortas; baud es la velocidad requerida.
+    void beginUart(uint32_t baud);
+    // Reintenta deteccion y configuracion sin esperar respuestas; nowUs es el tiempo actual.
+    void pollInitialization(uint32_t nowUs);
+    // Reinicia la deteccion tras fallos; nowUs fija la pausa antes del siguiente intento.
+    void retryInitialization(uint32_t nowUs);
+    // Aplica configuracion; rx/tx son pines y currentBaud es la velocidad detectada.
+    bool setup(int32_t rx, int32_t tx, uint32_t currentBaud);
+    // Escribe reg con value durante el arranque; no usar desde MeterTask.
+    void writeReg(uint8_t reg, uint32_t value);
+    // Lee reg durante el arranque; devuelve -1 si no hay respuesta valida.
+    int32_t readReg(uint8_t reg);
+    // Solicita reg sin esperar; nowUs es el inicio de la transaccion.
+    bool requestReg(uint8_t reg, uint32_t nowUs);
+    // Valida la respuesta pendiente; nowUs es el instante en que se procesa.
+    bool acceptResponse(uint32_t nowUs);
+    // Recupera la UART despues de un fallo; nowUs indica cuando ocurrio.
+    void recover(uint32_t nowUs);
+    // Copia el estado privado a una instantanea protegida; sin parametros.
+    void publishState();
+    // Guarda los factores desde el loop principal; sin parametros, no bloquea MeterTask.
+    void saveCalibration();
 
-    uint32_t get24bReg(uint8_t *reg);
-    void setup();
-    void update();
-    bool validate_checksum_(DataPacket* data);
-    int read_reg_(uint8_t reg);
-    void write_reg_(uint8_t reg, uint32_t val);
-    void received_package_(DataPacket* data);
-    // Divide by this to turn into Watt
-    float power_reference_ = BL0942_PREF;
-    bool power_reference_set_ = false;
-    // Divide by this to turn into Volt
-    float voltage_reference_ = BL0942_UREF;
-    bool voltage_reference_set_ = false;
-    // Divide by this to turn into Ampere
-    float current_reference_ = BL0942_IREF;
-    bool current_reference_set_ = false;
-    // Divide by this to turn into kWh
-    float energy_reference_ = BL0942_EREF;
-    bool energy_reference_set_ = false;
-    uint8_t address_ = 0;
-    bool reset_ = false;
-    LineFrequency line_freq_ = LINE_FREQUENCY_50HZ;
-    uint32_t rx_start_ = 0;
-    uint32_t prev_cf_cnt_ = 0;
-    uint32_t updateTime = 0;
+    // Conserva la escala anterior como referencia para IP a 4x; pendiente calibrar el divisor real.
+    float voltageReference = 15873.35944299f;
+    bl0942Status state, publishedState;
+    portMUX_TYPE stateMutex = portMUX_INITIALIZER_UNLOCKED;
+    uint32_t nextFastUs = 0;
+    uint32_t nextVoltageUs = 0;
+    uint32_t lastServiceUs = 0;
+    uint32_t requestUs = 0;
+    uint32_t recoveryUntilUs = 0;
+    uint32_t diagnosticTimeMs = 0;
+    uint32_t diagnosticFastReads = 0;
+    uint32_t diagnosticVoltageReads = 0;
+    uint8_t pendingRegister = 0;
+    uint8_t response[4] = {};
+    uint8_t responseLength = 0;
+    bool recovering = false;
+    bool diagnosticReady = false;
+    bool fastCyclePending = false, slowSlotOpen = false;
+    float fastCycleVoltage = NAN;
+    int32_t uartRx = -1, uartTx = -1;
+    uint32_t initializationDueUs = 0;
+    uint8_t initializationStep = 0, baudIndex = 0, consecutiveFailures = 0;
+    neutralCalibration calibration;
+    uint32_t calibrationStartUs = 0, calibrationFastReads = 0, calibrationRmsReads = 0;
+    double calibrationFastSum = 0, calibrationRmsSum = 0, calibrationReferenceSum = 0;
+    float referenceMin = 0, referenceMax = 0;
+    uint32_t fastMin = 0, fastMax = 0;
+    float rmsFactor = 1, fastFactor = 1;
+    float pendingRmsFactor = 1, pendingFastFactor = 1;
 };
-
-#endif

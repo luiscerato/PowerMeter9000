@@ -6,7 +6,7 @@
         <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
         <meta http-equiv="Pragma" content="no-cache" />
         <meta http-equiv="Expires" content="0" />
-        <link rel="icon" type="image/x-icon" href="favicon.ico" />
+        <link rel="icon" type="image/png" href="favicon.png" />
     </head>
     <body>
         <div id="bootLoader" style="position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #f5f5f5; z-index: 9999; padding: 1rem;">
@@ -14,9 +14,9 @@
 </textarea>
 </div>
 <script>
-const bootStyles = ["style.css","lib/bootstrap.min.css","lib/jquery.simplegauge.css"];
-const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","lib/char-lcd.js","board.js","scope.js","index.js","scope_ui.js","script.js"];
-const bootBuild = "20260916-settings-ui";
+const bootStyles = ["lib/bootstrap.min.css","lib/jquery.simplegauge.css","style.css"];
+const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","board.js","scope.js","logs_ui.js","index.js","history_ui.js","grid_events_ui.js","scope_ui.js","script.js"];
+const bootBuild = "20261003-logs-format-v1";
 
 // Agrega una linea al progreso de carga.
 // message: texto que se muestra en el textarea.
@@ -75,10 +75,15 @@ async function bootApp() {
 
 bootApp();
 </script>
-        <div id="appRoot" style="display: none;">
+<div id="appRoot" style="display: none;">
         <div id="navbar"><nav id="codeNavBar" class="navbar navbar-expand-md navbar-light appSidebar" aria-label="Navegación principal">
     <div class="container-fluid">
-        <a class="navbar-brand" href="#home">PowerMeter <small class="d-block text-muted">ADE9000</small></a>
+        <div class="sidebarHeader">
+            <a class="navbar-brand" href="#home">PowerMeter <small class="d-block text-muted">ADE9000</small></a>
+            <button id="sidebarToggle" class="btn btn-sm btn-outline-secondary sidebarToggle" type="button" aria-label="Contraer menú" aria-expanded="true" title="Contraer menú">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3zm0 6h18v2H3zm0 6h18v2H3zM7 8l-4 4 4 4v-3h5v-2H7z"/></svg>
+            </button>
+        </div>
         <form class="d-flex align-items-center d-none p-1" style="height: 30px" role="search" id="navServerIP">
             <input class="form-control form-control-sm me-2" type="text" placeholder="IP de la placa ESP32" value="192.168.1.0" id="inputBoardURL" aria-label="IP de la placa" required />
             <button class="btn btn-sm btn-outline-light p-1" type="button" id="btnReloadIP">↻</button>
@@ -88,11 +93,14 @@ bootApp();
         </button>
         <div class="collapse navbar-collapse" id="navbarNavAltMarkup">
             <div class="navbar-nav w-100">
-                <a class="nav-link app-page-link" href="#home" id="navindex" data-page="home">Resumen</a>
-                <a class="nav-link app-page-link" href="#allMeasures" id="allMeasures-tab" data-page="allMeasures">Mediciones</a>
-                <a class="nav-link app-page-link" href="#events" id="events-tab" data-page="events">Eventos</a>
-                <a class="nav-link app-page-link" href="#scopePage" id="navscope" data-page="scopePage">Osciloscopio</a>
-                <a class="nav-link app-page-link" href="#settings" id="settings-tab" data-page="settings">Configuración</a>
+                <a class="nav-link app-page-link" href="#home" id="navindex" data-page="home" title="Resumen"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3zm2 1V19h2v-6h10v6h2v-7.5l-7-5.83z"/></svg><span class="navLabel">Resumen</span></a>
+                <a class="nav-link app-page-link" href="#allMeasures" id="allMeasures-tab" data-page="allMeasures" title="Mediciones"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h3V9H4zm6 0h4V4h-4zm7 0h3v-7h-3z"/></svg><span class="navLabel">Mediciones</span></a>
+                <a class="nav-link app-page-link" href="#history" id="history-tab" data-page="history" title="Histórico"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 1 1-8.94 10h2.02A7 7 0 1 0 8 7.1L11 10H4V3l2.58 2.58A8.96 8.96 0 0 1 13 3m-1 5h2v4.2l3 1.8-1 1.7-4-2.4z"/></svg><span class="navLabel">Histórico</span></a>
+                <a class="nav-link app-page-link" href="#events" id="events-tab" data-page="events" title="Eventos"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2m0 16H5V9h14zm-9-3 6-5-1.3-1.5-4.5 3.8-2.1-1.8L6.8 14z"/></svg><span class="navLabel">Eventos</span></a>
+				<a class="nav-link app-page-link" href="#logs" id="logs-tab" data-page="logs" title="Logs"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zm2 2v12h12V6zm2 2h8v2H8zm0 4h8v2H8z"/><path d="M9 9h1v1H9zm0 4h1v1H9z"/></svg><span class="navLabel">Logs</span></a>
+				<a class="nav-link app-page-link" href="#gridEvents" id="gridEvents-tab" data-page="gridEvents" title="Red"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a2 2 0 0 0-2 2c0 .74.4 1.38 1 1.72v2.34L6 10.8a2 2 0 1 0 1 1.73l5-2.74 5 2.74a2 2 0 1 0 1-1.73l-5-2.74V5.72A2 2 0 0 0 12 2M4 16a2 2 0 1 0 2 2c0-.27-.05-.52-.15-.75L12 13.9l6.15 3.35A2 2 0 1 0 19 16l-7-3.8z"/></svg><span class="navLabel">Red</span></a>
+                <a class="nav-link app-page-link" href="#scopePage" id="navscope" data-page="scopePage" title="Osciloscopio"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3zm2 2v12h14V6zm1 7h2l2-5 3 8 2-5h2v2h-1l-2 5h-2l-2.5-6.6-1.5 3.6H6z"/></svg><span class="navLabel">Osciloscopio</span></a>
+                <a class="nav-link app-page-link" href="#settings" id="settings-tab" data-page="settings" title="Configuración"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="m19.4 13 .1-1-.1-1 2-1.6-2-3.5-2.4 1a8 8 0 0 0-1.7-1L15 3h-4l-.4 2.9a8 8 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.6-.1 1 .1 1-2 1.6 2 3.5 2.4-1a8 8 0 0 0 1.7 1L11 22h4l.4-2.9a8 8 0 0 0 1.7-1l2.4 1 2-3.5zM13 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8"/></svg><span class="navLabel">Configuración</span></a>
             </div>
         </div>
     </div>
@@ -105,33 +113,37 @@ bootApp();
                 <div class="tab-pane active" id="home" role="region" aria-labelledby="navindex">
                     <div class="row">
                         <div class="col mt-2 mb-2">
-                            <div class="d-flex flex-wrap justify-content-center">
-                                <div>
-                                    <h3 class="text-center">Voltaje</h3>
-                                    <div id="gaugeVoltaje" class="gauge meter"></div>
-                                </div>
-                                <div>
-                                    <h3 class="text-center">Voltaje Fases</h3>
-                                    <div id="gaugeVoltajeF" class="gauge meter"></div>
-                                </div>
-                                <div>
-                                    <h3 class="text-center">Corriente</h3>
-                                    <div id="gaugeCorriente" class="gauge meter"></div>
-                                </div>
-                                <div>
-                                    <h3 class="text-center">Potencia</h3>
-                                    <div id="gaugePotencia" class="gauge meter"></div>
-                                </div>
+                            <div class="meterGaugeGrid">
+                                <section class="meterGaugeItem"><h3>Voltaje</h3><div id="gaugeVoltaje" class="gauge meter"></div></section>
+                                <section class="meterGaugeItem"><h3>Voltaje fases</h3><div id="gaugeVoltajeF" class="gauge meter"></div></section>
+                                <section class="meterGaugeItem"><h3>Corriente</h3><div id="gaugeCorriente" class="gauge meter"></div></section>
+                                <section class="meterGaugeItem"><h3>Potencia total</h3><div id="gaugePotencia" class="gauge meter"></div></section>
                             </div>
                         </div>
                     </div>
 
-                    <div class="d-flex flex-wrap gap-3 px-2 py-2" aria-live="polite">
-                        <span>Red: <span id="gridState_overall" class="text-muted">Sin datos</span></span>
-                        <span>Fase R: <span id="gridState_r" class="text-muted">Sin datos</span></span>
-                        <span>Fase S: <span id="gridState_s" class="text-muted">Sin datos</span></span>
-                        <span>Fase T: <span id="gridState_t" class="text-muted">Sin datos</span></span>
-                    </div>
+                    <section class="gridStatusGrid px-2 py-2" aria-label="Estado de la red y las fases" aria-live="polite">
+                        <div id="gridStatusCard_overall" class="gridStatusCard" data-state="unknown">
+                            <div class="gridStatusTop"><span class="gridStatusLabel">Red</span><span id="gridState_overall" class="gridStatusValue text-muted">Sin datos</span></div>
+                            <div id="gridStateAge_overall" class="gridStatusAge text-muted"></div>
+                            <div class="gridStatusMetric"><span>Neutro-tierra RMS</span><strong class="meter vrmsN">—</strong></div>
+                        </div>
+                        <div id="gridStatusCard_r" class="gridStatusCard" data-state="unknown">
+                            <div class="gridStatusTop"><span class="gridStatusLabel phaseRText">Fase R</span><span id="gridState_r" class="gridStatusValue text-muted">Sin datos</span></div>
+                            <div id="gridStateAge_r" class="gridStatusAge text-muted"></div>
+                            <div class="gridStatusMetrics"><div class="gridStatusMetric"><span>Tensión RMS</span><strong id="gridVoltage_r">—</strong></div><div class="gridStatusMetric"><span>Corriente RMS</span><strong id="gridCurrent_r">—</strong></div></div>
+                        </div>
+                        <div id="gridStatusCard_s" class="gridStatusCard" data-state="unknown">
+                            <div class="gridStatusTop"><span class="gridStatusLabel phaseSText">Fase S</span><span id="gridState_s" class="gridStatusValue text-muted">Sin datos</span></div>
+                            <div id="gridStateAge_s" class="gridStatusAge text-muted"></div>
+                            <div class="gridStatusMetrics"><div class="gridStatusMetric"><span>Tensión RMS</span><strong id="gridVoltage_s">—</strong></div><div class="gridStatusMetric"><span>Corriente RMS</span><strong id="gridCurrent_s">—</strong></div></div>
+                        </div>
+                        <div id="gridStatusCard_t" class="gridStatusCard" data-state="unknown">
+                            <div class="gridStatusTop"><span class="gridStatusLabel phaseTText">Fase T</span><span id="gridState_t" class="gridStatusValue text-muted">Sin datos</span></div>
+                            <div id="gridStateAge_t" class="gridStatusAge text-muted"></div>
+                            <div class="gridStatusMetrics"><div class="gridStatusMetric"><span>Tensión RMS</span><strong id="gridVoltage_t">—</strong></div><div class="gridStatusMetric"><span>Corriente RMS</span><strong id="gridCurrent_t">—</strong></div></div>
+                        </div>
+                    </section>
                     <div class="row p-2">
                         <div class="col-md-6 col-sm-12">
                             <table class="table table-responsive powerTable" style="background-color: rgba(177, 145, 250, 0.1)">
@@ -303,7 +315,7 @@ bootApp();
                                     <tr>
                                         <td>Frecuencia promedio</td>
                                         <td id="cellFAvg" class="valueTable freqAvg">50.00 Hz</td>
-                                        <td>Factor potencia promedio</td>
+                                        <td>Factor potencia total</td>
                                         <td id="cellFPAvg" class="valueTable fpAvg">0.999</td>
                                     </tr>
                                 </tbody>
@@ -346,6 +358,40 @@ bootApp();
                             </table>
                         </div>
                     </div>
+                    <section class="phasorSection" aria-labelledby="phasorTitle">
+                        <div class="phasorHeader">
+                            <div><h2 id="phasorTitle">Fasores de tensión y corriente</h2><p class="text-muted small mb-0">Ángulos medidos por el ADE9000. Cada grupo usa su propia escala de amplitud.</p></div>
+                            <div class="d-flex flex-wrap gap-3" role="group" aria-label="Mostrar vectores">
+                                <label class="form-check form-check-inline mb-0"><input id="phasorShowVoltage" class="form-check-input" type="checkbox" checked><span class="form-check-label">Tensiones</span></label>
+                                <label class="form-check form-check-inline mb-0"><input id="phasorShowCurrent" class="form-check-input" type="checkbox" checked><span class="form-check-label">Corrientes</span></label>
+                            </div>
+                        </div>
+                        <div class="phasorLayout">
+                            <svg id="phasorDiagram" class="phasorDiagram" viewBox="0 0 360 330" role="img" aria-label="Diagrama fasorial de tensiones y corrientes por fase">
+                                <circle class="phasorGrid" cx="165" cy="160" r="120"></circle><circle class="phasorGrid" cx="165" cy="160" r="80"></circle><circle class="phasorGrid" cx="165" cy="160" r="40"></circle>
+                                <line class="phasorAxis" x1="35" y1="160" x2="295" y2="160"></line><line class="phasorAxis" x1="165" y1="30" x2="165" y2="290"></line>
+                                <text class="phasorAxisLabel" x="300" y="164">0°</text><text class="phasorAxisLabel" x="158" y="22">90°</text><text class="phasorAxisLabel" x="10" y="164">180°</text><text class="phasorAxisLabel" x="158" y="310">270°</text>
+                                <g id="phasorVectors">
+                                    <line id="phasorVoltageR" class="phasorVector phasorVoltage phaseRVector" x1="165" y1="160" x2="165" y2="160"></line><circle id="phasorVoltageDotR" class="phasorDot phaseRVector" cx="165" cy="160" r="4"></circle>
+                                    <line id="phasorVoltageS" class="phasorVector phasorVoltage phaseSVector" x1="165" y1="160" x2="165" y2="160"></line><circle id="phasorVoltageDotS" class="phasorDot phaseSVector" cx="165" cy="160" r="4"></circle>
+                                    <line id="phasorVoltageT" class="phasorVector phasorVoltage phaseTVector" x1="165" y1="160" x2="165" y2="160"></line><circle id="phasorVoltageDotT" class="phasorDot phaseTVector" cx="165" cy="160" r="4"></circle>
+                                    <line id="phasorCurrentR" class="phasorVector phasorCurrent phaseRVector" x1="165" y1="160" x2="165" y2="160"></line><circle id="phasorCurrentDotR" class="phasorDot phaseRVector" cx="165" cy="160" r="4"></circle>
+                                    <line id="phasorCurrentS" class="phasorVector phasorCurrent phaseSVector" x1="165" y1="160" x2="165" y2="160"></line><circle id="phasorCurrentDotS" class="phasorDot phaseSVector" cx="165" cy="160" r="4"></circle>
+                                    <line id="phasorCurrentT" class="phasorVector phasorCurrent phaseTVector" x1="165" y1="160" x2="165" y2="160"></line><circle id="phasorCurrentDotT" class="phasorDot phaseTVector" cx="165" cy="160" r="4"></circle>
+                                </g>
+                                <circle class="phasorOrigin" cx="165" cy="160" r="3"></circle>
+                            </svg>
+                            <div class="phasorReadings">
+                                <table class="table table-sm align-middle mb-2"><thead><tr><th>Fase</th><th>V RMS</th><th>I RMS</th><th>∠V-I</th></tr></thead><tbody>
+                                    <tr><th><span class="phaseKey phaseRText">R</span></th><td id="phasorVR">—</td><td id="phasorIR">—</td><td id="phasorAngleR">—</td></tr>
+                                    <tr><th><span class="phaseKey phaseSText">S</span></th><td id="phasorVS">—</td><td id="phasorIS">—</td><td id="phasorAngleS">—</td></tr>
+                                    <tr><th><span class="phaseKey phaseTText">T</span></th><td id="phasorVT">—</td><td id="phasorIT">—</td><td id="phasorAngleT">—</td></tr>
+                                </tbody></table>
+                                <div class="phasorLegend small"><span><i class="phasorLegendLine"></i>Tensión</span><span><i class="phasorLegendLine dashed"></i>Corriente</span></div>
+                                <div id="phasorStatus" class="small text-muted mt-2" aria-live="polite">Esperando mediciones.</div>
+                            </div>
+                        </div>
+                    </section>
                 </div>
                 <div class="tab-pane" id="events" role="region" aria-labelledby="events-tab">
                     <div class="row">
@@ -371,6 +417,27 @@ bootApp();
                         </div> -->
                     </div>
                 </div>
+                <div class="tab-pane" id="logs" role="region" aria-labelledby="logs-tab">
+                    <section class="logsViewer" aria-label="Registro de diagnóstico">
+                        <div class="logsToolbar">
+                            <div>
+                                <div id="logsTitle" class="fw-semibold">RAM reciente</div>
+                                <div id="logsStatus" class="small text-muted" role="status" aria-live="polite">Cargando registros recientes...</div>
+                            </div>
+                            <div class="logsActions">
+                                <button id="logsNand" class="btn btn-sm btn-outline-primary" type="button">Leer RAM + NAND</button>
+                                <button id="logsPrevious" class="btn btn-sm btn-outline-secondary" type="button">Cargar anteriores</button>
+                                <button id="logsStats" class="btn btn-sm btn-outline-secondary" type="button">Actualizar uso</button>
+                                <button id="logsFormat" class="btn btn-sm btn-outline-danger" type="button">Formatear registro</button>
+                                <button id="logsClear" class="btn btn-sm btn-outline-secondary" type="button">Limpiar vista</button>
+                                <label class="form-check form-switch mb-0 logsFollow"><input id="logsFollow" class="form-check-input" type="checkbox" checked><span class="form-check-label">Seguir nuevos</span></label>
+                            </div>
+                        </div>
+                        <div id="logsStorageStats" class="small text-muted mb-2" role="status" aria-live="polite">Consultando uso de la partición de logs...</div>
+                        <textarea id="logsOutput" class="logsOutput" readonly spellcheck="false" aria-label="Mensajes del logger" placeholder="Los mensajes aparecerán aquí."></textarea>
+                        <div class="small text-muted mt-1">El formateo borra solo la partición de diagnóstico; histórico y eventos quedan intactos.</div>
+                    </section>
+                </div>
                 <div class="tab-pane" id="allMeasures" role="region" aria-labelledby="allMeasures-tab">
                     <div class="row p-2">
                         <div class="col divScrollX">
@@ -378,7 +445,50 @@ bootApp();
                         </div>
                     </div>
                 </div>
+                <div class="tab-pane" id="history" role="region" aria-labelledby="history-tab">
+                    <div class="p-2 historyViewer">
+                        <div class="historyControls">
+                            <div class="historyDateFields">
+                                <div class="input-group input-group-sm historyDateRange"><span class="input-group-text">Desde</span><input id="historyFrom" class="form-control" type="datetime-local" step="1" aria-label="Inicio del período histórico"></div>
+								<div class="input-group input-group-sm historyDateRange"><span class="input-group-text">Hasta</span><input id="historyTo" class="form-control" type="datetime-local" step="1" aria-label="Fin del período histórico"></div>
+                            </div>
+                            <div class="historyRangeActions">
+                                <select id="historyPreset" class="form-select form-select-sm historyPreset" aria-label="Períodos predefinidos">
+                                    <optgroup label="Últimos">
+                                        <option value="last-60">Último minuto</option><option value="last-300">Últimos 5 minutos</option><option value="last-1800">Últimos 30 minutos</option><option value="last-3600">Última hora</option><option value="last-7200">Últimas 2 horas</option><option value="last-21600">Últimas 6 horas</option><option value="last-86400">Último día</option><option value="last-604800">Última semana</option>
+                                    </optgroup>
+                                    <optgroup label="Calendario">
+                                        <option value="today">Hoy</option><option value="yesterday">Ayer</option><option value="dayBeforeYesterday">Anteayer</option><option value="lastWeek">Semana pasada</option>
+                                    </optgroup>
+                                </select>
+                                <div class="btn-group btn-group-sm" role="group" aria-label="Desplazar intervalo">
+                                    <button id="historyPrevButton" class="btn btn-outline-secondary" type="button" aria-label="Período anterior" title="Período anterior"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 5.4 14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg></button>
+                                    <button id="historyNextButton" class="btn btn-outline-secondary" type="button" aria-label="Período siguiente" title="Período siguiente"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 18.6 10 20l8-8-8-8-1.4 1.4 6.6 6.6z"/></svg></button>
+                                </div>
+                                <button id="historyLoadButton" class="btn btn-sm btn-primary" type="button">Cargar</button>
+                            </div>
+                        </div>
+						<div class="d-flex flex-wrap gap-1 mb-2" role="group" aria-label="Gráficas históricas"><button class="btn btn-sm btn-outline-primary active historyChartToggle" type="button" data-chart="voltage" aria-pressed="true">Voltajes</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="current" aria-pressed="false">Corrientes</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="activePower" aria-pressed="false">P activa</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="reactivePower" aria-pressed="false">P reactiva</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="apparentPower" aria-pressed="false">P aparente</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="energy" aria-pressed="false">Energía</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="powerFactor" aria-pressed="false">FP</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="frequency" aria-pressed="false">Frecuencia</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="connectivity" aria-pressed="false">Estados</button></div>
+                        <div id="historyViewerStatus" class="small text-muted mb-2" role="status">Seleccione un intervalo para consultar el histórico.</div>
+						<div id="historyChartVoltage" class="historyChart"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+						<div id="historyChartCurrent" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+						<div id="historyChartActivePower" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+						<div id="historyChartReactivePower" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+						<div id="historyChartApparentPower" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+						<div id="historyChartEnergy" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+						<div id="historyChartPowerFactor" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+						<div id="historyChartFrequency" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+						<div id="historyChartConnectivity" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+                    </div>
+                </div>
                 <div class="tab-pane" id="settings" role="region" aria-labelledby="settings-tab"></div>
+				<div class="tab-pane" id="gridEvents" role="region" aria-labelledby="gridEvents-tab">
+					<div class="row p-2"><div class="col-sm-12 col-md-4 col-lg-3 mb-2"><div class="border rounded p-2"><div class="d-flex justify-content-between align-items-center mb-2"><strong>Eventos de red</strong><div class="btn-group btn-group-sm"><button id="gridEventsTest" class="btn btn-outline-warning" type="button">Prueba</button><button id="gridEventsRefresh" class="btn btn-outline-secondary" type="button">Recargar</button></div></div><div id="gridEventsStatus" class="small text-muted mb-2" role="status">Seleccione la pestaña Red para cargar eventos.</div><div id="gridEventsList" class="list-group list-group-flush" style="max-height: 64vh; overflow-y: auto;"></div></div></div><div class="col-sm-12 col-md-8 col-lg-9"><div class="border rounded p-2"><div class="d-flex justify-content-between align-items-center mb-2"><div id="gridEventSummary" class="small text-muted">Seleccione un evento para revisar la captura Fast RMS.</div><div class="btn-group btn-group-sm"><button id="gridEventVoltageToggle" class="btn btn-outline-primary active" type="button" aria-pressed="true">Voltajes</button><button id="gridEventCurrentToggle" class="btn btn-outline-primary" type="button" aria-pressed="false">Corrientes</button></div></div><div class="row g-2"><div class="col-lg-8"><div id="gridEventVoltageChart" class="historyChart"><div class="text-muted p-3">Sin evento cargado.</div></div><div id="gridEventCurrentChart" class="historyChart d-none"><div class="text-muted p-3">Sin evento cargado.</div></div></div><div class="col-lg-4"><div class="border rounded p-2 h-100"><strong class="small">Transiciones</strong><div id="gridEventTransitions" class="small mt-2" style="max-height: 50vh; overflow-y: auto;"><span class="text-muted">Sin evento cargado.</span></div></div></div></div></div></div></div>
+					<details id="gridEventContextDetails" class="mx-2 mb-2 border-top pt-2">
+                        <summary class="small fw-bold">Contexto de medición guardado</summary>
+                        <div id="gridEventContext" class="mt-2"><span class="small text-muted">Seleccione un evento para consultar su contexto.</span></div>
+                    </details>
+				</div>
             </div>
         </div>
         <div id="scopePage" class="appPage container-fluid d-none" role="region" aria-labelledby="navscope">
@@ -553,13 +663,6 @@ bootApp();
             </div>
         </div>
 
-        <div class="content">
-            <div class="content">
-                <div class="card" style="zoom: 1.5">
-                    <div id="lcd"></div>
-                </div>
-            </div>
-        </div>
         </main>
         <div id="divFooter">
     <div style="margin-bottom: 40px; height: 2px"></div>
@@ -570,6 +673,7 @@ bootApp();
                     <div class="col-auto textFooter"><span id="statusWifi">Conectado a</span></div>
                     <div class="col-auto textFooter"><span id="statusIP">IP:</span></div>
                     <div class="col-auto textFooter"><span id="statusHeap">Heap</span></div>
+					<div class="col-auto textFooter"><span id="statusNand">NAND</span></div>
                 </div>
             </div>
         </div>

@@ -1,8 +1,14 @@
-#include "w25n02kv.h"
+#include "winbond_spi_nand.h"
 #include <new>
 
-W25N02Kv::W25N02Kv(SPIClass& spiPort, uint8_t chipSelectPin, uint32_t clockHz)
-	: spi(spiPort), settings(clockHz, MSBFIRST, SPI_MODE0), chipSelectPin(chipSelectPin) {}
+W25N02Kv::W25N02Kv(SPIClass& spiPort, uint8_t chipSelectPin, uint32_t clockHz, SharedSpiBus* busLock)
+	: spi(spiPort), settings(clockHz, MSBFIRST, SPI_MODE0), chipSelectPin(chipSelectPin), spiBusLock(busLock) {}
+
+// Asigna el mutex que protege las transacciones del bus SPI compartido.
+void W25N02Kv::setSpiBusLock(SharedSpiBus* busLock)
+{
+	spiBusLock = busLock;
+}
 
 bool W25N02Kv::begin()
 {
@@ -21,14 +27,70 @@ bool W25N02Kv::readInfo(W25N02KvInfo& info)
 	info.protection = readStatus(protectionRegister);
 	info.configuration = readStatus(configurationRegister);
 	info.status = readStatus(statusRegister);
-	return info.manufacturerId == winbondManufacturerId && info.deviceId == expectedDeviceId;
+	const bool detected = detectDevice(info.manufacturerId, info.deviceId);
+	info.model = detectedModel;
+	info.geometry = detectedGeometry;
+	return detected;
+}
+
+const char* W25N02Kv::modelName() const
+{
+	switch (detectedModel) {
+	case WinbondSpiNandModel::w25n01gv: return "W25N01GV";
+	case WinbondSpiNandModel::w25n01kv: return "W25N01KV";
+	case WinbondSpiNandModel::w25n02kv: return "W25N02KV";
+	default: return "unknown";
+	}
+}
+
+const WinbondSpiNandGeometry& W25N02Kv::geometry() const
+{
+	return detectedGeometry;
+}
+
+uint32_t W25N02Kv::capacityBytes() const
+{
+	return uint32_t(detectedGeometry.blockCount) * detectedGeometry.pagesPerBlock * detectedGeometry.pageDataSize;
+}
+
+bool W25N02Kv::detectDevice(uint8_t manufacturerId, uint16_t deviceId)
+{
+	detectedModel = WinbondSpiNandModel::unknown;
+	detectedGeometry = WinbondSpiNandGeometry{};
+	if (manufacturerId != winbondManufacturerId) return false;
+
+	if (deviceId == w25n01gvDeviceId) {
+		detectedModel = WinbondSpiNandModel::w25n01gv;
+		detectedGeometry.blockCount = 1024;
+		detectedGeometry.spareSize = 64;
+		detectedGeometry.eccStrength = 1;
+		detectedGeometry.eccStatusMask = 0x30;
+		return true;
+	}
+	if (deviceId == w25n01kvDeviceId) {
+		detectedModel = WinbondSpiNandModel::w25n01kv;
+		detectedGeometry.blockCount = 1024;
+		detectedGeometry.spareSize = 64;
+		detectedGeometry.eccStrength = 4;
+		detectedGeometry.eccStatusMask = 0x30;
+		return true;
+	}
+	if (deviceId == w25n02kvDeviceId) {
+		detectedModel = WinbondSpiNandModel::w25n02kv;
+		detectedGeometry.blockCount = 2048;
+		detectedGeometry.spareSize = 128;
+		detectedGeometry.eccStrength = 8;
+		detectedGeometry.eccStatusMask = 0x70;
+		return true;
+	}
+	return false;
 }
 
 bool W25N02Kv::runBlockTest(uint16_t block, W25N02KvTestResult& result)
 {
 	result = W25N02KvTestResult{};
 	result.block = block;
-	if (block >= blockCount) return false;
+	if (block >= detectedGeometry.blockCount) return false;
 
 	const uint8_t originalProtection = readStatus(protectionRegister);
 	const uint8_t originalConfiguration = readStatus(configurationRegister);
@@ -109,36 +171,30 @@ void W25N02Kv::endWriteSession(uint8_t protection, uint8_t configuration)
 
 bool W25N02Kv::readBadBlockMarker(uint16_t block, uint8_t& marker, uint8_t& status)
 {
-	if (block >= blockCount) return false;
+	if (block >= detectedGeometry.blockCount) return false;
 	return loadPage(uint32_t(block) * pagesPerBlock, status) && readCache(pageDataSize, &marker, 1);
 }
 
 void W25N02Kv::sendCommand(uint8_t command, W25N02KvTiming* timing)
 {
-	const uint32_t waitingStarted = micros();
-	spi.beginTransaction(settings);
+	if (!beginSpiTransaction(settings, timing)) return;
 	const uint32_t activeStarted = micros();
-	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(command);
 	digitalWrite(chipSelectPin, HIGH);
-	spi.endTransaction();
-	if (timing) timing->spiActiveUs += micros() - activeStarted;
+	endSpiTransaction(activeStarted, timing);
 }
 
 uint8_t W25N02Kv::readStatus(uint8_t address, W25N02KvTiming* timing)
 {
-	const uint32_t waitingStarted = micros();
-	spi.beginTransaction(settings);
+	if (!beginSpiTransaction(settings, timing)) return 0;
 	const uint32_t activeStarted = micros();
-	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandReadStatus);
 	spi.transfer(address);
 	const uint8_t value = spi.transfer(0x00);
 	digitalWrite(chipSelectPin, HIGH);
-	spi.endTransaction();
-	if (timing) timing->spiActiveUs += micros() - activeStarted;
+	endSpiTransaction(activeStarted, timing);
 	return value;
 }
 
@@ -147,13 +203,14 @@ void W25N02Kv::writeStatus(uint8_t address, uint8_t value)
 	uint8_t status = 0;
 	if (!waitReady(100, status)) return;
 	sendCommand(commandWriteEnable);
-	spi.beginTransaction(settings);
+	if (!beginSpiTransaction(settings)) return;
+	const uint32_t activeStarted = micros();
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandWriteStatus);
 	spi.transfer(address);
 	spi.transfer(value);
 	digitalWrite(chipSelectPin, HIGH);
-	spi.endTransaction();
+	endSpiTransaction(activeStarted);
 	waitReady(100, status);
 }
 
@@ -185,11 +242,9 @@ bool W25N02Kv::waitReady(uint32_t timeoutMs, uint8_t& status, W25N02KvTiming* ti
 
 bool W25N02Kv::readCache(uint16_t column, uint8_t* data, size_t dataSize, W25N02KvTiming* timing)
 {
-	if (!data || uint32_t(column) + dataSize > pageDataSize + 128) return false;
-	const uint32_t waitingStarted = micros();
-	spi.beginTransaction(settings);
+	if (!data || uint32_t(column) + dataSize > pageDataSize + detectedGeometry.spareSize) return false;
+	if (!beginSpiTransaction(settings, timing)) return false;
 	const uint32_t activeStarted = micros();
-	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandReadCache);
 	spi.transfer(uint8_t(column >> 8));
@@ -197,87 +252,86 @@ bool W25N02Kv::readCache(uint16_t column, uint8_t* data, size_t dataSize, W25N02
 	spi.transfer(0x00);
 	spi.transferBytes(nullptr, data, dataSize);
 	digitalWrite(chipSelectPin, HIGH);
-	spi.endTransaction();
-	if (timing) timing->spiActiveUs += micros() - activeStarted;
+	endSpiTransaction(activeStarted, timing);
 	return true;
 }
 
 bool W25N02Kv::loadPage(uint32_t page, uint8_t& status, W25N02KvTiming* timing)
 {
-	if (page >= blockCount * pagesPerBlock) return false;
-	const uint32_t waitingStarted = micros();
-	spi.beginTransaction(settings);
+	if (page >= uint32_t(detectedGeometry.blockCount) * pagesPerBlock) return false;
+	if (!beginSpiTransaction(settings, timing)) return false;
 	const uint32_t activeStarted = micros();
-	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandPageRead);
 	spi.transfer(uint8_t(page >> 16));
 	spi.transfer(uint8_t(page >> 8));
 	spi.transfer(uint8_t(page));
 	digitalWrite(chipSelectPin, HIGH);
-	spi.endTransaction();
-	if (timing) timing->spiActiveUs += micros() - activeStarted;
+	endSpiTransaction(activeStarted, timing);
 	return waitReady(100, status, timing, 40, 10);
 }
 
 bool W25N02Kv::eraseBlock(uint16_t block, uint8_t& status)
 {
-	if (block >= blockCount) return false;
+	if (block >= detectedGeometry.blockCount) return false;
 	const uint32_t page = uint32_t(block) * pagesPerBlock;
 	uint8_t readyStatus = 0;
 	if (!waitReady(100, readyStatus)) return false;
 	sendCommand(commandWriteEnable);
-	spi.beginTransaction(settings);
+	if (!beginSpiTransaction(settings)) return false;
+	const uint32_t activeStarted = micros();
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandBlockErase);
 	spi.transfer(uint8_t(page >> 16));
 	spi.transfer(uint8_t(page >> 8));
 	spi.transfer(uint8_t(page));
 	digitalWrite(chipSelectPin, HIGH);
-	spi.endTransaction();
+	endSpiTransaction(activeStarted);
 	return waitReady(1000, status, nullptr, 1000, 50) && !(status & 0x04);
 }
 
 bool W25N02Kv::programPage(uint32_t page, const uint8_t* data, size_t dataSize, uint8_t& status,
 	W25N02KvTiming* timing)
 {
-	if (!data || !dataSize || dataSize > pageDataSize || page >= blockCount * pagesPerBlock) return false;
+	if (!data || !dataSize || dataSize > pageDataSize ||
+		page >= uint32_t(detectedGeometry.blockCount) * pagesPerBlock) return false;
 	uint8_t readyStatus = 0;
 	if (!waitReady(100, readyStatus, timing)) return false;
 	sendCommand(commandWriteEnable, timing);
-	uint32_t waitingStarted = micros();
-	spi.beginTransaction(settings);
+	if (!beginSpiTransaction(settings, timing)) return false;
 	uint32_t activeStarted = micros();
-	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandProgramLoad);
 	spi.transfer(0x00);
 	spi.transfer(0x00);
 	spi.writeBytes(data, dataSize);
 	digitalWrite(chipSelectPin, HIGH);
-	spi.endTransaction();
-	if (timing) timing->spiActiveUs += micros() - activeStarted;
+	endSpiTransaction(activeStarted, timing);
 
-	waitingStarted = micros();
-	spi.beginTransaction(settings);
+	if (!beginSpiTransaction(settings, timing)) return false;
 	activeStarted = micros();
-	if (timing) timing->busWaitUs += activeStarted - waitingStarted;
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandProgramExecute);
 	spi.transfer(uint8_t(page >> 16));
 	spi.transfer(uint8_t(page >> 8));
 	spi.transfer(uint8_t(page));
 	digitalWrite(chipSelectPin, HIGH);
-	spi.endTransaction();
-	if (timing) timing->spiActiveUs += micros() - activeStarted;
+	endSpiTransaction(activeStarted, timing);
 	return waitReady(1000, status, timing, 200, 20) && !(status & 0x08);
 }
 
 bool W25N02Kv::readPage(uint32_t page, uint8_t* data, size_t dataSize, uint8_t& status,
 	W25N02KvTiming* timing)
 {
-	if (!data || !dataSize || dataSize > pageDataSize) return false;
-	return loadPage(page, status, timing) && readCache(0, data, dataSize, timing);
+	return readPage(page, 0, data, dataSize, status, timing);
+}
+
+// Lee una porcion de la pagina indicada empezando en column.
+bool W25N02Kv::readPage(uint32_t page, uint16_t column, uint8_t* data, size_t dataSize, uint8_t& status,
+	W25N02KvTiming* timing)
+{
+	if (!data || !dataSize || uint32_t(column) + dataSize > pageDataSize) return false;
+	return loadPage(page, status, timing) && readCache(column, data, dataSize, timing);
 }
 
 uint32_t W25N02Kv::calculateCrc32(const uint8_t* data, size_t dataSize)
@@ -293,7 +347,8 @@ uint32_t W25N02Kv::calculateCrc32(const uint8_t* data, size_t dataSize)
 
 void W25N02Kv::readJedecId(W25N02KvInfo& info)
 {
-	spi.beginTransaction(settings);
+	if (!beginSpiTransaction(settings)) return;
+	const uint32_t activeStarted = micros();
 	digitalWrite(chipSelectPin, LOW);
 	spi.transfer(commandJedecId);
 	spi.transfer(0x00);
@@ -301,5 +356,23 @@ void W25N02Kv::readJedecId(W25N02KvInfo& info)
 	info.deviceId = uint16_t(spi.transfer(0x00)) << 8;
 	info.deviceId |= spi.transfer(0x00);
 	digitalWrite(chipSelectPin, HIGH);
+	endSpiTransaction(activeStarted);
+}
+
+// Inicia una transaccion SPI y toma el mutex compartido cuando existe.
+bool W25N02Kv::beginSpiTransaction(const SPISettings& transactionSettings, W25N02KvTiming* timing)
+{
+	const uint32_t waitingStarted = micros();
+	if (spiBusLock && !spiBusLock->lock()) return false;
+	spi.beginTransaction(transactionSettings);
+	if (timing) timing->busWaitUs += micros() - waitingStarted;
+	return true;
+}
+
+// Finaliza una transaccion SPI y libera el mutex compartido.
+void W25N02Kv::endSpiTransaction(uint32_t activeStartedUs, W25N02KvTiming* timing)
+{
 	spi.endTransaction();
+	if (timing) timing->spiActiveUs += micros() - activeStartedUs;
+	if (spiBusLock) spiBusLock->unlock();
 }

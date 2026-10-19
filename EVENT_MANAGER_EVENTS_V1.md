@@ -21,7 +21,7 @@ su inicio como contexto orientativo para el proximo arranque.
    posterior. Una condicion que no termina se limita naturalmente por los seis
    frames.
 5. Solo cuando Fast RMS termino y Wave termino o fue declarado no disponible,
-   el evento queda listo, aparece en `GET /api/v1/events` y se publica por MQTT.
+   el evento queda listo, aparece en `GET /events` y se publica por MQTT.
    No hay una notificacion MQTT temprana.
 6. Mientras siga retenido, el mismo evento se vuelve a publicar cada cinco
    segundos. El Manager debe deduplicar por el par `deviceId + eventId`: una
@@ -84,9 +84,9 @@ Ejemplo:
     "checksum": "BC012DEF"
   },
   "links": {
-    "fastRms": "/api/v1/events/fast-rms?eventId=boot-a41f-42",
-    "wave": "/api/v1/events/wave?eventId=boot-a41f-42",
-    "clear": "/api/v1/events/clear?eventId=boot-a41f-42"
+    "fastRms": "/events/fast-rms?eventId=boot-a41f-42",
+    "wave": "/events/wave?eventId=boot-a41f-42",
+    "clear": "/events/clear"
   }
 }
 ```
@@ -263,14 +263,16 @@ La cola RAM se pierde al reiniciar, pero los snapshots NVS permanecen.
 Las rutas no requieren autenticacion dentro de la red local.
 
 ```text
-GET  /api/v1/events
-GET  /api/v1/events/fast-rms?eventId=<eventId>
-GET  /api/v1/events/wave?eventId=<eventId>
-POST /api/v1/events/clear?eventId=<eventId>
-GET  /api/v1/events/test
+GET  /events
+GET  /events/fast-rms?eventId=<eventId>
+GET  /events/wave?eventId=<eventId>
+POST /events/clear   body: eventId=<eventId>
+POST /events/test
 ```
 
-`GET /api/v1/events` devuelve:
+Los campos de las operaciones POST se envian como `application/x-www-form-urlencoded` en el cuerpo, no en la query string.
+
+`GET /events` devuelve:
 
 ```json
 {
@@ -288,24 +290,35 @@ recibido. Si el evento desaparece durante una transferencia, el stream se
 corta; no se debe invocar `clear` ni persistir la descarga incompleta.
 
 `POST clear` devuelve `{"ok":true}` o `404` si el evento ya no existe.
-`GET test` solicita una captura real de prueba por el mismo flujo de adquisicion
+`POST /events/test` solicita una captura real de prueba por el mismo flujo de adquisicion
 con tipo `manual_capture`; no inventa muestras.
 
 ## Artefacto Fast RMS
 
-El binario Fast RMS contiene `sampleCount` registros consecutivos de 16 bytes,
-little-endian:
+El binario Fast RMS contiene `sampleCount` registros consecutivos de 16 bytes.
+El tiempo es uint16 little-endian; los canales unsigned se empaquetan LSB-first:
 
-| Offset | Tipo | Campo | Escala |
+| Offset en bits | Bits | Campo | Escala |
 | --- | --- | --- | --- |
-| 0 | uint16 | timeStamp | campo legado, usar solo como referencia |
-| 2 | uint16 | VrmsR | V / 100 |
-| 4 | uint16 | VrmsS | V / 100 |
-| 6 | uint16 | VrmsT | V / 100 |
-| 8 | uint16 | IrmsR | A / 100 |
-| 10 | uint16 | IrmsS | A / 100 |
-| 12 | uint16 | IrmsT | A / 100 |
-| 14 | uint16 | IrmsN | A / 100 |
+| 0 | 16 | timeStamp | campo legado, usar solo como referencia |
+| 16 | 14 | VrmsR | 0.025 V |
+| 30 | 14 | VrmsS | 0.025 V |
+| 44 | 14 | VrmsT | 0.025 V |
+| 58 | 14 | IrmsR | 0.01 A |
+| 72 | 14 | IrmsS | 0.01 A |
+| 86 | 14 | IrmsT | 0.01 A |
+| 100 | 14 | IrmsN | 0.01 A |
+| 114 | 14 | VrmsN | 0.025 V |
+
+16383 indica sin dato en cualquier canal. Maximos validos: 409.55 V y 163.82 A.
+NaN, infinito, negativos y valores fuera de rango se codifican como sin dato,
+sin truncamiento modular ni saturacion silenciosa. Las lecturas actuales de
+/meter no se cuantizan: este empaquetado afecta solamente a las capturas Fast.
+
+El descriptor anuncia `channelCount:8`, `sampleBytes:16`, `channelBits:14`,
+`noData:16383` y canales `vr, vs, vt, ir, is, it, in, vn`.
+Los consumidores externos deben aplicar este empaquetado, no leer uint16 por canal.
+No se modifica el binario Wave ni se agrega VN al osciloscopio de 8 kHz.
 
 La posicion temporal fiable es la secuencia de muestras a 100 Hz, correlacionada
 con el `timestamp` y el indice del evento. `timeStamp` es un campo legado de 16
@@ -322,7 +335,7 @@ retenidas se publica `null`, sin desplazarlo artificialmente al primer/ultimo da
 
 ## Evento sintetico para probar almacenamiento y descarga
 
-GET /api/v1/events/test?pattern=ramp genera un evento completo en RAM, sin
+POST /events/test body: pattern=ramp genera un evento completo en RAM, sin
 leer el ADE ni modificar el prebuffer real o el osciloscopio. Tambien se puede
 solicitar con el boton Generar rampa de prueba en la web. El endpoint sin
 pattern conserva el test anterior: captura muestras electricas reales.
@@ -371,7 +384,7 @@ no valida lectura del ADE, tiempos de adquisicion ni armado del prebuffer real.
 
 ## Diagnostico temporal de adquisicion Wave
 
-GET /api/v1/events/wave-diagnostics devuelve los primeros 48 registros de
+GET /events/wave-diagnostics devuelve los primeros 48 registros de
 lectura posteriores al inicio del ultimo evento. Quedan retenidos hasta el
 siguiente evento o reinicio; no forman parte del binario ni del contrato MQTT.
 No escribir en flash ni consultar continuamente este endpoint durante capturas.
@@ -453,7 +466,7 @@ corrientes usan 0.1 A por bit.
 
 El JSON repite esta informacion en `wave.channels` y `wave.scales`. El orden
 Wave es necesariamente `ir, vr, is, vs, it, vt, in`, que coincide con el orden
-fisico comprimido. Fast RMS usa un orden distinto: `vr, vs, vt, ir, is, it, in`.
+fisico comprimido. Fast RMS usa un orden distinto: `vr, vs, vt, ir, is, it, in, vn`.
 
 ### Alineacion de capturas
 
@@ -557,7 +570,7 @@ la parte Wave se descarta con `reason: "scope_active"`; Fast RMS continua.
 
 ### Enrutamiento comun
 
-1. Obtener `deviceId` y `baseTopic` con `GET /api/v1/manager/discovery` y
+1. Obtener `deviceId` y `baseTopic` con `GET /manager/discovery` y
    suscribirse a `<baseTopic>/events/notification`.
 2. Parsear primero `schemaVersion` y `category`. En v1, `category` puede ser
    `wave` o `grid`. Aceptar tipos nuevos como texto y no descartar todo el
@@ -578,7 +591,7 @@ unica por `deviceId + eventId` y una operacion de upsert.
 
 1. Obtener la direccion HTTP local del medidor desde su configuracion. Los links
    del JSON son relativos a esa direccion, nunca a la direccion del Manager.
-2. Consultar `GET /api/v1/events` al arrancar o reconectar para recuperar la cola
+2. Consultar `GET /events` al arrancar o reconectar para recuperar la cola
    Wave aunque se haya perdido MQTT. Se puede repetir cada cinco segundos y se
    debe desactivar cache HTTP. El catalogo no contiene eventos Grid.
 3. Crear o actualizar un unico evento Wave por `deviceId + eventId`. Una
@@ -590,7 +603,7 @@ unica por `deviceId + eventId` y una operacion de upsert.
    implica disponibilidad. No esperar que una seccion false se complete luego:
    la notificacion ya es final.
 6. Validar cada binario antes de decodificar o confirmar. Fast RMS debe medir
-   sampleCount * 16 bytes. Wave debe medir size = 128 + blockCount * 8064 + 4.
+   sampleCount * sampleBytes bytes (actualmente 16). Wave debe medir size = 128 + blockCount * 8064 + 4.
    Comprobar ademas magic, version, cabecera, eventId, cantidad de canales,
    muestras y CRC Wave. Comparar CRC como ocho digitos hexadecimales sin
    distinguir mayusculas/minusculas.
@@ -612,7 +625,7 @@ unica por `deviceId + eventId` y una operacion de upsert.
 
 ### Procesamiento de category grid
 
-1. No consultar `GET /api/v1/events` ni descargar archivos: Grid llega solamente
+1. No consultar `GET /events` ni descargar archivos: Grid llega solamente
    por MQTT y no contiene `fastRms`, `wave` ni `links`.
 2. Cada `eventId` representa una transicion inmutable. Insertarla una vez y usar
    upsert solamente para hacer idempotentes los duplicados QoS 1.
@@ -675,7 +688,7 @@ no requiere una confirmacion de aplicacion del Manager.
 
 ## Prueba de integracion
 
-Solicitar GET /api/v1/events/test una vez, esperar la notificacion final (o
+Solicitar POST /events/test una vez, esperar la notificacion final (o
 consultar el catalogo durante unos segundos), descargar ambos detalles
 disponibles, validar CRC y guardar. Hacer clear y comprobar que desaparece del
 catalogo. La respuesta inmediata de test confirma la solicitud, no la captura

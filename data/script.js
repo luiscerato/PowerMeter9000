@@ -9,6 +9,10 @@ $(document).ready(function () {
 function setupNav() {
     if (editBoardURL) $("#navServerIP").removeClass("d-none");
 
+    const sidebarCollapsed = localStorage.getItem("sidebarCollapsed") === "true";
+    setSidebarCollapsed(sidebarCollapsed);
+    $("#sidebarToggle").on("click", () => setSidebarCollapsed(!$("#codeNavBar").hasClass("sidebarCollapsed")));
+
     $("#inputBoardURL").val(boardIP);
     $("#btnReloadIP").click(function () {
         if (saveBoardURL($("#inputBoardURL").val())) location.reload();
@@ -18,15 +22,43 @@ function setupNav() {
         event.preventDefault();
         showAppPage($(this).data("page"));
     });
-    $(window).on("hashchange", () => showAppPage(location.hash.slice(1)));
+    $(window).on("hashchange popstate", () => showAppPage(location.hash.slice(1)));
+}
+
+// Aplica y guarda el estado contraído del menú; collapsed define si se muestran solo los iconos.
+function setSidebarCollapsed(collapsed) {
+    $("#codeNavBar").toggleClass("sidebarCollapsed", collapsed);
+    $("#appRoot").toggleClass("sidebarCollapsed", collapsed);
+    $("#sidebarToggle").attr("aria-expanded", String(!collapsed)).attr("aria-label", collapsed ? "Expandir menú" : "Contraer menú").attr("title", collapsed ? "Expandir menú" : "Contraer menú");
+    $(".app-page-link").each(function () { const label = $(this).find(".navLabel").text(); $(this).attr("title", collapsed ? label : null); });
+    localStorage.setItem("sidebarCollapsed", String(collapsed));
+}
+
+// Lleva la vista al inicio despues de mostrar una seccion; sin parametros.
+function resetPageScroll() {
+    window.scrollTo(0, 0);
+    requestAnimationFrame(() => window.scrollTo(0, 0));
 }
 
 // Muestra una seccion principal de la app sin recargar la pagina.
 // pageId: id de la seccion a mostrar.
 function showAppPage(pageId) {
-    const titles = {home: "Resumen", allMeasures: "Mediciones", events: "Eventos", scopePage: "Osciloscopio", settings: "Configuración"};
+    const titles = {home: "Resumen", allMeasures: "Mediciones", history: "Histórico", events: "Eventos", logs: "Logs", gridEvents: "Red", scopePage: "Osciloscopio", settings: "Configuración"};
     if (!Object.prototype.hasOwnProperty.call(titles, pageId)) pageId = "home";
-    if (showAppPage.current === pageId) return;
+    const samePage = showAppPage.current === pageId;
+    const initialPage = showAppPage.current == null;
+    const pageUrl = new URL(location.href);
+    if (pageId !== "history") {
+        pageUrl.searchParams.delete("from");
+        pageUrl.searchParams.delete("to");
+    }
+    if (pageUrl.hash.slice(1) !== pageId || pageUrl.search !== location.search) {
+        pageUrl.hash = pageId;
+        if (initialPage || samePage) history.replaceState(null, "", pageUrl);
+        else history.pushState(null, "", pageUrl);
+    }
+    if (typeof setLogsViewerActive === "function") setLogsViewerActive(pageId === "logs");
+    if (samePage) return;
     showAppPage.current = pageId;
     $("#meterPage").toggleClass("d-none", pageId === "scopePage");
     $("#scopePage").toggleClass("d-none", pageId !== "scopePage");
@@ -35,7 +67,8 @@ function showAppPage(pageId) {
     $(".app-page-link").removeClass("active").removeAttr("aria-current");
     $('.app-page-link[data-page="' + pageId + '"]').addClass("active").attr("aria-current", "page");
     $("#pageTitle").text(titles[pageId]);
-    location.hash = pageId;
+    resetPageScroll();
+	if (typeof setMeterPollingActive === "function") setMeterPollingActive(pageId === "home" || pageId === "allMeasures");
     const menu = document.getElementById("navbarNavAltMarkup");
     if (menu.classList.contains("show")) bootstrap.Collapse.getOrCreateInstance(menu, {toggle: false}).hide();
     if (pageId == "scopePage") {
@@ -43,6 +76,8 @@ function showAppPage(pageId) {
     } else {
         if (typeof Scope != "undefined" && Scope.mode == "scope") Scope.stop();
         if (pageId === "settings") loadSettings();
+        if (pageId === "history") loadHistoryViewer();
+		if (pageId === "gridEvents") loadGridEventsViewer();
         if (pageId === "events") {
             loadRamEventsList();
             meterLoadEventsList();
@@ -52,11 +87,12 @@ function showAppPage(pageId) {
 
 // Configura la barra de estado inferior.
 function setupFooter() {
+	const statusInterval = board.getUpdateTime("fast");
     updateFooter("loading");
     board.getStateRepeat(
         (data) => updateFooter(data),
         () => updateFooter("fail"),
-        500
+        statusInterval
     );
 }
 
@@ -67,6 +103,7 @@ function updateFooter(status) {
         $("#statusWifi").html("Conectado a " + spinner + " | señal: " + spinner);
         $("#statusIP").html("IP: " + spinner);
         $("#statusHeap").html("Heap total: " + spinner + " libre: " + spinner);
+		$("#statusNand").html("NAND: " + spinner);
     } else {
         let icon = iconWifiFull;
         if (status.rssi < -80) icon = iconWifi0;
@@ -76,8 +113,13 @@ function updateFooter(status) {
         $("#statusWifi").html("Conectado a " + status.ssid + " " + icon);
         $("#statusIP").text("IP: " + status.ip);
         $("#statusHeap").text("Heap total: " + status.heap + " libre: " + status.free);
+		const nand = status.nand || {}, read = Number(nand.readBytesPerSecond || 0), write = Number(nand.writeBytesPerSecond || 0);
+		$("#statusNand").text("NAND: ↓ " + formatNandRate(read) + " ↑ " + formatNandRate(write));
     }
 }
+
+// Formatea una velocidad NAND reciente; bytesPerSecond indica el valor instantáneo.
+function formatNandRate(bytesPerSecond) { return bytesPerSecond ? (bytesPerSecond < 1024 ? bytesPerSecond + " B/s" : (bytesPerSecond / 1024).toFixed(1) + " KiB/s") : "0 KB/s"; }
 
 const spinner = '<span class="spinner-border spinner-border-sm ml-2" role="status" aria-hidden="true"></span>';
 

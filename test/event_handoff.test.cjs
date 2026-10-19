@@ -142,6 +142,7 @@ static_assert(normal(2), "RMS sin memoria conserva metadata");
 static_assert(overflow(), "Overflow descarta solo el mas antiguo");
 `;
 const output = path.join(root, '.pio/build/esp32doit-devkit-v1/event_handoff_test.cpp');
+fs.mkdirSync(path.dirname(output), {recursive: true});
 fs.writeFileSync(output, harness);
 const compiler = path.join(process.env.USERPROFILE, '.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-g++.exe');
 execFileSync(compiler, ['-std=c++14', '-c', output, '-o', output + '.o'], {stdio: 'inherit'});

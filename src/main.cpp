@@ -1,8 +1,8 @@
 #include <Arduino.h>
+#include "esp_system.h"
 #include "wifiUtils.h"
 #include <SPI.h>
 #include "ESPAsyncWebServer.h"
-#include "SPIFFS.h"
 #include "Freenove_WS2812_Lib_for_ESP32.h"
 // #include "ST7920_SPI.h"
 #include "pins.h"
@@ -12,18 +12,29 @@
 #include "webserver.h"
 #include "AsyncMqttClient.h"
 #include "ui/lcd_ui.h"
+#include "ui/wifi_settings.h"
 #include "manager_api.h"
-#include "w25n02kv.h"
+#include "storage/winbond_spi_nand.h"
+#include "storage/shared_spi_bus.h"
+#include "storage/storage_manager.h"
+#include "storage/history_recorder.h"
+#include "diagnostic_logger.h"
+#include "rtc_clock.h"
+#include "memory_diagnostics.h"
+#include <esp_heap_caps.h>
 
 
 TactSwitch BtnEnter, BtnUp, BtnDown, BtnEsc, BtnNext; // Interfase de 5 botones
 keyboard Keyboard;                           // Interfase de teclado
 
 SPIClass peripheralSpi(HSPI);
+SharedSpiBus peripheralSpiBus;
 ST7920_SPI lcd(peripheralSpi, pinLcdSS, pinSpiClk, pinSpiSdo, pinSpiSdi);
-W25N02Kv eventFlash(peripheralSpi, pinMem2SS);
-W25N02KvInfo flashInfo;
+WinbondSpiNand eventFlash(peripheralSpi, pinMem2SS, 30000000);
+WinbondSpiNandInfo flashInfo;
 bool flashDetected = false;
+StorageManager storageManager(eventFlash);
+HistoryRecorder historyRecorder(storageManager.history());
 
 lcd_ui ui(lcd, Keyboard, pinBuzzer);
 
@@ -37,7 +48,7 @@ void drawWindowStatus(lcd_ui* parent, UI_Window* win);
 void drawWindowBorder(lcd_ui* parent, UI_Window* win);
 
 bool Draw_Main(lcd_ui* ui, UI_Action action);
-bool Draw_Wifi(lcd_ui* ui, UI_Action action);
+bool drawSettingsMenu(lcd_ui* ui, UI_Action action);
 bool Draw_Batt(lcd_ui* ui, UI_Action action);
 bool Draw_Calibrate(lcd_ui* ui, UI_Action action);
 
@@ -87,8 +98,15 @@ void setup(void)
 {
 
 	Serial.begin(115200);
+	memoryDiagnosticsBegin();
+	const bool loggerReady = diagnosticLogger.begin();
+	if (!loggerReady) Serial.println("Diagnostic logger: sin memoria");
+	DIAG_INFO(DiagnosticModule::main, "Inicio, reset=%d, heap=%u", int(esp_reset_reason()), ESP.getFreeHeap());
+	Serial.printf("[boot] resetReason=%d heap=%u minHeap=%u\n", int(esp_reset_reason()),
+		ESP.getFreeHeap(), ESP.getMinFreeHeap());
 
 	UtilsInitSettings();
+	rtcClockBegin();
 
 	// UtilsLoadDeafultSettings();
 	
@@ -106,35 +124,51 @@ void setup(void)
 	digitalWrite(pinBuzzer, 0);
 	digitalWrite(pinRelay, 0);
 
-	// Inicializar las teclas
+	// ledcSetup(4, 1000, 10);
+	// ledcAttachPin(pinBuzzer, 4);
+
+	const bool peripheralSpiReady = peripheralSpiBus.begin();
+	if (peripheralSpiReady) {
+		lcd.setSpiBusLock(&peripheralSpiBus);
+		eventFlash.setSpiBusLock(&peripheralSpiBus);
+	}
+	// lcd.init configura el bus SPI compartido que tambien necesita la NAND.
+	lcd.init();
+	lcd.cls();
+	lcd.display(0);
+	flashDetected = peripheralSpiReady && eventFlash.begin() && eventFlash.readInfo(flashInfo);
+	Serial.printf("SPI NAND: %s, modelo %s, JEDEC %02X %04X, bloques %u, capacidad %u MiB, "
+		"PROT %02X, CFG %02X, STAT %02X\n", flashDetected ? "detectada" : "no detectada",
+		eventFlash.modelName(), flashInfo.manufacturerId, flashInfo.deviceId,
+		flashInfo.geometry.blockCount, eventFlash.capacityBytes() / (1024U * 1024U),
+		flashInfo.protection, flashInfo.configuration, flashInfo.status);
+	if (flashDetected) {
+		const bool storageStarted = storageManager.begin([](DiagnosticStore& store) {
+			if (!diagnosticLogger.start(&store)) Serial.println("Diagnostic logger: no se pudo iniciar la tarea");
+		});
+		Serial.printf("Storage: %s, estado %u\n", storageStarted ? "iniciado" : "error", uint8_t(storageManager.state()));
+	}
+	if (!diagnosticLogger.start(storageManager.diagnostics().isReady() ? &storageManager.diagnostics() : nullptr))
+		Serial.println("Diagnostic logger: no se pudo iniciar la tarea");
+	DIAG_INFO(DiagnosticModule::storage, "NAND diagnostico %s",
+		storageManager.diagnostics().isReady() ? "lista" : "no disponible");
+
+	// La pantalla y las teclas ya pueden iniciar sin retrasar la cola de diagnostico.
 	BtnEsc.begin(Keys::Esc, []()->bool { return getButtons() != buttonCancel;});
 	BtnDown.begin(Keys::Down, []()->bool { return getButtons() != buttonDown;});
 	BtnUp.begin(Keys::Up, []()->bool { return getButtons() != buttonUp;});
 	BtnEnter.begin(Keys::Enter, []()->bool { return getButtons() != buttonOk;});
 	BtnNext.begin(Keys::Next, []()->bool { return getButtons() != buttonNext;});
-
-	// Agregar teclas al teclado
 	Keyboard.AddButton(&BtnEnter);
 	Keyboard.AddButton(&BtnUp);
 	Keyboard.AddButton(&BtnDown);
 	Keyboard.AddButton(&BtnEsc);
 	Keyboard.AddButton(&BtnNext);
 
-	// ledcSetup(4, 1000, 10);
-	// ledcAttachPin(pinBuzzer, 4);
-
-	lcd.init();
-	lcd.cls();
-	lcd.display(0);
-
-	flashDetected = eventFlash.begin() && eventFlash.readInfo(flashInfo);
-	Serial.printf("W25N02KV: %s, JEDEC %02X %04X, PROT %02X, CFG %02X, STAT %02X\n",
-		flashDetected ? "detectada" : "no detectada", flashInfo.manufacturerId, flashInfo.deviceId,
-		flashInfo.protection, flashInfo.configuration, flashInfo.status);
-
 	ui.begin();
 	ui.Add_UI(ui.getNewID(), "main", &Draw_Main);
-	ui.Add_UI(ui.getNewID(), "wifi", &Draw_Wifi);
+	ui.Add_UI(ui.getNewID(), "settings", &drawSettingsMenu);
+	ui.Add_UI(ui.getNewID(), "wifi", &drawWifiSettings);
 	ui.Add_UI(ui.getNewID(), "batt", &Draw_Batt);
 	ui.Add_UI(ui.getNewID(), "calibration", &Draw_Calibrate);
 
@@ -144,12 +178,6 @@ void setup(void)
 	ui.setBackgroundDrawer(drawWindow);
 
 	ui.Show("main");
-
-	debugI("Iniciando sistema de archivos... ");
-	if (!SPIFFS.begin(true))
-		debugI("An error has occurred while mounting SPIFFS");
-	else
-		debugI("SPIFFS mounted successfully");
 
 	WiFi.onEvent([](arduino_event_t* event) {
 		startWebServerOnce(true);
@@ -170,6 +198,7 @@ void setup(void)
 	Batt.Init();
 
 	debugI("Inicialización terminada!");
+	DIAG_INFO(DiagnosticModule::main, "Inicializacion terminada, heap=%u", ESP.getFreeHeap());
 }
 
 
@@ -178,8 +207,22 @@ uint8_t color = 0;
 
 void loop(void)
 {
+	static uint32_t lastDiagnosticHeartbeat = 0;
+	const uint32_t uptimeMs = millis();
+	if (uint32_t(uptimeMs - lastDiagnosticHeartbeat) >= 5000) {
+		lastDiagnosticHeartbeat = uptimeMs;
+		DIAG_INFO(DiagnosticModule::main, "Heartbeat uptime=%lu heap=%u free8=%u largest8=%u min8=%u",
+			static_cast<unsigned long>(uptimeMs), ESP.getFreeHeap(),
+			heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+			heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+	}
+	diagnosticLogger.pollSerial();
+	memoryDiagnosticsPoll();
+	if (!diagnosticLogger.hasStore() && storageManager.isReady() && storageManager.diagnostics().isReady())
+		diagnosticLogger.attachStore(&storageManager.diagnostics());
 
 	// Keyboard.scan();
+	webServerCleanupClients();
 
 	uint32_t time;
 
@@ -197,6 +240,7 @@ void loop(void)
 	MeterLoop();
 	time = millis() - time;
 	// if (time > 9)  debugW("MeterLoop: %u ms", time);
+	if (storageManager.isReady()) historyRecorder.update(Meter);
 
 	time = millis();
 	ui.Run();
@@ -337,7 +381,7 @@ bool Draw_Main(lcd_ui* ui, UI_Action action)
 			lcd.printStr(c4, l3, ade.format(Meter.phaseT.Watt, 4, "W").c_str(), TextAling::TopRight);
 
 			lcd.printStr(c1, l4, "N:");
-			lcd.printStr(c2, l4, ade.format(Meter.neutral.Vrms, 5, "V", 1).c_str(), TextAling::TopRight);
+			lcd.printStr(c2, l4, isfinite(Meter.neutral.Vrms) ? ade.format(Meter.neutral.Vrms, 5, "V", 1).c_str() : "-- V", TextAling::TopRight);
 			lcd.printStr(c3, l4, ade.format(Meter.neutral.Irms, 5, "A", 1).c_str(), TextAling::TopRight);
 
 			lcd.printStr(c1, l5, "E:");
@@ -394,8 +438,7 @@ bool Draw_Main(lcd_ui* ui, UI_Action action)
 		if (key == Keys::Esc)
 			ui->Show("wifi");
 		else if (key == Keys::Enter)
-		 	ui->Show("batt");
-		 	// ui->Show("calibration");
+			ui->Show("settings");
 		// ui->Show("wifi");
 		else if (key == Keys::Next) {
 			if (!mode)
@@ -419,57 +462,38 @@ bool Draw_Main(lcd_ui* ui, UI_Action action)
 }
 
 
-
-bool Draw_Wifi(lcd_ui* ui, UI_Action action)
+// Muestra el menú de batería y Wi-Fi; ui es la interfaz y action indica el ciclo de pantalla.
+bool drawSettingsMenu(lcd_ui* ui, UI_Action action)
 {
-	const uint32_t c1 = 1, c2 = 46, c3 = 85, c4 = 123;
-	const uint32_t l1 = 1, l2 = 10, l3 = 19, l4 = 28, l5 = 37;
-
-	static uint32_t update = 0;
-	static int32_t x = 25, y = 15, incX = 4, incY = 2;
-	char str[128];
-
+	static int32_t selected = 0;
 	UI_Window* win = ui->getWindow();
 	if (action == UI_Action::Init) {
 		win->setFullScreen();
 		win->setWindowMode(UI_Window_Mode::Normal);
-		win->Title = "Estado Wifi";
+		win->Title = "Configuracion";
+		selected = 0;
 	}
 	else if (action == UI_Action::Run) {
 		ui->lcd.setFont(Small5x7PLBold);
-		// x += incX;
-		// y += incY;
-
-		// if (y > 50) incY = -2;
-		// else if (y < 4) incY = 2;
-
-		// if (x > 100) incX = -4;
-		// else if (x < 3) incX = 4;
-		// win->setPosAndSize(x, y, 80, 40);
-
-		snprintf(str, sizeof(str), "SSID: %s", WiFi.SSID().c_str());
-		lcd.printStr(c1, l1, str);
-
-		snprintf(str, sizeof(str), "Intensidad: %d", WiFi.RSSI());
-		lcd.printStr(c1, l2, str);
-
-		snprintf(str, sizeof(str), "IP: %s", WiFi.localIP().toString().c_str());
-		lcd.printStr(c1, l3, str);
-
-		Keys key = ui->GetKeys();
-		if (key == Keys::Esc)
-			ui->Close(UI_DialogResult::Ok);
-		else if (key == Keys::Enter) {
-			ui->Show("batt");
+		const char* items[] = { "Bateria", "Wi-Fi", "Volver" };
+		for (int32_t i = 0; i < 3; ++i) {
+			char line[24];
+			snprintf(line, sizeof(line), "%c %s", i == selected ? '>' : ' ', items[i]);
+			ui->lcd.printStr(2, 5 + i * 12, line);
 		}
-		else if (key == Keys::Next) {}
-		else if (key == Keys::Up) {}
-		else if (key == Keys::Down) {}
-	}
 
+		const Keys key = ui->GetKeys();
+		if (key == Keys::Esc) ui->Close(UI_DialogResult::Cancel);
+		else if (key == Keys::Up) selected = (selected + 2) % 3;
+		else if (key == Keys::Down) selected = (selected + 1) % 3;
+		else if (key == Keys::Enter) {
+			if (selected == 0) ui->Show("batt");
+			else if (selected == 1) ui->Show("wifi");
+			else ui->Close(UI_DialogResult::Cancel);
+		}
+	}
 	return true;
 }
-
 
 
 bool Draw_Batt(lcd_ui* ui, UI_Action action)

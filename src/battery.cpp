@@ -11,9 +11,6 @@ void Battery::Init()
 {
 	debugI("Iniciando configuracion de cargador de bateria!");
 
-	Wire.begin(pinSDA, pinSCL);
-	Wire.setClock(400000);
-
 	battery.reset();
 
 	battery.begin();

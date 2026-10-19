@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <cmath>
 
 enum class phaseCondition : uint8_t { unknown, normal, undervoltage, overvoltage, phaseLoss };
 enum class gridCondition : uint8_t { unknown, normal, abnormal, outage };
@@ -9,6 +10,15 @@ struct phaseLimits {
     float highVoltage = 250;
 };
 
+struct neutralSettings {
+    float highVoltage = 25;
+    float hysteresis = 2;
+    uint32_t confirmMs = 100;
+    uint32_t recoveryMs = 250;
+    bool enabled = false;
+    uint8_t reserved[3] = {};
+};
+
 struct gridSettings {
     phaseLimits phases[3];
     float noVoltage = 20;
@@ -16,7 +26,11 @@ struct gridSettings {
     uint32_t lossConfirmMs = 250;
     uint32_t voltageConfirmMs = 5000;
     uint32_t recoveryConfirmMs = 250;
+    uint8_t capturePages = 5;
+    uint8_t reserved[3] = {};
+    neutralSettings neutral;
 };
+static_assert(sizeof(gridSettings) == 68, "Unexpected Grid settings size");
 
 struct phaseState {
     phaseCondition state = phaseCondition::unknown;
@@ -38,7 +52,12 @@ inline bool validGridSettings(const gridSettings& config) {
     }
     return config.lossConfirmMs >= 20 && config.lossConfirmMs <= 60000 &&
         config.voltageConfirmMs >= 20 && config.voltageConfirmMs <= 600000 &&
-        config.recoveryConfirmMs >= 20 && config.recoveryConfirmMs <= 60000;
+        config.recoveryConfirmMs >= 20 && config.recoveryConfirmMs <= 60000 &&
+        config.capturePages >= 3 && config.capturePages <= 6 &&
+        config.neutral.highVoltage >= 0.025f && config.neutral.highVoltage <= 409.55f &&
+        config.neutral.hysteresis >= 0 && config.neutral.hysteresis < config.neutral.highVoltage &&
+        config.neutral.confirmMs >= 20 && config.neutral.confirmMs <= 600000 &&
+        config.neutral.recoveryMs >= 20 && config.neutral.recoveryMs <= 60000;
 }
 
 // Devuelve el nombre estable del estado confirmado state para JSON.
@@ -93,6 +112,25 @@ inline bool updatePhaseState(phaseState& phase, float volts, uint32_t nowMs,
     const uint32_t delayMs = next == phaseCondition::phaseLoss ? settings.lossConfirmMs :
         next == phaseCondition::normal ? settings.recoveryConfirmMs : settings.voltageConfirmMs;
     if (uint32_t(nowMs - phase.pendingSinceMs) < delayMs) return false;
+    phase.state = next;
+    phase.changedAtMs = phase.pendingSinceMs;
+    return true;
+}
+
+// Confirma tension alta/normal de neutro; volts y nowMs son la muestra y config sus limites.
+inline bool updateNeutralState(phaseState& phase, float volts, uint32_t nowMs, const neutralSettings& config) {
+    const bool valid = config.enabled && std::isfinite(volts) && volts >= 0 && volts <= 409.55f;
+    const auto next = !valid ? phaseCondition::unknown :
+        volts > config.highVoltage || (phase.state == phaseCondition::overvoltage &&
+        volts >= config.highVoltage - config.hysteresis) ? phaseCondition::overvoltage : phaseCondition::normal;
+    if (!phase.hasSample || uint32_t(nowMs - phase.lastSampleMs) > 50 || next != phase.pending) {
+        phase.pending = next;
+        phase.pendingSinceMs = nowMs;
+    }
+    phase.lastSampleMs = nowMs;
+    phase.hasSample = valid;
+    if (!valid || next == phase.state || uint32_t(nowMs - phase.pendingSinceMs) <
+        (next == phaseCondition::normal ? config.recoveryMs : config.confirmMs)) return false;
     phase.state = next;
     phase.changedAtMs = phase.pendingSinceMs;
     return true;

@@ -1,9 +1,12 @@
 #include "nand_benchmark.h"
-#include "w25n02kv.h"
+#include "winbond_spi_nand.h"
+#include "storage_manager.h"
 #include <esp_crc.h>
 #include <new>
+#include <atomic>
 
-extern W25N02Kv eventFlash;
+extern WinbondSpiNand eventFlash;
+extern StorageManager storageManager;
 
 enum class BenchmarkPhase : uint8_t {
 	idle,
@@ -62,7 +65,8 @@ struct BenchmarkStatus {
 
 static BenchmarkStatus benchmarkStatus;
 static portMUX_TYPE benchmarkMutex = portMUX_INITIALIZER_UNLOCKED;
-static uint8_t badBlockMap[W25N02Kv::blockCount / 8];
+static uint8_t badBlockMap[WinbondSpiNand::maxBlockCount / 8];
+static std::atomic<bool> nandDiagnosticActive(false);
 
 // Devuelve el nombre JSON de phase.
 // phase: etapa interna del benchmark.
@@ -110,7 +114,7 @@ static void markBadBlock(uint16_t block)
 static void fillPattern(uint8_t* data, uint32_t page)
 {
 	uint32_t value = page * 2654435761U + 0xA5C39E17U;
-	for (uint32_t i = 0; i < W25N02Kv::pageDataSize; ++i) {
+	for (uint32_t i = 0; i < WinbondSpiNand::pageDataSize; ++i) {
 		value = value * 1664525U + 1013904223U;
 		data[i] = uint8_t(value >> 24);
 	}
@@ -122,7 +126,7 @@ static bool matchesPattern(const uint8_t* data, uint32_t page, uint16_t& mismatc
 	uint8_t& expected, uint8_t& actual)
 {
 	uint32_t value = page * 2654435761U + 0xA5C39E17U;
-	for (uint32_t i = 0; i < W25N02Kv::pageDataSize; ++i) {
+	for (uint32_t i = 0; i < WinbondSpiNand::pageDataSize; ++i) {
 		value = value * 1664525U + 1013904223U;
 		expected = uint8_t(value >> 24);
 		if (data[i] != expected) {
@@ -182,14 +186,15 @@ static void benchmarkTask(void* parameter)
 	uint32_t readCrc = 0;
 	uint32_t pagesDone = 0;
 	uint32_t mismatchPages = 0;
-	W25N02KvTiming writeTiming;
-	W25N02KvTiming readTiming;
+	WinbondSpiNandTiming writeTiming;
+	WinbondSpiNandTiming readTiming;
 	uint64_t writeOperationUs = 0, writeProcessUs = 0, writeYieldUs = 0;
 	uint64_t readOperationUs = 0, readProcessUs = 0, readYieldUs = 0;
 
-	uint8_t* pageData = new (std::nothrow) uint8_t[W25N02Kv::pageDataSize];
+	uint8_t* pageData = new (std::nothrow) uint8_t[WinbondSpiNand::pageDataSize];
 	if (!pageData) {
 		finishBenchmark(BenchmarkPhase::failed, "no_memory", startedMs);
+		nandDiagnosticRelease();
 		vTaskDelete(nullptr);
 		return;
 	}
@@ -215,7 +220,7 @@ static void benchmarkTask(void* parameter)
 	taskENTER_CRITICAL(&benchmarkMutex);
 	benchmarkStatus.goodBlocks = goodBlocks;
 	benchmarkStatus.badBlocks = badBlocks;
-	benchmarkStatus.totalPages = uint32_t(goodBlocks) * W25N02Kv::pagesPerBlock;
+	benchmarkStatus.totalPages = uint32_t(goodBlocks) * eventFlash.geometry().pagesPerBlock;
 	taskEXIT_CRITICAL(&benchmarkMutex);
 	if (!goodBlocks) {
 		finishBenchmark(BenchmarkPhase::failed, "no_good_blocks", startedMs);
@@ -242,7 +247,7 @@ static void benchmarkTask(void* parameter)
 	benchmarkStatus.eraseMs = millis() - phaseStarted;
 	benchmarkStatus.goodBlocks = goodBlocks;
 	benchmarkStatus.badBlocks = badBlocks;
-	benchmarkStatus.totalPages = uint32_t(goodBlocks) * W25N02Kv::pagesPerBlock;
+	benchmarkStatus.totalPages = uint32_t(goodBlocks) * eventFlash.geometry().pagesPerBlock;
 	taskEXIT_CRITICAL(&benchmarkMutex);
 	if (!goodBlocks) {
 		finishBenchmark(BenchmarkPhase::failed, "no_erasable_blocks", startedMs);
@@ -253,20 +258,20 @@ static void benchmarkTask(void* parameter)
 	for (uint16_t offset = 0; offset < config.blockCount; ++offset) {
 		const uint16_t block = config.startBlock + offset;
 		if (isBadBlock(block)) continue;
-		for (uint16_t pageInBlock = 0; pageInBlock < W25N02Kv::pagesPerBlock; ++pageInBlock) {
-			const uint32_t page = uint32_t(block) * W25N02Kv::pagesPerBlock + pageInBlock;
+		for (uint16_t pageInBlock = 0; pageInBlock < WinbondSpiNand::pagesPerBlock; ++pageInBlock) {
+			const uint32_t page = uint32_t(block) * WinbondSpiNand::pagesPerBlock + pageInBlock;
 			uint8_t status = 0;
 			uint32_t measuredUs = micros();
 			fillPattern(pageData, page);
 			writeProcessUs += micros() - measuredUs;
 			updateProgress(BenchmarkPhase::write, block, pagesDone);
 			measuredUs = micros();
-			if (!eventFlash.programPage(page, pageData, W25N02Kv::pageDataSize, status, &writeTiming)) {
+			if (!eventFlash.programPage(page, pageData, WinbondSpiNand::pageDataSize, status, &writeTiming)) {
 				finishBenchmark(BenchmarkPhase::failed, "program_failed", startedMs); goto cleanup;
 			}
 			writeOperationUs += micros() - measuredUs;
 			measuredUs = micros();
-			writeCrc = esp_crc32_le(writeCrc, pageData, W25N02Kv::pageDataSize);
+			writeCrc = esp_crc32_le(writeCrc, pageData, WinbondSpiNand::pageDataSize);
 			writeProcessUs += micros() - measuredUs;
 			++pagesDone;
 			if (shouldCancel()) { finishBenchmark(BenchmarkPhase::cancelled, "cancelled", startedMs); goto cleanup; }
@@ -279,7 +284,7 @@ static void benchmarkTask(void* parameter)
 	}
 	taskENTER_CRITICAL(&benchmarkMutex);
 	benchmarkStatus.writeMs = millis() - phaseStarted;
-	benchmarkStatus.bytesWritten = pagesDone * W25N02Kv::pageDataSize;
+	benchmarkStatus.bytesWritten = pagesDone * WinbondSpiNand::pageDataSize;
 	benchmarkStatus.writeCrc32 = writeCrc;
 	benchmarkStatus.writeOperationUs = writeOperationUs;
 	benchmarkStatus.writeProcessUs = writeProcessUs;
@@ -295,11 +300,11 @@ static void benchmarkTask(void* parameter)
 	for (uint16_t offset = 0; offset < config.blockCount; ++offset) {
 		const uint16_t block = config.startBlock + offset;
 		if (isBadBlock(block)) continue;
-		for (uint16_t pageInBlock = 0; pageInBlock < W25N02Kv::pagesPerBlock; ++pageInBlock) {
-			const uint32_t page = uint32_t(block) * W25N02Kv::pagesPerBlock + pageInBlock;
+		for (uint16_t pageInBlock = 0; pageInBlock < WinbondSpiNand::pagesPerBlock; ++pageInBlock) {
+			const uint32_t page = uint32_t(block) * WinbondSpiNand::pagesPerBlock + pageInBlock;
 			uint8_t status = 0;
 			uint32_t measuredUs = micros();
-			if (!eventFlash.readPage(page, pageData, W25N02Kv::pageDataSize, status, &readTiming)) {
+			if (!eventFlash.readPage(page, pageData, WinbondSpiNand::pageDataSize, status, &readTiming)) {
 				finishBenchmark(BenchmarkPhase::failed, "read_failed", startedMs); goto cleanup;
 			}
 			readOperationUs += micros() - measuredUs;
@@ -322,12 +327,13 @@ static void benchmarkTask(void* parameter)
 					finishBenchmark(BenchmarkPhase::failed, "data_mismatch", startedMs); goto cleanup;
 				}
 			}
-			readCrc = esp_crc32_le(readCrc, pageData, W25N02Kv::pageDataSize);
+			readCrc = esp_crc32_le(readCrc, pageData, WinbondSpiNand::pageDataSize);
 			readProcessUs += micros() - measuredUs;
 			++pagesDone;
 			updateProgress(BenchmarkPhase::read, block, pagesDone);
 			taskENTER_CRITICAL(&benchmarkMutex);
-			if ((status & 0x70) > benchmarkStatus.maxReadStatus) benchmarkStatus.maxReadStatus = status & 0x70;
+			const uint8_t eccStatus = status & eventFlash.geometry().eccStatusMask;
+			if (eccStatus > benchmarkStatus.maxReadStatus) benchmarkStatus.maxReadStatus = eccStatus;
 			taskEXIT_CRITICAL(&benchmarkMutex);
 			if (shouldCancel()) { finishBenchmark(BenchmarkPhase::cancelled, "cancelled", startedMs); goto cleanup; }
 			// Una pausa cada ocho paginas alimenta al idle task sin sumar un tick a cada transferencia.
@@ -340,7 +346,7 @@ static void benchmarkTask(void* parameter)
 	}
 	taskENTER_CRITICAL(&benchmarkMutex);
 	benchmarkStatus.readMs = millis() - phaseStarted;
-	benchmarkStatus.bytesRead = pagesDone * W25N02Kv::pageDataSize;
+	benchmarkStatus.bytesRead = pagesDone * WinbondSpiNand::pageDataSize;
 	benchmarkStatus.writeCrc32 = writeCrc;
 	benchmarkStatus.readCrc32 = readCrc;
 	benchmarkStatus.readOperationUs = readOperationUs;
@@ -363,21 +369,34 @@ cleanup:
 	if (writeSession) eventFlash.endWriteSession(protection, configuration);
 	eventFlash.setClockHz(30000000);
 	delete[] pageData;
+	nandDiagnosticRelease();
 	vTaskDelete(nullptr);
 }
 
 bool nandBenchmarkStart(NandBenchmarkMode mode, uint8_t speedMHz, uint16_t startBlock, uint16_t blockCount)
 {
+	if (storageManager.state() != StorageState::unformatted) return false;
 	if (speedMHz != 20 && speedMHz != 25 && speedMHz != 30 && speedMHz != 35 && speedMHz != 40) return false;
-	const uint16_t defaultStart = mode == NandBenchmarkMode::quick ? 2038 : mode == NandBenchmarkMode::verify ? 4 : 0;
+	if (!nandDiagnosticTryAcquire()) return false;
+	const uint16_t detectedBlocks = eventFlash.geometry().blockCount;
+	if (!detectedBlocks) {
+		nandDiagnosticRelease();
+		return false;
+	}
+	const uint16_t defaultStart = mode == NandBenchmarkMode::quick ? detectedBlocks - 10 :
+		mode == NandBenchmarkMode::verify ? 4 : 0;
 	if (blockCount == 0) {
 		startBlock = defaultStart;
-		blockCount = mode == NandBenchmarkMode::quick ? 8 : W25N02Kv::blockCount - startBlock;
+		blockCount = mode == NandBenchmarkMode::quick ? 8 : detectedBlocks - startBlock;
 	}
-	if (startBlock >= W25N02Kv::blockCount || blockCount > W25N02Kv::blockCount - startBlock) return false;
+	if (startBlock >= detectedBlocks || blockCount > detectedBlocks - startBlock) {
+		nandDiagnosticRelease();
+		return false;
+	}
 	taskENTER_CRITICAL(&benchmarkMutex);
 	if (benchmarkStatus.running) {
 		taskEXIT_CRITICAL(&benchmarkMutex);
+		nandDiagnosticRelease();
 		return false;
 	}
 	benchmarkStatus = BenchmarkStatus{};
@@ -391,6 +410,7 @@ bool nandBenchmarkStart(NandBenchmarkMode mode, uint8_t speedMHz, uint16_t start
 
 	if (xTaskCreatePinnedToCore(benchmarkTask, "nandBenchmark", 4096, nullptr, 1, nullptr, PRO_CPU_NUM) != pdPASS) {
 		finishBenchmark(BenchmarkPhase::failed, "task_create_failed", millis());
+		nandDiagnosticRelease();
 		return false;
 	}
 	return true;
@@ -403,6 +423,19 @@ bool nandBenchmarkCancel()
 	benchmarkStatus.cancelRequested = running;
 	taskEXIT_CRITICAL(&benchmarkMutex);
 	return running;
+}
+
+// Reserva el acceso exclusivo usado por pruebas destructivas de diagnostico.
+bool nandDiagnosticTryAcquire()
+{
+	bool expected = false;
+	return nandDiagnosticActive.compare_exchange_strong(expected, true);
+}
+
+// Libera el acceso exclusivo usado por pruebas destructivas de diagnostico.
+void nandDiagnosticRelease()
+{
+	nandDiagnosticActive = false;
 }
 
 void nandBenchmarkGetJson(String& json)
@@ -426,7 +459,8 @@ void nandBenchmarkGetJson(String& json)
 		json = "{\"schemaVersion\":1,\"reason\":\"no_memory\"}";
 		return;
 	}
-	snprintf(buffer, 1536, "{\"schemaVersion\":1,\"running\":%s,\"success\":%s,\"mode\":\"%s\"," 
+	snprintf(buffer, 1536, "{\"schemaVersion\":1,\"model\":\"%s\",\"capacityBytes\":%u,"
+		"\"running\":%s,\"success\":%s,\"mode\":\"%s\"," 
 		"\"phase\":\"%s\",\"speedMHz\":%u,\"startBlock\":%u,\"blockCount\":%u,\"currentBlock\":%u,"
 		"\"currentPage\":%u,\"totalPages\":%u,\"goodBlocks\":%u,\"badBlocks\":%u,"
 		"\"eraseMs\":%u,\"writeMs\":%u,\"readMs\":%u,\"totalMs\":%u,"
@@ -441,6 +475,7 @@ void nandBenchmarkGetJson(String& json)
 		"\"mismatchPages\":%u,\"firstMismatchPage\":%u,\"firstMismatchBlock\":%u,"
 		"\"firstMismatchByte\":%u,\"expectedByte\":\"%02X\",\"actualByte\":\"%02X\","
 		"\"firstMismatchStatus\":\"%02X\",\"reason\":\"%s\"}",
+		eventFlash.modelName(), eventFlash.capacityBytes(),
 		status.running ? "true" : "false", status.success ? "true" : "false",
 		modeName(status.mode), phaseName(status.phase), status.speedMHz,
 		status.startBlock, status.blockCount, status.currentBlock, status.currentPage, status.totalPages,
@@ -456,7 +491,7 @@ void nandBenchmarkGetJson(String& json)
 		readNoContentionMbps, readSpiMbps,
 		status.writeCrc32, status.readCrc32,
 		status.maxReadStatus, status.mismatchPages, status.firstMismatchPage,
-		status.firstMismatchPage / W25N02Kv::pagesPerBlock, status.firstMismatchByte,
+		status.firstMismatchPage / WinbondSpiNand::pagesPerBlock, status.firstMismatchByte,
 		status.expectedByte, status.actualByte, status.firstMismatchStatus, status.reason);
 	json = buffer;
 	delete[] buffer;

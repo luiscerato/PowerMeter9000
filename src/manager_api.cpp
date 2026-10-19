@@ -3,10 +3,13 @@
 #include "meter.h"
 #include "event_store.h"
 #include <Preferences.h>
-#include <SPIFFS.h>
 #include <WiFi.h>
 #include <sys/time.h>
 #include <atomic>
+
+#include "storage/storage_manager.h"
+
+extern StorageManager storageManager;
 
 static const char* managerSettingsName = "manager";
 static const char* managerFirmwareVersion = "0.9.0";
@@ -231,8 +234,8 @@ void managerGetDiscoveryJson(String& dest)
 	dest += "},\"electrical\":{\"system\":\"three_phase\",\"phases\":[\"R\",\"S\",\"T\",\"N\"]},";
 	dest += "\"capabilities\":{\"telemetry\":true,\"telemetryRest\":true,\"eventNotifications\":true,";
 	dest += "\"eventCatalog\":true,\"eventDownload\":true,\"historySync\":false,\"configuration\":false,\"localWeb\":true},";
-	dest += "\"links\":{\"status\":\"/api/v1/status\",\"telemetry\":\"/api/v1/telemetry/current\",";
-	dest += "\"configuration\":\"/api/v1/configuration\",\"events\":\"/api/v1/events\",\"history\":\"/api/v1/history\"}}";
+	dest += "\"links\":{\"status\":\"/manager/status\",\"telemetry\":\"/telemetry\",";
+	dest += "\"events\":\"/events\",\"history\":\"/history\"}}";
 }
 
 void managerGetStatusJson(String& dest)
@@ -265,7 +268,7 @@ void managerGetStatusJson(String& dest)
 	if (lastSample) managerAppendUint64(dest, lastSample);
 	else dest += "null";
 	dest += "},\"storage\":{\"available\":";
-	dest += SPIFFS.totalBytes() > 0 ? "true" : "false";
+	dest += storageManager.isReady() ? "true" : "false";
 	dest += ",\"historyRecords\":0,\"eventCount\":";
 	dest += String(eventStoreEventCount());
 	dest += ",\"pendingEventUploads\":";
@@ -299,13 +302,6 @@ void managerGetTelemetryCurrentJson(String& dest)
 		dest += "}";
 	}
 	dest += "]}";
-}
-
-void managerGetNotImplementedJson(String& dest, const char* resource)
-{
-	dest = "{\"schemaVersion\":1,\"error\":\"not_implemented\",\"resource\":";
-	managerAppendJsonString(dest, resource == nullptr ? "" : resource);
-	dest += "}";
 }
 
 void managerAppendUint64(String& dest, uint64_t value)

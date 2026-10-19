@@ -1,0 +1,12 @@
+{
+  "name": "powermeter-serial-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "monitor": "node monitor.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

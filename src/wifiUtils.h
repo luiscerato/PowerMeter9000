@@ -19,6 +19,19 @@ enum class Wifi_Mode : int32_t
 	Station_AP = WIFI_MODE_APSTA,
 };
 
+struct wifiStationConfig
+{
+	bool enabled;
+	bool staticIp;
+	String ssid;
+	String password;
+	String ip;
+	String mask;
+	String gateway;
+	String dns1;
+	String dns2;
+};
+
 /*
 		Listado de los caracteres creados con la función Create_WiFi_Chars()
 */
@@ -48,6 +61,25 @@ void DebugStart();
 void WifiStart();
 
 void WifiReconnect();
+
+// Inicia o reutiliza el escaneo asíncrono. No recibe parámetros.
+void wifiScanStart();
+
+// Devuelve el estado del escaneo Wi-Fi. No recibe parámetros.
+int32_t wifiScanStatus();
+
+// Lee una red: index es su índice; ssid, auth y rssi reciben sus datos.
+bool wifiScanGetNetwork(int32_t index, String& ssid, uint8_t& auth, int32_t& rssi);
+
+// Guarda las credenciales y conecta respetando la politica IP actual.
+// ssid es el nombre de red y password es su clave, que puede estar vacia.
+bool wifiSaveStationCredentials(const String& ssid, const String& password);
+
+// Carga la configuracion de estacion desde NVS; config recibe todos sus campos.
+bool wifiLoadStationConfig(wifiStationConfig& config);
+
+// Guarda y aplica la configuracion de estacion; config contiene modo, red e IP.
+bool wifiSaveStationConfig(const wifiStationConfig& config);
 
 void OTAStart();
 

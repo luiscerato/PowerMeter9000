@@ -19,6 +19,9 @@ void webServerSetAcEvents(WSeventFunctionCallback func);
 
 AsyncWebSocket* webServerGetAcWS();
 
+// Limpia clientes WebSocket desconectados para liberar las colas de envio.
+void webServerCleanupClients();
+
 void Init_WebServer();
 
 

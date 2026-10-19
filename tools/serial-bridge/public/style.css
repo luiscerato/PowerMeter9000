@@ -1,0 +1,75 @@
+:root {
+	font-family: "Segoe UI", Arial, sans-serif;
+	color: #e8edf3;
+	background: #111820;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; min-width: 320px; }
+
+main {
+	width: min(1100px, calc(100% - 32px));
+	margin: 24px auto;
+}
+
+header, .controls, footer {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+header { justify-content: space-between; margin-bottom: 18px; }
+h1 { margin: 0; font-size: 22px; font-weight: 650; }
+header p { margin: 4px 0 0; color: #9ba9b8; font-size: 14px; }
+
+.status {
+	padding: 6px 10px;
+	border: 1px solid #56616d;
+	border-radius: 6px;
+	color: #b9c3cc;
+	font-size: 13px;
+}
+
+.status.connected { border-color: #38a878; color: #85e0b3; }
+
+.controls { flex-wrap: wrap; }
+
+button {
+	min-height: 36px;
+	padding: 0 12px;
+	border: 1px solid #168b70;
+	border-radius: 5px;
+	background: #11745f;
+	color: white;
+	font: inherit;
+	cursor: pointer;
+}
+
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.secondary { border-color: #536170; background: #293441; }
+.baud { margin-left: auto; color: #aeb8c2; font-size: 13px; }
+.notice { min-height: 20px; color: #f3c46a; font-size: 13px; }
+
+textarea {
+	display: block;
+	width: 100%;
+	height: min(72vh, 720px);
+	min-height: 300px;
+	padding: 12px;
+	border: 1px solid #394653;
+	border-radius: 6px;
+	background: #080c10;
+	color: #c9f2d0;
+	font: 13px/1.45 Consolas, monospace;
+	resize: vertical;
+}
+
+footer { justify-content: space-between; margin-top: 8px; color: #9ba9b8; font-size: 12px; }
+
+@media (max-width: 600px) {
+	main { width: calc(100% - 20px); margin: 12px auto; }
+	.controls button { flex: 1 1 calc(50% - 10px); }
+	.baud { flex-basis: 100%; margin: 2px 0 0; }
+	footer { align-items: flex-start; flex-direction: column; }
+}

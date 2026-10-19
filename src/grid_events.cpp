@@ -2,6 +2,7 @@
 #include "event_store.h"
 #include "manager_api.h"
 #include "wifiUtils.h"
+#include "meter_timing.h"
 #include <Arduino.h>
 #include <Preferences.h>
 #include <atomic>
@@ -29,6 +30,17 @@ struct gridTracker {
 	gridStateSnapshot snapshot = {};
 	bool initialized = false;
 };
+
+struct pendingGridSnapshot {
+	gridStateSnapshot snapshot = {};
+	uint32_t revision = 0;
+	bool pending = false;
+};
+static pendingGridSnapshot pendingSnapshots[4];
+static portMUX_TYPE snapshotMutex = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t persistNextSlot = 0;
+static bool persistRetry = false;
+static uint32_t persistRetryAtMs = 0;
 
 struct gridNotice {
 	char eventId[48];
@@ -63,6 +75,7 @@ static QueueHandle_t gridNoticeQueue = nullptr;
 static StaticQueue_t gridNoticeQueueControl;
 alignas(4) static uint8_t gridNoticeQueueStorage[gridNoticeQueueSize * sizeof(gridNotice)];
 static gridTracker trackers[4];
+static uint8_t startupStates[4] = {};
 static bool startupResolved = false;
 static uint32_t startupGuardDeadlineMs = 0;
 static bool startupGuardStarted = false;
@@ -98,11 +111,17 @@ static bool deadlineReached(uint32_t deadlineMs)
 	return int32_t(millis() - deadlineMs) >= 0;
 }
 
-// Devuelve el nombre compacto de un motivo de reinicio electrico.
+// Devuelve el nombre compacto de un motivo de reinicio.
 // reason es el valor informado por ESP-IDF.
 static const char* resetReasonName(esp_reset_reason_t reason)
 {
-	return reason == ESP_RST_BROWNOUT ? "brownout" : "power_on";
+	switch (reason) {
+	case ESP_RST_BROWNOUT: return "brownout";
+	case ESP_RST_POWERON: return "power_on";
+	case ESP_RST_PANIC: return "panic";
+	case ESP_RST_SW: return "software";
+	default: return "reset";
+	}
 }
 
 // Indica si el reinicio merece snapshots iniciales de red.
@@ -114,8 +133,9 @@ static bool isElectricalStartup(esp_reset_reason_t reason)
 
 // Guarda el ultimo estado conocido del slot indicado.
 // slot identifica R, S, T o red general; snapshot contiene el estado.
-static void saveSnapshot(uint8_t slot, const gridStateSnapshot& snapshot)
+static bool saveSnapshot(uint8_t slot, const gridStateSnapshot& snapshot)
 {
+	meterTimingScope timing(meterTimingPart::gridNvs);
 	persistedGridState stored = {};
 	stored.magic = persistedGridMagic;
 	stored.version = 4;
@@ -123,10 +143,56 @@ static void saveSnapshot(uint8_t slot, const gridStateSnapshot& snapshot)
 	stored.startedAtMs = snapshot.startedAtMs;
 	copyText(stored.state, sizeof(stored.state), snapshot.state);
 	Preferences prefs;
-	if (!prefs.begin(gridStorageName, false)) return;
-	if (prefs.putBytes(gridStorageKeys[slot], &stored, sizeof(stored)) != sizeof(stored))
-		debugE("No se pudo guardar estado grid %s", snapshot.state);
+	if (!prefs.begin(gridStorageName, false)) return false;
+	const bool saved = prefs.putBytes(gridStorageKeys[slot], &stored, sizeof(stored)) == sizeof(stored);
 	prefs.end();
+	return saved;
+}
+
+// Conserva solo la ultima linea base del slot; snapshot se copia sin acceder a NVS ni esperar una cola.
+static void queueSnapshot(uint8_t slot, const gridStateSnapshot& snapshot)
+{
+	if (slot >= 4) return;
+	portENTER_CRITICAL(&snapshotMutex);
+	pendingGridSnapshot& entry = pendingSnapshots[slot];
+	entry.snapshot = snapshot;
+	++entry.revision;
+	entry.pending = true;
+	portEXIT_CRITICAL(&snapshotMutex);
+}
+
+// Persiste un solo slot por pasada; sin parametros, el loop principal es el unico consumidor.
+void gridEventsPersistLoop()
+{
+	if (persistRetry && !deadlineReached(persistRetryAtMs)) return;
+	persistRetry = false;
+	for (uint8_t index = 0; index < 4; ++index) {
+		const uint8_t slot = (persistNextSlot + index) % 4;
+		gridStateSnapshot snapshot = {};
+		uint32_t revision = 0;
+		bool pending = false;
+		portENTER_CRITICAL(&snapshotMutex);
+		pending = pendingSnapshots[slot].pending;
+		if (pending) {
+			snapshot = pendingSnapshots[slot].snapshot;
+			revision = pendingSnapshots[slot].revision;
+		}
+		portEXIT_CRITICAL(&snapshotMutex);
+		if (!pending) continue;
+		const bool saved = saveSnapshot(slot, snapshot);
+		persistNextSlot = (slot + 1) % 4;
+		if (saved) {
+			portENTER_CRITICAL(&snapshotMutex);
+			// No borrar un estado nuevo que MeterTask haya publicado mientras escribiamos el anterior.
+			if (pendingSnapshots[slot].revision == revision) pendingSnapshots[slot].pending = false;
+			portEXIT_CRITICAL(&snapshotMutex);
+		} else {
+			persistRetry = true;
+			persistRetryAtMs = millis() + 1000U;
+			debugW("No se pudo guardar estado grid %u; se reintentara", slot);
+		}
+		return;
+	}
 }
 
 // Restaura el ultimo estado conocido del slot indicado.
@@ -150,7 +216,7 @@ static bool loadSnapshot(gridTracker& tracker, uint8_t slot)
 	return true;
 }
 
-// Actualiza el estado RAM/NVS que sirve como referencia para la proxima transicion.
+// Actualiza RAM y solicita persistencia diferida para la referencia de la proxima transicion.
 // slot identifica el tracker; state/startedMs describen el nuevo estado.
 static void setCurrentState(uint8_t slot, const char* state, uint32_t startedMs)
 {
@@ -161,7 +227,7 @@ static void setCurrentState(uint8_t slot, const char* state, uint32_t startedMs)
 	tracker.snapshot.startedAtMs = unixTimestampAt(startedMs);
 	tracker.snapshot.localStartValid = true;
 	copyText(tracker.snapshot.state, sizeof(tracker.snapshot.state), state);
-	saveSnapshot(slot, tracker.snapshot);
+	queueSnapshot(slot, tracker.snapshot);
 }
 
 // Completa en NVS una fecha de inicio cuando NTP aparece durante el mismo arranque.
@@ -172,7 +238,7 @@ static void refreshStartTimestamp(uint8_t slot)
 	if (!tracker.initialized || !tracker.snapshot.localStartValid ||
 		tracker.snapshot.startedAtMs || !managerClockSynchronized()) return;
 	tracker.snapshot.startedAtMs = unixTimestampAt(tracker.snapshot.startedMs);
-	saveSnapshot(slot, tracker.snapshot);
+	queueSnapshot(slot, tracker.snapshot);
 }
 
 // Agrega notice sin bloquear; si se llena conserva los eventos mas recientes.
@@ -313,17 +379,18 @@ static void updateOverall(gridCondition overall, const phaseState* phases[3], ui
 static void resolveStartup(const phaseState* phases[3], gridCondition overall,
 	const float values[3], uint32_t sampleMs)
 {
-	const bool publish = isElectricalStartup(startupResetReason);
-	const char* reason = publish ? resetReasonName(startupResetReason) : nullptr;
+	const bool electrical = isElectricalStartup(startupResetReason);
+	const char* reason = resetReasonName(startupResetReason);
 	for (uint8_t i = 0; i < 3; i++) {
 		const char* state = phaseStateName(phases[i]->state);
-		if (publish) queueTransition(i, 1 << i, phaseEventType(phases[i]->state),
+		if (electrical || startupStates[i] && startupStates[i] != uint8_t(phases[i]->state))
+			queueTransition(i, 1 << i, phaseEventType(phases[i]->state),
 			state, true, values[i], sampleMs, true, reason);
 		setCurrentState(i, state, sampleMs);
 	}
 	const char* overallState = gridStateName(overall);
-	if (publish) queueTransition(3, 0x07, gridEventType(overall), overallState,
-		false, 0, sampleMs, true, reason);
+	if (electrical || startupStates[3] && startupStates[3] != uint8_t(overall))
+		queueTransition(3, 0x07, gridEventType(overall), overallState, false, 0, sampleMs, true, reason);
 	setCurrentState(3, overallState, sampleMs);
 	startupResolved = true;
 }
@@ -410,7 +477,15 @@ void gridEventsInit()
 	if (!gridNoticeQueue) gridNoticeQueue = xQueueCreateStatic(gridNoticeQueueSize,
 		sizeof(gridNotice), gridNoticeQueueStorage, &gridNoticeQueueControl);
 	if (!gridNoticeQueue) debugE("No se pudo crear la cola de eventos grid");
-	for (uint8_t i = 0; i < 4; i++) loadSnapshot(trackers[i], i);
+	for (uint8_t i = 0; i < 4; i++) {
+		trackers[i] = gridTracker{};
+		startupStates[i] = 0;
+		if (!loadSnapshot(trackers[i], i)) continue;
+		for (uint8_t state = 1; state <= (i == 3 ? 3 : 4); ++state) {
+			const char* name = i == 3 ? gridStateName(gridCondition(state)) : phaseStateName(phaseCondition(state));
+			if (!strcmp(trackers[i].snapshot.state, name)) startupStates[i] = state;
+		}
+	}
 	startupResetReason = esp_reset_reason();
 	clockWaitDeadlineMs = millis() + gridClockWaitMs;
 }
@@ -436,6 +511,18 @@ void gridEventsUpdate(const phaseState& r, const phaseState& s, const phaseState
 	updatePhase(1, s, vs);
 	updatePhase(2, t, vt);
 	updateOverall(overall, phases, sampleMs);
+}
+
+// Devuelve si los estados iniciales ya fueron establecidos sin generar eventos de arranque.
+bool gridEventsReadyForStorage()
+{
+	return startupResolved;
+}
+
+// Devuelve la linea base NVS del arranque; slot identifica R, S, T o red.
+uint8_t gridEventsStartupState(uint8_t slot)
+{
+	return slot < 4 ? startupStates[slot] : 0;
 }
 
 void gridEventNotificationLoop()

@@ -9,6 +9,8 @@
 #include "ADE9000.h"
 #include "Preferences.h"
 
+// ZXTOUT cuenta ciclos de 8 kHz: 159 representa aproximadamente 20 ms.
+static constexpr uint16_t ade9000ZeroCrossTimeout20Ms = 159;
 
 
 // SPIClass port(VSPI);
@@ -105,6 +107,7 @@ void ADE9000::setupADE9000(void)
     SPI_Write_16(ADDR_ACCMODE, ADE9000_ACCMODE);
     SPI_Write_16(ADDR_TEMP_CFG, ADE9000_TEMP_CFG);
     SPI_Write_16(ADDR_ZX_LP_SEL, ADE9000_ZX_LP_SEL);
+    SPI_Write_16(ADDR_ZXTOUT, ade9000ZeroCrossTimeout20Ms);
     SPI_Write_32(ADDR_MASK0, ADE9000_MASK0);
     SPI_Write_32(ADDR_MASK1, ADE9000_MASK1);
     SPI_Write_32(ADDR_EVENT_MASK, ADE9000_EVENT_MASK);
@@ -210,6 +213,8 @@ void ADE9000::restoreCalibration()
 {
     Serial.printf("Restaurando calibracion de fábrica!!");
     preferences.begin("ADE9000", false);
+    preferences.putFloat("neutralRms", 1);
+    preferences.putFloat("neutralFast", 1);
 
     preferences.putInt("APHCAL0", 0xfc46300c);
     preferences.putInt("BPHCAL0", 0xfc780c4d);
@@ -666,7 +671,9 @@ uint32_t ADE9000::ReadTen12CurrentRMSRegs(CurrentRMSRegs* Data)
 
 uint32_t ADE9000::readPowerFactorRegsnValues(PowerFactorRegs* Data)
 {
-    uint32_t tempReg;
+	// Mantener la lectura APF original aunque la interfaz use temporalmente W/VA.
+	// Sirve para contrastar ambos métodos durante el diagnóstico del factor de potencia.
+    int32_t tempReg;
     float tempValue;
 
     uint32_t time = micros();

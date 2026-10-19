@@ -1,225 +1,534 @@
 #include "bl0942.h"
-#include "Arduino.h"
-#include "pins.h"
 #include "wifiUtils.h"
+#include <Preferences.h>
+#include <math.h>
+#include <float.h>
+#include <string.h>
+#include <driver/uart.h>
 
-static const uint8_t BL0942_READ_COMMAND = 0x58;
-static const uint8_t BL0942_FULL_PACKET = 0xAA;
-static const uint8_t BL0942_PACKET_HEADER = 0x55;
+static constexpr uint8_t readCommand = 0x58;
+static constexpr uint8_t writeCommand = 0xA8;
+static constexpr uint8_t fastRmsRegister = 0x05;
+static constexpr uint8_t currentRmsRegister = 0x03;
+static constexpr uint8_t antiCreepRegister = 0x14;
+static constexpr uint8_t fastCyclesRegister = 0x16;
+static constexpr uint8_t modeRegister = 0x19;
+static constexpr uint8_t gainRegister = 0x1A;
+static constexpr uint8_t writeProtectRegister = 0x1D;
+static constexpr uint32_t modeValue = 0x397; // 38400 baud, 50 Hz, RMS 400 ms y Fast RMS despues del HPF.
+static constexpr uint32_t fastIntervalUs = 10000;
+static constexpr uint32_t voltageIntervalUs = 400000;
+static constexpr uint32_t responseTimeoutUs = 3000;
+static constexpr uint32_t initializationTimeoutUs = 20000;
+static constexpr uint32_t recoveryIntervalUs = 2000;
+static constexpr uint32_t slowReadBudgetUs = 4000;
+static constexpr float currentVoltageRatio = (305978.0f / 73989.0f) * (4.0f / 16.0f);
+static constexpr float fastVoltageRatio = 0.363f * currentVoltageRatio;
 
-static const uint8_t BL0942_WRITE_COMMAND = 0xA8;
-
-static const uint8_t BL0942_REG_I_RMSOS = 0x12;
-static const uint8_t BL0942_REG_WA_CREEP = 0x14;
-static const uint8_t BL0942_REG_I_FAST_RMS_TH = 0x15;
-static const uint8_t BL0942_REG_I_FAST_RMS_CYC = 0x16;
-static const uint8_t BL0942_REG_FREQ_CYC = 0x17;
-static const uint8_t BL0942_REG_OT_FUNX = 0x18;
-static const uint8_t BL0942_REG_MODE = 0x19;
-static const uint8_t BL0942_REG_SOFT_RESET = 0x1C;
-static const uint8_t BL0942_REG_USR_WRPROT = 0x1D;
-static const uint8_t BL0942_REG_TPS_CTRL = 0x1B;
-
-static const uint32_t BL0942_REG_MODE_RESV = 0x03;
-static const uint32_t BL0942_REG_MODE_CF_EN = 0x04;
-static const uint32_t BL0942_REG_MODE_RMS_UPDATE_SEL = 0x08;
-static const uint32_t BL0942_REG_MODE_FAST_RMS_SEL = 0x10;
-static const uint32_t BL0942_REG_MODE_AC_FREQ_SEL = 0x20;
-static const uint32_t BL0942_REG_MODE_CF_CNT_CLR_SEL = 0x40;
-static const uint32_t BL0942_REG_MODE_CF_CNT_ADD_SEL = 0x80;
-static const uint32_t BL0942_REG_MODE_UART_RATE_19200 = 0x200;
-static const uint32_t BL0942_REG_MODE_UART_RATE_38400 = 0x300;
-static const uint32_t BL0942_REG_MODE_DEFAULT =
-BL0942_REG_MODE_RESV | BL0942_REG_MODE_CF_EN | BL0942_REG_MODE_CF_CNT_ADD_SEL | BL0942_REG_MODE_UART_RATE_38400;
-
-static const uint32_t BL0942_REG_SOFT_RESET_MAGIC = 0x5a5a5a;
-static const uint32_t BL0942_REG_USR_WRPROT_MAGIC = 0x55;
-
-// 23-byte packet, 11 bits per byte, 2400 baud: about 105ms
-static const uint32_t PKT_TIMEOUT_MS = 200;
-
-
-void BL0942::begin()
+// Publica bytes sin esperar que se llene la FIFO; baud selecciona la velocidad de deteccion/lectura.
+void BL0942::beginUart(uint32_t baud)
 {
-    begin(-1, -1);
+    HardwareSerial::begin(baud, SERIAL_8N1, uartRx, uartTx);
+    const uart_port_t port = static_cast<uart_port_t>(_uart_nr);
+    // Este core arranca en RS485 half-duplex; BL usa RX/TX separados y responde sin guarda larga.
+    uart_set_mode(port, UART_MODE_UART);
+    uart_set_rx_full_threshold(port, 1);
+    uart_set_rx_timeout(port, 1);
 }
 
+// Detecta la UART, configura el chip y prepara los plazos; rx y tx son los pines del ESP32.
 void BL0942::begin(int32_t rx, int32_t tx)
 {
-    debugI("Iniciando BL0942!");
-    HardwareSerial::begin(4800, SERIAL_8N1, rx, tx);
-    debugI("Setup 1");
-    setup();
-    debugI("Setup 2");
-    setup();
-    HardwareSerial::begin(38400, SERIAL_8N1, rx, tx);
+    uartRx = rx;
+    uartTx = tx;
+    state = {};
+    Preferences options;
+    if (options.begin("ADE9000", false)) {
+        calibration.rmsFactor = options.getFloat("neutralRms", 1);
+        calibration.fastFactor = options.getFloat("neutralFast", 1);
+        if (!isfinite(calibration.rmsFactor) || calibration.rmsFactor <= 0) calibration.rmsFactor = 1;
+        if (!isfinite(calibration.fastFactor) || calibration.fastFactor <= 0) calibration.fastFactor = 1;
+        // Materializa tambien los valores iniciales para incluirlos en el respaldo de calibraciones.
+        if (!options.isKey("neutralRms")) options.putFloat("neutralRms", calibration.rmsFactor);
+        if (!options.isKey("neutralFast")) options.putFloat("neutralFast", calibration.fastFactor);
+        options.end();
+    }
+    pendingRegister = 0;
+    responseLength = 0;
+    recovering = false;
+    setTimeout(30);
+    const uint32_t baudRates[] = {38400, 4800, 9600, 19200};
+    uint32_t detectedBaud = 0;
+    for (uint32_t baud : baudRates) {
+        beginUart(baud);
+        while (available()) { read(); ++state.rxBytes; ++state.unexpectedBytes; }
+        if (readReg(modeRegister) >= 0) {
+            detectedBaud = baud;
+            break;
+        }
+    }
+    if (detectedBaud) state.ready = setup(rx, tx, detectedBaud);
+    nextFastUs = nextVoltageUs = micros();
+    diagnosticTimeMs = millis();
+    diagnosticReady = state.ready;
+    publishState();
+    if (state.ready)
+        debugI("BL0942 listo: baud=38400 ganancia=4x Fast RMS=10ms HPF=on I_RMS=400ms VP=ignorado");
+    else
+        debugE("BL0942 sin respuesta o configuracion no verificada");
+    if (!state.ready) retryInitialization(micros());
 }
 
-void BL0942::loop() {
-    DataPacket buffer;
-    int avail = this->available();
+// Programa otra deteccion sin borrar las metricas; nowUs es el instante del fallo.
+void BL0942::retryInitialization(uint32_t nowUs)
+{
+    state.ready = false;
+    state.voltage = state.fastVoltage = NAN;
+    pendingRegister = responseLength = 0;
+    recovering = false;
+    initializationStep = 0;
+    initializationDueUs = nowUs + 250000U;
+    consecutiveFailures = 0;
+    fastCyclePending = slowSlotOpen = false;
+    fastCycleVoltage = NAN;
+}
 
-    if (!avail) {
-        if (millis() - updateTime > 99) {
-            updateTime = millis();
-            update();   //Enviar comando de actualizacion cada 1 segundos.
-        }
+// Sincroniza una consulta Fast con el ADE; sin parametros, descarta un turno anterior incompleto.
+bool BL0942::startFastSample()
+{
+    slowSlotOpen = false;
+    loop(false);
+    slowSlotOpen = false;
+    const uint32_t nowUs = micros();
+    nextFastUs = nowUs + fastIntervalUs;
+    fastCycleVoltage = NAN;
+    fastCyclePending = false;
+    // Los turnos ADE no deben cancelar una deteccion/configuracion UART en curso.
+    if (!state.ready) return false;
+    if (pendingRegister) {
+        ++state.missedPolls;
+        recover(nowUs);
+    }
+    if (recovering || available()) return false;
+    fastCyclePending = requestReg(fastRmsRegister, nowUs);
+    return fastCyclePending;
+}
+
+// Avanza una operacion UART por pasada; nowUs controla pausas sin bloquear MeterTask.
+void BL0942::pollInitialization(uint32_t nowUs)
+{
+    if (pendingRegister || int32_t(nowUs - initializationDueUs) < 0) return;
+    const uint32_t baudRates[] = {38400, 4800, 9600, 19200};
+    if (initializationStep == 0) {
+        state.baud = baudRates[baudIndex];
+        baudIndex = (baudIndex + 1) % 4;
+        beginUart(state.baud);
+        initializationStep = 1;
+        initializationDueUs = nowUs + 20000U;
         return;
     }
-    if (avail < sizeof(buffer)) { 
-        if (!this->rx_start_) {
-            this->rx_start_ = millis();
-        }
-        else if (millis() > this->rx_start_ + PKT_TIMEOUT_MS) {
-            debugE("Junk on wire. Throwing away partial message (%d bytes)", avail);
-            this->readBytes((uint8_t*)&buffer, avail);
-            this->rx_start_ = 0;
-            update();
-        }
+    if (initializationStep == 1 || initializationStep >= 9) {
+        const uint8_t registers[] = {modeRegister, gainRegister, fastCyclesRegister, antiCreepRegister};
+        requestReg(initializationStep == 1 ? modeRegister : registers[initializationStep - 9], nowUs);
         return;
     }
-
-    if (this->readBytes((uint8_t*)&buffer, sizeof(buffer))) {
-        if (this->validate_checksum_(&buffer)) {
-            this->received_package_(&buffer);
+    if (initializationStep == 4) {
+        beginUart(38400);
+        state.baud = 38400;
+    } else {
+        const uint8_t registers[] = {writeProtectRegister, modeRegister, 0, gainRegister,
+            fastCyclesRegister, antiCreepRegister, writeProtectRegister};
+        const uint32_t values[] = {0x55, modeValue, 0, 1, 0, 0, 0};
+        const uint8_t index = initializationStep - 2;
+        uint8_t packet[] = {writeCommand, registers[index], uint8_t(values[index]),
+            uint8_t(values[index] >> 8), uint8_t(values[index] >> 16), 0};
+        packet[5] = uint8_t(~(packet[0] + packet[1] + packet[2] + packet[3] + packet[4]));
+        if (availableForWrite() < int(sizeof(packet))) return;
+        if (write(packet, sizeof(packet)) != sizeof(packet)) {
+            retryInitialization(nowUs);
+            return;
         }
     }
-    // update();
-    updateTime = millis();
-    this->rx_start_ = 0;
+    ++initializationStep;
+    initializationDueUs = nowUs + 20000U;
 }
 
-
-bool BL0942::validate_checksum_(DataPacket* data) {
-    uint8_t checksum = BL0942_READ_COMMAND | this->address_;
-    // Whole package but checksum
-    uint8_t* raw = (uint8_t*)data;
-    for (uint32_t i = 0; i < sizeof(*data) - 1; i++) {
-        checksum += raw[i];
-    }
-    checksum ^= 0xFF;
-    if (checksum != data->checksum) {
-        debugV("BL0942 invalid checksum! 0x%02X != 0x%02X", checksum, data->checksum);
-    }
-    return checksum == data->checksum;
+// Aplica y verifica ganancia 4x y medio ciclo; rx/tx son pines y currentBaud es el baud detectado.
+bool BL0942::setup(int32_t rx, int32_t tx, uint32_t currentBaud)
+{
+    writeReg(writeProtectRegister, 0x55);
+    writeReg(modeRegister, modeValue);
+    if (currentBaud != 38400) beginUart(38400);
+    state.baud = 38400;
+    writeReg(gainRegister, 0x01);
+    writeReg(fastCyclesRegister, 0x00);
+    // VP esta desconectado: el detector de potencia sin carga no debe anular I_RMS.
+    writeReg(antiCreepRegister, 0);
+    writeReg(writeProtectRegister, 0);
+    return readReg(modeRegister) == int32_t(modeValue) &&
+        readReg(gainRegister) == 0x01 && readReg(fastCyclesRegister) == 0 &&
+        readReg(antiCreepRegister) == 0;
 }
 
-void BL0942::write_reg_(uint8_t reg, uint32_t val) {
-    uint8_t pkt[6];
-
-    this->flush();
-    pkt[0] = BL0942_WRITE_COMMAND | this->address_;
-    pkt[1] = reg;
-    pkt[2] = (val & 0xff);
-    pkt[3] = (val >> 8) & 0xff;
-    pkt[4] = (val >> 16) & 0xff;
-    pkt[5] = (pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4]) ^ 0xff;
-    this->write(pkt, 6);
+// Escribe un registro durante el arranque; reg es su direccion y value sus 24 bits de datos.
+void BL0942::writeReg(uint8_t reg, uint32_t value)
+{
+    uint8_t packet[] = {writeCommand, reg, uint8_t(value), uint8_t(value >> 8), uint8_t(value >> 16), 0};
+    packet[5] = uint8_t(~(packet[0] + packet[1] + packet[2] + packet[3] + packet[4]));
+    write(packet, sizeof(packet));
+    flush();
     delay(1);
 }
 
-int BL0942::read_reg_(uint8_t reg) {
-    union {
-        uint8_t b[4];
-        uint32_t le32;
-    } resp;
-
-    this->write(BL0942_READ_COMMAND | this->address_);
-    this->write(reg);
-    this->flush();
-    if (this->readBytes(resp.b, 4) &&
-        resp.b[3] ==
-        (uint8_t)((BL0942_READ_COMMAND + this->address_ + reg + resp.b[0] + resp.b[1] + resp.b[2]) ^ 0xff)) {
-        resp.b[3] = 0;
-        return resp.le32;
+// Lee y valida reg solo durante el arranque; devuelve -1 si falta algun byte o falla el checksum.
+int32_t BL0942::readReg(uint8_t reg)
+{
+    const uint8_t request[] = {readCommand, reg};
+    uint8_t bytes[4] = {};
+    while (available()) { read(); ++state.rxBytes; ++state.unexpectedBytes; }
+    write(request, sizeof(request));
+    flush();
+    const size_t received = readBytes(bytes, sizeof(bytes));
+    state.rxBytes += received;
+    if (received && received < sizeof(bytes)) ++state.partialResponses;
+    if (received != sizeof(bytes)) {
+        ++state.timeouts;
+        return -1;
     }
-    return -1;
+    if (bytes[3] != uint8_t(~(readCommand + reg + bytes[0] + bytes[1] + bytes[2]))) {
+        ++state.checksumErrors;
+        return -1;
+    }
+    return uint32_t(bytes[0]) | (uint32_t(bytes[1]) << 8) | (uint32_t(bytes[2]) << 16);
 }
 
-void BL0942::update() {
-    this->write(BL0942_READ_COMMAND | this->address_);
-    this->write(BL0942_FULL_PACKET);
+// Envia reg sin esperar respuesta; nowUs marca el comienzo de la transaccion.
+bool BL0942::requestReg(uint8_t reg, uint32_t nowUs)
+{
+    if (availableForWrite() < 2) {
+        ++state.txBusy;
+        return false;
+    }
+    const uint8_t request[] = {readCommand, reg};
+    if (write(request, sizeof(request)) != sizeof(request)) {
+        ++state.txBusy;
+        recover(nowUs);
+        return false;
+    }
+    pendingRegister = reg;
+    requestUs = nowUs;
+    responseLength = 0;
+    if (state.ready) {
+        if (reg == fastRmsRegister) ++state.fastRequests;
+        else ++state.rmsRequests;
+    }
+    return true;
 }
 
-void BL0942::setup() {
-    // If either current or voltage references are set explicitly by the user,
-    // calculate the power reference from it unless that is also explicitly set.
-    if ((this->current_reference_set_ || this->voltage_reference_set_) && !this->power_reference_set_) {
-        this->power_reference_ = (this->voltage_reference_ * this->current_reference_ * 3537.0 / 305978.0) / 73989.0;
-        this->power_reference_set_ = true;
+// Deja vencer el estado de la UART tras un error; nowUs es el instante del fallo.
+void BL0942::recover(uint32_t nowUs)
+{
+    if (pendingRegister == fastRmsRegister) {
+        fastCyclePending = false;
+        fastCycleVoltage = NAN;
     }
-
-    // Similarly for energy reference, if the power reference was set by the user
-    // either implicitly or explicitly.
-    if (this->power_reference_set_ && !this->energy_reference_set_) {
-        this->energy_reference_ = this->power_reference_ * 3600000 / 419430.4;
-        this->energy_reference_set_ = true;
-    }
-
-    this->write_reg_(BL0942_REG_USR_WRPROT, BL0942_REG_USR_WRPROT_MAGIC);
-    if (this->reset_)
-        this->write_reg_(BL0942_REG_SOFT_RESET, BL0942_REG_SOFT_RESET_MAGIC);
-
-    uint32_t mode = BL0942_REG_MODE_DEFAULT;
-    //mode |= BL0942_REG_MODE_RMS_UPDATE_SEL; /* 800ms refresh time */
-    if (this->line_freq_ == LINE_FREQUENCY_60HZ)
-        mode |= BL0942_REG_MODE_AC_FREQ_SEL;
-    this->write_reg_(BL0942_REG_MODE, mode);
-
-    this->write_reg_(BL0942_REG_USR_WRPROT, 0);
-
-    if (this->read_reg_(BL0942_REG_MODE) != mode)
-        debugE("BL0942 setup failed!");
-    else
-        dump_config();
-
-    this->flush();
-}
-
-void BL0942::received_package_(DataPacket* data) {
-    // Bad header
-    if (data->frame_header != BL0942_PACKET_HEADER) {
-        debugE("Invalid data. Header mismatch: %d", data->frame_header);
+    slowSlotOpen = false;
+    if (!state.ready || ++consecutiveFailures >= 8) {
+        retryInitialization(nowUs);
         return;
     }
-
-    // cf_cnt is only 24 bits, so track overflows
-    uint32_t cf_cnt = get24bReg(data->cf_cnt);
-    cf_cnt |= this->prev_cf_cnt_ & 0xff000000;
-    if (cf_cnt < this->prev_cf_cnt_) {
-        cf_cnt += 0x1000000;
-    }
-    this->prev_cf_cnt_ = cf_cnt;
-
-    v_rms = get24bReg(data->v_rms) / voltage_reference_;
-    i_rms = get24bReg(data->i_rms) / current_reference_;
-    watt = get24bReg(data->watt) / power_reference_;
-    total_energy_consumption = cf_cnt / energy_reference_;
-    frequency = 1000000.0f / ((uint16_t)data->frequency[0] | ((uint16_t)data->frequency[1]<<8));
-
-    if (v_rms < 0.1) v_rms = 0.0;
-
-    debugV("BL0942: U %fV, I %fA, P %fW, Cnt %" PRId32 ", ∫P %fkWh, frequency %fHz, status 0x%08X", v_rms, i_rms,
-        watt, cf_cnt, total_energy_consumption, frequency, data->status);
+    pendingRegister = 0;
+    responseLength = 0;
+    recovering = true;
+    recoveryUntilUs = nowUs + recoveryIntervalUs;
 }
 
-void BL0942::dump_config() {  // NOLINT(readability-function-cognitive-complexity)
-    debugI("BL0942:");
-    debugI("  Reset: %d", this->reset_);
-    debugI("  Address: %d", this->address_);
-    debugI("  Nominal line frequency: %d Hz", this->line_freq_);
-    debugI("  Current reference: %f", this->current_reference_);
-    debugI("  Energy reference: %f", this->energy_reference_);
-    debugI("  Power reference: %f", this->power_reference_);
-    debugI("  Voltage reference: %f", this->voltage_reference_);
-}
-
-
-uint32_t BL0942::get24bReg(uint8_t* reg)
+// Procesa una respuesta completa de pendingRegister; nowUs es su instante de recepcion por la tarea.
+bool BL0942::acceptResponse(uint32_t nowUs)
 {
-    if (reg == nullptr) return 0;
-    uint32_t val = (uint32_t)*reg++;
-    val |= (uint32_t)(*reg++) << 8;
-    val |= (uint32_t)(*reg++) << 16;
-    return val;
+    const uint8_t checksum = uint8_t(~(readCommand + pendingRegister + response[0] + response[1] + response[2]));
+    if (checksum != response[3]) {
+        ++state.checksumErrors;
+        recover(nowUs);
+        return false;
+    }
+    const uint32_t value = uint32_t(response[0]) | (uint32_t(response[1]) << 8) | (uint32_t(response[2]) << 16);
+    consecutiveFailures = 0;
+    if (!state.ready) {
+        pendingRegister = responseLength = 0;
+        if (initializationStep == 1) initializationStep = 2;
+        else {
+            const uint32_t expected[] = {modeValue, 1, 0, 0};
+            if (value != expected[initializationStep - 9]) {
+                retryInitialization(nowUs);
+                return false;
+            }
+            if (++initializationStep == 13) {
+                state.ready = true;
+                nextFastUs = nextVoltageUs = nowUs;
+            }
+        }
+        initializationDueUs = nowUs + 20000U;
+        return false;
+    }
+    const uint32_t latency = nowUs - requestUs;
+    ++state.completeResponses;
+    if (latency >= responseTimeoutUs) ++state.lateResponses;
+    if (latency > state.maxResponseUs) state.maxResponseUs = latency;
+    if (pendingRegister == fastRmsRegister) {
+        if (state.fastReads) {
+            const uint32_t gap = nowUs - state.fastSampleUs;
+            if (gap > state.maxGapUs) state.maxGapUs = gap;
+        }
+        state.fastRaw = value;
+        state.fastVoltage = value * fastFactor / (voltageReference * fastVoltageRatio);
+        state.fastSampleUs = nowUs;
+        ++state.fastReads;
+        fastCycleVoltage = state.fastVoltage;
+        fastCyclePending = false;
+        slowSlotOpen = true;
+    } else {
+        state.voltageRaw = value;
+        state.voltage = value * rmsFactor / (voltageReference * currentVoltageRatio);
+        state.voltageSampleUs = nowUs;
+        ++state.voltageReads;
+    }
+    pendingRegister = 0;
+    responseLength = 0;
+    return true;
+}
+
+// Atiende recepcion y plazos desde MeterTask sin esperar bytes; devuelve true si hay una nueva medicion.
+bool BL0942::loop(bool allowSlowRead)
+{
+    taskENTER_CRITICAL(&stateMutex);
+    rmsFactor = calibration.rmsFactor;
+    fastFactor = calibration.fastFactor;
+    taskEXIT_CRITICAL(&stateMutex);
+    bool updated = false;
+    uint32_t nowUs = micros();
+    if (pendingRegister) {
+        const uint32_t serviceGap = nowUs - lastServiceUs;
+        if (lastServiceUs && serviceGap > state.maxServiceGapUs) state.maxServiceGapUs = serviceGap;
+    }
+    lastServiceUs = nowUs;
+    // Una respuesta completa ya recibida sigue perteneciendo a esta unica consulta pendiente.
+    // El plazo limita esperar bytes faltantes, no procesar los que ya estan en UART.
+    uint8_t budget = 32;
+    while (budget-- && available()) {
+        const int byte = read();
+        if (byte < 0) break;
+        ++state.rxBytes;
+        if (!pendingRegister) {
+            ++state.unexpectedBytes;
+            continue;
+        }
+        response[responseLength++] = uint8_t(byte);
+        if (responseLength == sizeof(response)) updated |= acceptResponse(micros());
+    }
+    nowUs = micros();
+    const uint32_t timeoutUs = state.ready ? responseTimeoutUs : initializationTimeoutUs;
+    if (pendingRegister && uint32_t(nowUs - requestUs) >= timeoutUs) {
+        ++state.timeouts;
+        if (responseLength) ++state.partialResponses;
+        else ++state.emptyTimeouts;
+        recover(nowUs);
+    }
+    if (recovering && int32_t(nowUs - recoveryUntilUs) >= 0) recovering = false;
+    // No publicar indefinidamente el ultimo valor si el chip deja de responder.
+    if (isfinite(state.fastVoltage) && uint32_t(nowUs - state.fastSampleUs) > 50000U) {
+        state.fastVoltage = NAN;
+        updated = true;
+    }
+    if (isfinite(state.voltage) && uint32_t(nowUs - state.voltageSampleUs) > 1200000U) {
+        state.voltage = NAN;
+        updated = true;
+    }
+    if (!state.ready) pollInitialization(nowUs);
+    if (allowSlowRead && state.ready && slowSlotOpen && !fastCyclePending && !pendingRegister && !recovering && !available()) {
+        if (int32_t(nowUs - nextFastUs) < 0 && int32_t(nowUs - nextVoltageUs) >= 0 &&
+            nextFastUs - nowUs >= slowReadBudgetUs) {
+            if (requestReg(currentRmsRegister, nowUs))
+                nextVoltageUs += ((nowUs - nextVoltageUs) / voltageIntervalUs + 1) * voltageIntervalUs;
+            slowSlotOpen = false;
+        }
+    }
+    publishState();
+    return updated;
+}
+
+// Devuelve cuanto puede dormir MeterTask; sin parametros, sondea a 1 ms mientras espera la UART.
+uint32_t BL0942::timeUntilPollUs() const
+{
+    return !state.ready || pendingRegister || recovering ? 1000 : fastIntervalUs;
+}
+
+// Publica una copia coherente de valores y contadores para otras tareas; sin parametros.
+void BL0942::publishState()
+{
+    taskENTER_CRITICAL(&stateMutex);
+    publishedState = state;
+    taskEXIT_CRITICAL(&stateMutex);
+}
+
+// Devuelve una copia de valores y contadores sin acceder a la UART; sin parametros.
+bl0942Status BL0942::getStatus()
+{
+    taskENTER_CRITICAL(&stateMutex);
+    const bl0942Status snapshot = publishedState;
+    taskEXIT_CRITICAL(&stateMutex);
+    return snapshot;
+}
+
+// Informa conexion y metricas verbose; sin parametros, nunca imprime desde MeterTask.
+void BL0942::pollDiagnostics()
+{
+    saveCalibration();
+    const uint32_t nowMs = millis();
+    const bl0942Status snapshot = getStatus();
+    if (snapshot.ready != diagnosticReady) {
+        diagnosticReady = snapshot.ready;
+        if (snapshot.ready) debugI("BL0942 comunicacion recuperada: 38400 baud, IP 4x");
+        else debugW("BL0942 sin comunicacion: sin datos, reintentando deteccion");
+    }
+    const uint32_t elapsed = nowMs - diagnosticTimeMs;
+    if (elapsed < 5000) return;
+    diagnosticTimeMs = nowMs;
+    debugV("BL0942 IP %ums: ready=%u rx=%u partial=%u fast=%u slow=%u U~%.3fV rmsRaw=%u fastRaw=%u fastV~%.3fV crc=%u timeout=%u missedTotal=%u txBusy=%u junk=%u lateMax=%uus gapMax=%uus responseMax=%uus",
+        elapsed, snapshot.ready, snapshot.rxBytes, snapshot.partialResponses, snapshot.fastReads - diagnosticFastReads, snapshot.voltageReads - diagnosticVoltageReads,
+        snapshot.voltage, snapshot.voltageRaw, snapshot.fastRaw, snapshot.fastVoltage, snapshot.checksumErrors, snapshot.timeouts,
+        snapshot.missedPolls, snapshot.txBusy, snapshot.unexpectedBytes, snapshot.maxLatenessUs,
+        snapshot.maxGapUs, snapshot.maxResponseUs);
+    debugV("BL0942 UART: fastTx=%u rmsTx=%u validRx=%u emptyTimeout=%u lateRx=%u serviceGapMax=%uus",
+        snapshot.fastRequests, snapshot.rmsRequests, snapshot.completeResponses, snapshot.emptyTimeouts,
+        snapshot.lateResponses, snapshot.maxServiceGapUs);
+    diagnosticFastReads = snapshot.fastReads;
+    diagnosticVoltageReads = snapshot.voltageReads;
+}
+
+// Devuelve una instantanea del comando y sus resultados; sin parametros.
+neutralCalibration BL0942::getCalibration()
+{
+    taskENTER_CRITICAL(&stateMutex);
+    const neutralCalibration result = calibration;
+    taskEXIT_CRITICAL(&stateMutex);
+    return result;
+}
+
+// Encola una captura sin tocar UART ni NVS; phase identifica la fase de referencia del ADE.
+bool BL0942::startCalibration(uint8_t phase)
+{
+    taskENTER_CRITICAL(&stateMutex);
+    const bool busy = !strcmp(calibration.status, "queued") || !strcmp(calibration.status, "sampling") ||
+        !strcmp(calibration.status, "saving");
+    const bool accepted = publishedState.ready && phase < 3 && !busy;
+    if (accepted) {
+        calibration.status = "queued";
+        calibration.error = "";
+        calibration.phase = phase;
+        calibration.samples = calibration.rmsSamples = 0;
+        calibration.reference = 0;
+    }
+    taskEXIT_CRITICAL(&stateMutex);
+    return accepted;
+}
+
+// Procesa solo muestras nuevas durante un segundo; r/s/t son RMS del ADE en voltios.
+void BL0942::pollCalibration(float r, float s, float t)
+{
+    neutralCalibration result = getCalibration();
+    const uint32_t nowUs = micros();
+    if (!strcmp(result.status, "queued")) {
+        calibrationStartUs = nowUs;
+        calibrationFastReads = state.fastReads;
+        calibrationRmsReads = state.voltageReads;
+        calibrationFastSum = calibrationRmsSum = calibrationReferenceSum = 0;
+        referenceMin = FLT_MAX;
+        referenceMax = 0;
+        fastMin = UINT32_MAX;
+        fastMax = 0;
+        result.status = "sampling";
+    } else if (strcmp(result.status, "sampling")) return;
+    const float references[] = {r, s, t};
+    const float reference = references[result.phase];
+    if (!isfinite(reference) || reference < 50 || reference > 300) {
+        result.status = "error";
+        result.error = "invalid_reference";
+    } else {
+        if (state.fastReads != calibrationFastReads) {
+            calibrationFastReads = state.fastReads;
+            calibrationFastSum += state.fastRaw;
+            calibrationReferenceSum += reference;
+            referenceMin = fminf(referenceMin, reference);
+            referenceMax = fmaxf(referenceMax, reference);
+            if (state.fastRaw < fastMin) fastMin = state.fastRaw;
+            if (state.fastRaw > fastMax) fastMax = state.fastRaw;
+            ++result.samples;
+        }
+        if (state.voltageReads != calibrationRmsReads) {
+            calibrationRmsReads = state.voltageReads;
+            calibrationRmsSum += state.voltageRaw;
+            ++result.rmsSamples;
+        }
+        if (uint32_t(nowUs - calibrationStartUs) >= 1000000U) {
+            result.status = "error";
+            if (result.samples < 80 || result.rmsSamples < 2) result.error = "insufficient_samples";
+            else {
+                result.reference = calibrationReferenceSum / result.samples;
+                const double fastMean = calibrationFastSum / result.samples;
+                const double rmsMean = calibrationRmsSum / result.rmsSamples;
+                if (fastMean < 1000 || rmsMean < 1000) result.error = "missing_signal";
+                else if (referenceMax - referenceMin > result.reference * 0.02f ||
+                    fastMax - fastMin > fastMean * 0.05) result.error = "unstable_signal";
+                else {
+                    // Factores absolutos: recalibrar no acumula correcciones anteriores.
+                    result.rmsFactor = result.reference * voltageReference * currentVoltageRatio / rmsMean;
+                    result.fastFactor = result.reference * voltageReference * fastVoltageRatio / fastMean;
+                    if (result.rmsFactor < 0.1f || result.rmsFactor > 10 ||
+                        result.fastFactor < 0.1f || result.fastFactor > 10) result.error = "invalid_factors";
+                    else result.status = "saving";
+                }
+            }
+        }
+    }
+    taskENTER_CRITICAL(&stateMutex);
+    // Los factores activos solo cambian despues de confirmar el guardado en NVS.
+    const float oldRms = calibration.rmsFactor, oldFast = calibration.fastFactor;
+    if (!strcmp(result.status, "saving")) {
+        pendingRmsFactor = result.rmsFactor;
+        pendingFastFactor = result.fastFactor;
+    }
+    calibration = result;
+    calibration.rmsFactor = oldRms;
+    calibration.fastFactor = oldFast;
+    taskEXIT_CRITICAL(&stateMutex);
+}
+
+// Persiste una captura terminada desde el loop principal; sin parametros.
+void BL0942::saveCalibration()
+{
+    neutralCalibration result = getCalibration();
+    if (strcmp(result.status, "saving")) return;
+    taskENTER_CRITICAL(&stateMutex);
+    result.rmsFactor = pendingRmsFactor;
+    result.fastFactor = pendingFastFactor;
+    taskEXIT_CRITICAL(&stateMutex);
+    Preferences options;
+    bool saved = false;
+    if (options.begin("ADE9000", false)) {
+        saved = options.putFloat("neutralRms", result.rmsFactor) == sizeof(float) &&
+            options.putFloat("neutralFast", result.fastFactor) == sizeof(float);
+        options.end();
+    }
+    taskENTER_CRITICAL(&stateMutex);
+    calibration.status = saved ? "done" : "error";
+    calibration.error = saved ? "" : "nvs_write_failed";
+    if (saved) {
+        calibration.rmsFactor = result.rmsFactor;
+        calibration.fastFactor = result.fastFactor;
+    }
+    taskEXIT_CRITICAL(&stateMutex);
+    debugI("BL0942 calibracion: %s ref=%.3f rmsFactor=%.7f fastFactor=%.7f muestras=%u/%u",
+        saved ? "guardada" : "fallo NVS", result.reference, result.rmsFactor, result.fastFactor,
+        result.samples, result.rmsSamples);
 }

@@ -21,6 +21,7 @@
 #include <SPI.h>
 
 #include <Arduino.h>
+#include "storage/shared_spi_bus.h"
 //#include <avr/pgmspace.h>
 
 // ST7920 Commands
@@ -101,6 +102,9 @@ public:
   // Configura la pantalla sobre un bus SPI ya elegido por la aplicacion.
   // spiPort: puerto compartido; cs, sclk, mosi y miso: pines fisicos del bus.
   ST7920_SPI(SPIClass& spiPort, int8_t cs, int8_t sclk = -1, int8_t mosi = -1, int8_t miso = -1);
+
+  // Asigna el mutex del bus SPI compartido; busLock puede ser nulo si la pantalla usa un bus exclusivo.
+  void setSpiBusLock(SharedSpiBus* busLock) { spiBusLock = busLock; }
   int32_t getScreenWidth() { return SCR_WD; };
   int32_t getScreenHeight() { return SCR_HT; };
 
@@ -186,6 +190,14 @@ public:
 
   //private:
   bool (*isNumberFun)(uint8_t ch);
+
+  // Inicia una transaccion de pantalla tomando el mutex SPI cuando corresponde.
+  bool beginSpiTransaction();
+
+  // Finaliza una transaccion de pantalla y libera el mutex SPI compartido.
+  void endSpiTransaction();
+
+  SharedSpiBus* spiBusLock = nullptr;
   _propFont  cfont;
   /*
   uint8_t xSize;

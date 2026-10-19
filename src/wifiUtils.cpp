@@ -6,9 +6,28 @@
 #include "ST7920_SPI.h"
 #include "manager_api.h"
 #include "grid_events.h"
+#include "rtc_clock.h"
+#include "memory_diagnostics.h"
+#include <new>
 
 Preferences Settings;
 const char* settingsName = "wifi-stuff";
+
+// Aplica la direccion IP de la estacion guardada o vuelve a DHCP.
+// options: preferencias abiertas del namespace wifi-stuff.
+static bool configureStationIp(Preferences& options)
+{
+	if (!options.getBool("staticIp", false))
+		return WiFi.config(IPAddress(), IPAddress(), IPAddress());
+
+	IPAddress ip, mask, gateway, dns1, dns2;
+	ip.fromString(options.getString("sta-ip", "192.168.1.90"));
+	mask.fromString(options.getString("sta-mask", "255.255.254.0"));
+	gateway.fromString(options.getString("sta-gw", "192.168.0.1"));
+	dns1.fromString(options.getString("sta-dns1", "8.8.8.8"));
+	dns2.fromString(options.getString("sta-dns2", "4.4.4.4"));
+	return WiFi.config(ip, gateway, mask, dns1, dns2);
+}
 
 AsyncMqttClient mqtt;
 
@@ -74,7 +93,13 @@ void UtilsLoop()
 	}
 
 	if (usingDebug)Debug.handle();
-	if (usingOTA) ArduinoOTA.handle();
+	if (usingOTA && memoryHasRoom(2048, 16 * 1024)) {
+		try {
+			ArduinoOTA.handle();
+		} catch (const std::bad_alloc&) {
+			memoryReportState("OTA allocation rejected", 1460);
+		}
+	}
 }
 
 void DebugStart()
@@ -194,27 +219,23 @@ void WifiStart()
 		}
 		});
 
-	IPAddress ip, mask, gateway, dns1, dns2;
-	bool StaticIP = Settings.getBool("staticIp", false);
-	ip.fromString(Settings.getString("sta-ip", "192.168.1.90"));
-	mask.fromString(Settings.getString("sta-mask", "255.255.254.0"));
-	gateway.fromString(Settings.getString("sta-gw", "192.168.0.1"));
-	dns1.fromString(Settings.getString("sta-dns1", "8.8.8.8"));
-	dns2.fromString(Settings.getString("sta-dns2", "4.4.4.4"));
-
-	if (StaticIP) {
+	const bool staticIp = Settings.getBool("staticIp", false);
+	if (staticIp) {
+		IPAddress ip, mask, gateway, dns1, dns2;
+		ip.fromString(Settings.getString("sta-ip", "192.168.1.90"));
+		mask.fromString(Settings.getString("sta-mask", "255.255.254.0"));
+		gateway.fromString(Settings.getString("sta-gw", "192.168.0.1"));
+		dns1.fromString(Settings.getString("sta-dns1", "8.8.8.8"));
+		dns2.fromString(Settings.getString("sta-dns2", "4.4.4.4"));
 		debugI("Seteando direccion IP estatica... \n");
 		debugI("Direccion IP:    %s", ip.toString());
 		debugI("Mascara de red:  %s", mask.toString());
 		debugI("Gateway:         %s", gateway.toString());
 		debugI("DNS preferiado:  %s", dns1.toString());
 		debugI("DNS alternativo: %s", dns2.toString());
-
-		if (WiFi.config(ip, gateway, mask, dns1, dns2))
-			debugI("IP iniciada correctamente!\n");
-		else
-			debugW("Error al setear IP!\n");
 	}
+	if (configureStationIp(Settings)) debugI("Configuracion IP iniciada correctamente\n");
+	else debugW("Error al setear IP!\n");
 
 	String ssid = Settings.getString("sta-ssid", "");
 	String pass = Settings.getString("sta-pass", "");
@@ -286,6 +307,87 @@ void WifiReconnect()
 		WiFi.begin(ssid.c_str(), pass.c_str());
 	}
 	Settings.end();
+}
+
+// Guarda la red y conecta con la politica IP configurada; ssid es el nombre y password puede estar vacia.
+bool wifiSaveStationCredentials(const String& ssid, const String& password)
+{
+	wifiStationConfig config;
+	if (!wifiLoadStationConfig(config) || ssid.isEmpty()) return false;
+	config.enabled = true;
+	config.ssid = ssid;
+	config.password = password;
+	return wifiSaveStationConfig(config);
+}
+
+// Carga desde NVS el modo de estacion, credenciales y parametros IP; config recibe los valores.
+bool wifiLoadStationConfig(wifiStationConfig& config)
+{
+	if (!Settings.begin(settingsName, true)) return false;
+	config.enabled = Settings.getInt("wifi-mode", static_cast<int32_t>(Wifi_Mode::Station)) !=
+		static_cast<int32_t>(Wifi_Mode::Off);
+	config.staticIp = Settings.getBool("staticIp", false);
+	config.ssid = Settings.getString("sta-ssid", "");
+	config.password = Settings.getString("sta-pass", "");
+	config.ip = Settings.getString("sta-ip", "192.168.1.90");
+	config.mask = Settings.getString("sta-mask", "255.255.254.0");
+	config.gateway = Settings.getString("sta-gw", "192.168.0.1");
+	config.dns1 = Settings.getString("sta-dns1", "8.8.8.8");
+	config.dns2 = Settings.getString("sta-dns2", "4.4.4.4");
+	Settings.end();
+	return true;
+}
+
+// Persiste la configuracion y reconecta o apaga la estacion segun config.enabled.
+bool wifiSaveStationConfig(const wifiStationConfig& config)
+{
+	IPAddress ip, mask, gateway, dns1, dns2;
+	if (config.staticIp && (!ip.fromString(config.ip) || !mask.fromString(config.mask) ||
+		!gateway.fromString(config.gateway) || !dns1.fromString(config.dns1) ||
+		!dns2.fromString(config.dns2))) return false;
+	if (!Settings.begin(settingsName, false)) return false;
+
+	Settings.putInt("wifi-mode", static_cast<int32_t>(config.enabled ? Wifi_Mode::Station : Wifi_Mode::Off));
+	Settings.putBool("staticIp", config.staticIp);
+	Settings.putString("sta-ssid", config.ssid);
+	Settings.putString("sta-pass", config.password);
+	Settings.putString("sta-ip", config.ip);
+	Settings.putString("sta-mask", config.mask);
+	Settings.putString("sta-gw", config.gateway);
+	Settings.putString("sta-dns1", config.dns1);
+	Settings.putString("sta-dns2", config.dns2);
+
+	WiFi.disconnect(!config.enabled, false);
+	WiFi.mode(config.enabled ? WIFI_MODE_STA : WIFI_MODE_NULL);
+	const bool ipConfigured = !config.enabled || configureStationIp(Settings);
+	Settings.end();
+	if (!ipConfigured) return false;
+	if (!config.enabled || config.ssid.isEmpty()) return true;
+
+	WiFi.setSleep(false);
+	return WiFi.begin(config.ssid.c_str(), config.password.c_str()) != WL_CONNECT_FAILED;
+}
+
+// Inicia o reutiliza el escaneo asíncrono. No recibe parámetros.
+void wifiScanStart()
+{
+	if (WiFi.scanComplete() == WIFI_SCAN_RUNNING) return;
+	WiFi.scanDelete();
+	WiFi.scanNetworks(true);
+}
+
+// Devuelve el estado actual del escaneo. No recibe parámetros.
+int32_t wifiScanStatus()
+{
+	return WiFi.scanComplete();
+}
+
+// Lee una red: index es su índice; ssid, auth y rssi reciben sus datos.
+bool wifiScanGetNetwork(int32_t index, String& ssid, uint8_t& auth, int32_t& rssi)
+{
+	int32_t channel;
+	uint8_t* bssid;
+	return index >= 0 && WiFi.getNetworkInfo(index, ssid, auth, rssi, bssid, channel);
 }
 
 /*
@@ -427,7 +529,16 @@ void TimeStart()
 
 	setTimeZone(&localTimeZone);
 
-	setTimeTo(now);
+	uint32_t rtcEpoch = 0;
+	if (rtcClockRead(rtcEpoch)) {
+		setTimeTo(rtcEpoch);
+		managerSetClockSynchronized("rtc");
+		debugI("Hora inicial tomada del RTC: %lu", static_cast<unsigned long>(rtcEpoch));
+	}
+	else {
+		setTimeTo(now);
+		debugW("RTC sin hora valida; usando hora guardada en NVS: %lu", static_cast<unsigned long>(now));
+	}
 
 	//Verificar si se usa servidor ntp
 	usingTimeServer = Settings.getBool("time-sync", false);
@@ -468,6 +579,7 @@ void TimeSetServer()
 	sntp_set_time_sync_notification_cb([](struct timeval* tv) {
 		debugI("Fecha y hora sincronizada con servidor!!");
 		managerSetClockSynchronized("sntp");
+		rtcClockSyncFromSystem();
 		printLocalTime();
 		});
 

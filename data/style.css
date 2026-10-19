@@ -20,11 +20,34 @@ body {
 .appSidebar { background: #f4f6f6; border-bottom: 1px solid #d5dcdc; }
 .appSidebar .nav-link { padding: 10px 14px; border-radius: 4px; }
 .appSidebar .nav-link.active { background: #d5eeee; color: #075a60; font-weight: 600; }
+.sidebarHeader { display: flex; align-items: center; justify-content: space-between; }
+.sidebarToggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin: 8px; padding: 6px; }
+.sidebarToggle svg, .navIcon, .controlIcon { width: 22px; height: 22px; fill: currentColor; flex: 0 0 auto; }
+.appSidebar .nav-link { display: flex; align-items: center; gap: 12px; }
+.navIcon { width: 21px; height: 21px; }
 .pageHeading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; padding: 20px 20px 12px; border-bottom: 1px solid #e1e6e6; margin-bottom: 12px; }
 .pageHeading h1 { font-size: 24px; margin: 0; }
 #mainContent { min-width: 0; padding-bottom: 95px; }
 #settingsTabs { gap: 4px; }
 #settingsTabs .nav-link { padding: 8px 12px; }
+.historyViewer { width: 100%; max-width: none; }
+.historyControls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-bottom: 8px; }
+.historyDateFields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; width: 100%; }
+.historyDateRange { min-width: 0; }
+.historyDateRange .form-control { min-width: 0; }
+.historyRangeActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; }
+.historyPreset { flex: 1 1 180px; width: auto; min-width: 0; }
+.historyControls .input-group-text,
+.historyControls .form-control,
+.historyControls .form-select,
+.historyControls .btn { height: 32px; }
+.historyRangeActions .btn { display: inline-flex; align-items: center; justify-content: center; }
+.historyRangeActions .btn-group .btn { flex: 0 0 36px; width: 36px; padding: 0; }
+.historyRangeActions .controlIcon { width: 17px; height: 17px; }
+#historyViewerStatus { min-height: 1.4em; }
+#historyViewerStatus.historySlowWarning { color: #8a5b00 !important; font-weight: 600; }
+.historyMetricSelect { width: min(100%, 250px); }
+.historyChart { min-height: 460px; border: 1px solid #d8dede; }
 .settingsPane { padding-top: 16px; }
 .settingsPane fieldset { min-width: 0; }
 .settingsSection { max-width: 1120px; }
@@ -36,6 +59,12 @@ body {
 .settingsGroupGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
 .settingsGroupGridTwo { grid-template-columns: repeat(2, minmax(280px, 1fr)); }
 .settingsGroup { min-width: 0; padding: 12px; border: 1px solid #d8dede; border-radius: 6px; background: #fbfcfc; }
+.storageSummary { margin-bottom: 8px; font-weight: 600; }
+.storageWarning { margin: 8px 0; padding: 8px 10px; border-left: 3px solid #ed9b00; background: #fff8e7; color: #55420f; }
+.storageFormatProgress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.storageFormatProgress progress { flex: 1 1 180px; max-width: 420px; height: 14px; }
+.storageTable { min-width: 660px; margin-bottom: 0; }
+.storageTable > :not(caption) > * > * { padding: 6px; }
 .settingsGroup h3, .optionGroup legend { float: none; width: auto; color: #263536; font-size: 15px; font-weight: 600; margin: 0 0 10px; }
 .settingsFieldsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
 .settingsField { display: grid; grid-template-columns: minmax(0, 1fr) minmax(92px, 34%); align-items: center; gap: 10px; margin-bottom: 7px; }
@@ -43,19 +72,91 @@ body {
 .settingsFieldStack { display: block; margin: 0; }
 .settingsFieldStack label { display: block; min-height: 18px; margin-bottom: 3px; }
 .settingsSwitch { grid-column: 1 / -1; margin: 2px 0; }
+.historyCapacityInfo { margin-top: 8px; color: #075a60; font-weight: 600; }
+.historyBaseInfo { margin-top: 8px; line-height: 1.4; }
+.historyOptionDescription { margin: -2px 0 7px 28px; line-height: 1.35; }
 .settingsTable { margin-bottom: 8px; }
 .settingsTable > :not(caption) > * > * { padding: 5px; }
 .calibrationTable input { min-width: 110px; }
+.meterGaugeGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; max-width: 1200px; margin: 0 auto; }
+.meterGaugeItem { min-width: 0; text-align: center; }
+.meterGaugeItem h3 { margin: 2px 0 4px; font-size: 15px; color: #344; }
+.gauge { width: min(100%, 240px); aspect-ratio: 1; height: auto; overflow: hidden; margin: 0 auto; }
+.gridStatusGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.gridStatusCard { min-width: 0; padding: 10px; border: 1px solid #d8dede; border-left: 4px solid #9aa5a5; border-radius: 5px; background: #fff; }
+.gridStatusCard[data-state="normal"] { border-left-color: #2e7d32; }
+.gridStatusCard[data-state="warning"] { border-left-color: #ed9b00; }
+.gridStatusCard[data-state="danger"] { border-left-color: #c62828; }
+.gridStatusTop { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 8px; margin-bottom: 8px; }
+.gridStatusLabel { font-weight: 700; }
+.gridStatusValue { font-weight: 600; }
+.gridStatusAge { min-height: 18px; margin-top: -5px; margin-bottom: 5px; font-size: 11px; }
+.gridStatusMetrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.gridStatusMetric { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: #5a6666; font-size: 12px; }
+.gridStatusMetric strong { color: #263536; font-size: 15px; font-weight: 600; }
+.phasorSection { margin: 8px; padding: 16px; border: 1px solid #d8dede; border-radius: 6px; background: #fff; }
+.phasorHeader { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.phasorHeader h2 { font-size: 18px; margin: 0 0 3px; }
+.phasorLayout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, .8fr); align-items: center; gap: 16px; }
+.phasorDiagram { width: min(100%, 420px); height: auto; margin: 0 auto; }
+.phasorGrid { fill: none; stroke: #d9dfdf; stroke-width: 1; }
+.phasorAxis { stroke: #aeb8b8; stroke-width: 1; }
+.phasorAxisLabel { fill: #657272; font-size: 11px; }
+.phasorVector { stroke-width: 2.5; }
+.phasorCurrent { stroke-dasharray: 6 4; stroke-width: 2.2; }
+.phasorDot { stroke: #fff; stroke-width: 1; }
+.phasorOrigin { fill: #445; }
+.phaseRVector { stroke: #c62828; fill: #c62828; }
+.phaseSVector { stroke: #2e7d32; fill: #2e7d32; }
+.phaseTVector { stroke: #ef6c00; fill: #ef6c00; }
+.phaseRText { color: #c62828; }
+.phaseSText { color: #2e7d32; }
+.phaseTText { color: #ef6c00; }
+.phaseKey { font-weight: 700; }
+.phasorLegend { display: flex; flex-wrap: wrap; gap: 16px; color: #596363; }
+.phasorLegend span { display: inline-flex; align-items: center; gap: 6px; }
+.phasorLegendLine { width: 22px; border-top: 2px solid #596363; }
+.phasorLegendLine.dashed { border-top-style: dashed; }
 @media (min-width: 768px) {
-    .appSidebar { position: fixed; inset: 0 auto 0 0; width: 200px; align-items: flex-start; border-right: 1px solid #d5dcdc; overflow-y: auto; }
-    .appSidebar > .container-fluid { flex-direction: column; align-items: stretch; }
-    .appSidebar .navbar-brand { margin: 12px 0 24px; padding-left: 12px; }
-    .appSidebar .navbar-collapse { flex-grow: 0; }
-    .navbar.appSidebar .navbar-nav { flex-direction: column; }
+    .historyControls { flex-wrap: nowrap; }
+    .historyDateFields { display: flex; flex: 1 1 auto; width: auto; min-width: 0; }
+    .historyDateRange { flex: 1 1 220px; }
+    .historyRangeActions { flex: 0 0 auto; flex-wrap: nowrap; width: auto; }
+    .appSidebar { display: block; position: fixed; inset: 0 auto 0 0; width: 200px; padding: 0; border-right: 1px solid #d5dcdc; overflow-y: auto; }
+    .appSidebar > .container-fluid { display: flex; flex-direction: column; align-items: stretch; width: 100%; padding: 0; }
+    .appSidebar .sidebarHeader { width: 100%; min-height: 62px; margin-bottom: 16px; }
+    .appSidebar .navbar-brand { display: block; margin: 12px 0 12px; padding-left: 12px; }
+    .appSidebar .navbar-toggler { display: none; }
+    .appSidebar .navbar-collapse { display: block !important; flex-grow: 0; width: 100%; }
+    .navbar.appSidebar .navbar-nav { display: flex; flex-direction: column; width: 100%; }
     #mainContent { margin-left: 200px; }
     #divFooter .fixed-bottom { left: 200px; }
+    #codeNavBar.sidebarCollapsed { width: 68px; }
+    #codeNavBar.sidebarCollapsed .sidebarHeader { justify-content: center; }
+    #codeNavBar.sidebarCollapsed .navbar-brand,
+    #codeNavBar.sidebarCollapsed .navLabel,
+    #codeNavBar.sidebarCollapsed #navServerIP { display: none !important; }
+    #codeNavBar.sidebarCollapsed .nav-link { justify-content: center; padding: 12px 0; }
+    #codeNavBar.sidebarCollapsed .navIcon { width: 23px; height: 23px; }
+    #codeNavBar.sidebarCollapsed .sidebarToggle svg { transform: rotate(180deg); }
+    #appRoot.sidebarCollapsed #mainContent { margin-left: 68px; }
+    #appRoot.sidebarCollapsed #divFooter .fixed-bottom { left: 68px; }
 }
 @media (max-width: 767.98px) {
+    .sidebarToggle { display: none; }
+    .historyDateFields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .historyRangeActions { display: grid; grid-template-columns: minmax(0, 1fr) 64px auto; gap: 6px; }
+    .historyPreset { grid-column: auto; }
+    .historyRangeActions .btn-group { width: 64px; }
+    .historyRangeActions .btn-group .btn { flex-basis: 32px; width: 32px; }
+    .historyRangeActions #historyLoadButton { min-width: 64px; }
+    .meterGaugeGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .gauge { width: min(100%, 180px); }
+    .gridStatusGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .gridStatusCard { padding: 8px; }
+    .phasorSection { margin: 6px 0; padding: 12px; }
+    .phasorLayout { grid-template-columns: 1fr; gap: 8px; }
+    .phasorDiagram { max-width: 360px; }
     .settingsSectionHeader { display: block; }
     .settingsActions { justify-content: flex-start; margin-top: 10px; }
     .settingsGroupGridTwo { grid-template-columns: 1fr; }
@@ -179,22 +280,11 @@ input[type=range][orient=vertical] {
         font-size: 12px;
         padding: 0.1rem !important;
     }
-	.gauge {
-		width: 200px;
-		height: 200px;
-		overflow: hidden;
-	}
 }
 
 .divScrollX {
     scroll-behavior: smooth;
     overflow-x: scroll;
-}
-
-.gauge {
-    width: 300px;
-    height: 300px;
-    overflow: hidden;
 }
 
 .eventList {
@@ -253,6 +343,12 @@ input[type=range][orient=vertical] {
     overflow-y: auto;
 }
 
+.logsViewer { padding: 12px; }
+.logsToolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.logsActions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.logsFollow { display: inline-flex; align-items: center; gap: 6px; }
+.logsOutput { display: block; width: 100%; height: min(72vh, 720px); min-height: 320px; resize: vertical; padding: 10px; border: 1px solid #cfd8dc; border-radius: 4px; background: #101820; color: #d8e4e8; font: 12px/1.45 Consolas, "Courier New", monospace; white-space: pre; overflow: auto; }
+
 /* En móviles (dispositivos con ancho menor a 768px) */
 @media (max-width: 767.98px) {
     .eventElements {
@@ -261,4 +357,8 @@ input[type=range][orient=vertical] {
     #eventList {
         max-height: 25vh !important; /* !important para asegurar que sobrescriba estilos en línea */
     }
+    .logsToolbar { align-items: stretch; flex-direction: column; }
+    .logsActions { display: grid; grid-template-columns: 1fr 1fr; }
+    .logsFollow { grid-column: 1 / -1; padding: 4px 0; }
+    .logsOutput { height: 62vh; min-height: 260px; font-size: 11px; }
 }

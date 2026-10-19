@@ -13,6 +13,21 @@ ST7920_SPI::ST7920_SPI(SPIClass& spiPort, int8_t cs, int8_t sclk, int8_t mosi, i
 	if (mosi > -1) mosiPin = mosi;
 	if (miso > -1) misoPin = miso;
 }
+
+// Inicia una transaccion de pantalla tomando el mutex SPI compartido cuando existe.
+bool ST7920_SPI::beginSpiTransaction()
+{
+	if (spiBusLock && !spiBusLock->lock()) return false;
+	spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+	return true;
+}
+
+// Finaliza una transaccion de pantalla y libera el mutex SPI compartido.
+void ST7920_SPI::endSpiTransaction()
+{
+	spi.endTransaction();
+	if (spiBusLock) spiBusLock->unlock();
+}
 // ----------------------------------------------------------------
 void ST7920_SPI::init()
 {
@@ -37,25 +52,25 @@ void ST7920_SPI::init()
 // ----------------------------------------------------------------
 void ST7920_SPI::sendCmd(byte b)
 {
-	spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+	if (!beginSpiTransaction()) return;
 	digitalWrite(csPin, HIGH);
 	spi.transfer(0xF8);
 	spi.transfer(b & 0xF0);
 	spi.transfer(b << 4);
 	digitalWrite(csPin, LOW);
-	spi.endTransaction();
+	endSpiTransaction();
 }
 // ----------------------------------------------------------------
 
 void ST7920_SPI::sendData(byte b)
 {
-	spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+	if (!beginSpiTransaction()) return;
 	digitalWrite(csPin, HIGH);
 	spi.transfer(0xFA);
 	spi.transfer(b & 0xF0);
 	spi.transfer(b << 4);
 	digitalWrite(csPin, LOW);
-	spi.endTransaction();
+	endSpiTransaction();
 }
 
 // ----------------------------------------------------------------
@@ -109,7 +124,7 @@ void ST7920_SPI::display(int buf)
 	byte i, j, b;
 	for (j = 0;j < 64 / 2;j++) {
 		gotoXY(0, j + buf * 64);
-		spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+		if (!beginSpiTransaction()) return;
 		digitalWrite(csPin, HIGH);
 		spi.transfer(0xFA); // data
 		for (i = 0;i < 16;i++) {  // 16 bytes from line #0+
@@ -121,7 +136,7 @@ void ST7920_SPI::display(int buf)
 			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
 		}
 		digitalWrite(csPin, LOW);
-		spi.endTransaction();
+		endSpiTransaction();
 	}
 	if (buf == 0) {
 		memcpy(displayedScr, scr, sizeof(scr));
@@ -134,7 +149,7 @@ void ST7920_SPI::display(int buf)
 void ST7920_SPI::displayRows(uint8_t row, bool includePair)
 {
 	gotoXY(0, row);
-	spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+	if (!beginSpiTransaction()) return;
 	digitalWrite(csPin, HIGH);
 	spi.transfer(0xFA);
 	const uint8_t rowCount = includePair ? 2 : 1;
@@ -148,7 +163,7 @@ void ST7920_SPI::displayRows(uint8_t row, bool includePair)
 		}
 	}
 	digitalWrite(csPin, LOW);
-	spi.endTransaction();
+	endSpiTransaction();
 	memcpy(displayedScr + uint16_t(row) * 16, scr + uint16_t(row) * 16, 16);
 	if (includePair)
 		memcpy(displayedScr + uint16_t(row + 32) * 16, scr + uint16_t(row + 32) * 16, 16);
@@ -175,7 +190,7 @@ void ST7920_SPI::copy(uint8_t x16, uint8_t y, uint8_t w16, uint8_t h, uint8_t bu
 	byte i, j, b;
 	for (j = 0;j < h;j++) {
 		gotoXY(x16, y + j + buf * 64);
-		spi.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE3));
+		if (!beginSpiTransaction()) return;
 		digitalWrite(csPin, HIGH);
 		spi.transfer(0xFA); // data
 		for (i = 0;i < w16;i++) {
@@ -185,7 +200,7 @@ void ST7920_SPI::copy(uint8_t x16, uint8_t y, uint8_t w16, uint8_t h, uint8_t bu
 			spi.transfer(b & 0xF0);  spi.transfer(b << 4);
 		}
 		digitalWrite(csPin, LOW);
-		spi.endTransaction();
+		endSpiTransaction();
 	}
 }
 // ----------------------------------------------------------------

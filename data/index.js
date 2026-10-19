@@ -1,5 +1,6 @@
 let tableRows = [
     {name: "Voltaje", unit: "vrms", visible: true, decimals: 2, source: "meter"},
+    {name: "Neutro-tierra Fast RMS", unit: "fastVrms", visible: true, decimals: 3, source: "meter"},
     {name: "Voltaje Fases", unit: "vvrms", visible: true, decimals: 2, source: "meter"},
     {name: "Corriente", unit: "irms", visible: true, decimals: 3, source: "meter"},
     {name: "Potencia", unit: "watt", visible: true, decimals: 1, source: "meter"},
@@ -18,6 +19,26 @@ let tableRows = [
 ];
 
 let decimalPlaces = {};
+let meterPolling = {active: false, timer: 0, cycle: 0};
+let meterGaugeObserver = null;
+let phasorData = {angles: null, voltage: null, current: null};
+let storageStatusTimer = 0;
+let storageWebFsInfo = {};
+let historyEstimateRequest = null;
+let historyEstimateRevision = 0;
+let loadedSettingsBackup = null;
+let settingsBackupRestartRequired = false;
+
+// Mapa fijo inicial del firmware: particiones fisicas y bancos WebFS en bloques NAND de 128 KiB.
+const nandStorageLayout = [
+    {key: "metadata", label: "Metadata", startBlock: 0, blockCount: 16},
+    {key: "history", label: "Histórico", startBlock: 16, blockCount: 1536},
+    {key: "waveEvents", label: "Eventos Wave", startBlock: 1552, blockCount: 320},
+    {key: "gridEvents", label: "Eventos de red", startBlock: 1872, blockCount: 48},
+    {key: "diagnostics", label: "Diagnóstico", startBlock: 1920, blockCount: 80},
+    {key: "webFsA", label: "WebFS A", startBlock: 2000, blockCount: 24},
+    {key: "webFsB", label: "WebFS B", startBlock: 2024, blockCount: 24},
+];
 
 let tableHeaders = [
     {name: "Variable", short: "", visible: true},
@@ -30,23 +51,17 @@ let tableHeaders = [
 ];
 
 function initMeterUI() {
-    $("#gaugeVoltaje").simpleGauge(getGaugeOptions("Voltaje"));
-    $("#gaugeVoltajeF").simpleGauge(getGaugeOptions("Voltaje Fases"));
-    $("#gaugeCorriente").simpleGauge(getGaugeOptions("Corriente"));
-    $("#gaugePotencia").simpleGauge(getGaugeOptions("Potencia"));
-
+    $("#gaugeVoltaje").simpleGauge(getGaugeOptions("voltage"));
+    $("#gaugeVoltajeF").simpleGauge(getGaugeOptions("lineVoltage"));
+    $("#gaugeCorriente").simpleGauge(getGaugeOptions("current"));
+    $("#gaugePotencia").simpleGauge(getGaugeOptions("power"));
+    observeMeterGaugeSizes();
+    $("#phasorShowVoltage, #phasorShowCurrent").on("change", updatePhasorDiagram);
     createTable();
     initSettingsUI();
-
-    board.getResponseRepeat("meter", meterOk, meterFail, "fast");
-
-    board.getResponseRepeat("meter?energy", energyOk, energyFail, "slow");
-
-    board.getResponseRepeat("meter?angles", angleOk, angleFail, "slow");
-
-    board.getResponseRepeat("meter?thd", thdOk, thdFail, "slow");
-
-
+    initHistoryViewer();
+	initGridEventsViewer();
+	initLogsViewer();
     $("#eventList").html('<div class="text-muted p-2">Seleccione la pestaña Eventos para cargar la lista.</div>');
     $("#eventRamList").html("");
     $("#eventChartContainer").html('<div class="text-muted p-3">Sin evento cargado.</div>');
@@ -54,28 +69,83 @@ function initMeterUI() {
     $("#eventRampBtn").on("click", createRampTestEvent);
     $("#eventRefreshBtn").on("click", refreshEventLists);
 
-    $(window).on("resize", function () {
-        let width = $(window).width();
-        let height = $(window).height();
-        let size = 200;
+}
 
-        if (width > height) {
-            //landscape
-            size = width / 4.5;
-            if (size > height / 1.5) size = height / 1.5;
-        } else {
-            size = height / 2.5;
-            if (size > width / 1.5) size = width / 1.5;
-        }
+// Activa o detiene el refresco de medidas; active solo debe ser true en vistas de medición.
+function setMeterPollingActive(active) {
+    if (meterPolling.active === active) return;
+    meterPolling.active = active;
+    clearTimeout(meterPolling.timer);
+    if (active) { meterPolling.cycle = 0; refreshMeterPolling(); }
+}
 
-        size = Math.round(size / 25.0);
-        size *= 25;
-        if (size < 180) size = 180;
-        if (size > 320) size = 320;
+// Ejecuta una consulta de medición y enruta el resultado a los callbacks existentes.
+async function requestMeterData(path, onSuccess, onFail) {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), board.timeout);
+        const response = await fetch(board.IP + "/" + path, {cache: "no-store", signal: controller.signal});
+        clearTimeout(timeout);
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        onSuccess(await response.json());
+    }
+    catch (error) { onFail(error); }
+}
 
-        console.log(width, height, size);
+// Actualiza medidas en serie para no crear ráfagas HTTP sobre el ESP32.
+async function refreshMeterPolling() {
+    if (!meterPolling.active) return;
+    await requestMeterData("meter", meterOk, meterFail);
+    if (++meterPolling.cycle % 5 === 1) {
+        await requestMeterData("meter?energy", energyOk, energyFail);
+        await requestMeterData("meter?angles", angleOk, angleFail);
+        await requestMeterData("meter?thd", thdOk, thdFail);
+    }
+    if (meterPolling.active) meterPolling.timer = setTimeout(refreshMeterPolling, board.getUpdateTime("normal"));
+}
+
+// Actualiza el valor numerico del gauge.
+// id: identificador del gauge. value: medicion que se muestra.
+function updateMeterGauge(id, value) {
+    if (Number.isFinite(Number(value))) $("#" + id).simpleGauge("setValue", Number(value));
+}
+
+// Define escala, formato digital y zonas de color del gauge.
+// type: voltage, lineVoltage, current o power.
+function getGaugeOptions(type) {
+    const options = {
+        min: 0, max: 100, value: 0, type: "analog digital",
+        container: {scale: 95, style: "background:linear-gradient(335deg,#ddd 0%,#fff 45%,#bbb 100%);border-radius:50%;border:6px solid #bbb;"},
+        digital: {text: "{value.1}", style: "font-size:24px;color:auto;"},
+        analog: {minAngle: -150, maxAngle: 150},
+        labels: {text: "{value}", count: 8, scale: 72, style: "font-size:14px;"},
+        ticks: {count: 10, scale1: 84, scale2: 93, style: "width:2px;color:#999;"},
+        subTicks: {count: 4, scale1: 93, scale2: 96, style: "width:1px;color:#bbb;"},
+        bars: {scale1: 88, scale2: 94, colors: [[0, "#378618", 0, 0], [70, "#ffa500", 0, 0], [85, "#dd2222", 0, 0]]},
+        pointer: {scale: 95, style: "color:#222;opacity:.8;filter:drop-shadow(-2px 2px 2px rgba(0,0,0,.4));"}
+    };
+    if (type === "voltage") {
+        options.min = 180; options.max = 260; options.digital.text = "{value.1} V";
+        options.bars.colors = [[180, "#dd2222", 0, 0], [190, "#ffa500", 0, 0], [200, "#378618", 0, 0], [240, "#ffa500", 0, 0], [250, "#dd2222", 0, 0]];
+    } else if (type === "lineVoltage") {
+        options.min = 340; options.max = 420; options.digital.text = "{value.1} V";
+        options.bars.colors = [[340, "#dd2222", 0, 0], [350, "#ffa500", 0, 0], [360, "#378618", 0, 0], [400, "#ffa500", 0, 0], [410, "#dd2222", 0, 0]];
+    } else if (type === "current") {
+        options.max = 100; options.digital.text = "{value.3} A";
+    } else if (type === "power") {
+        options.max = 20; options.digital.text = "{value.3} kW";
+        options.bars.colors = [[0, "#378618", 0, 0], [14, "#ffa500", 0, 0], [17, "#dd2222", 0, 0]];
+    }
+    return options;
+}
+
+// Redibuja los gauges cuando cambia su tamano visible; sin parametros.
+function observeMeterGaugeSizes() {
+    if (!("ResizeObserver" in window)) return;
+    meterGaugeObserver = new ResizeObserver(entries => {
+        entries.forEach(entry => $(entry.target).simpleGauge("draw"));
     });
-
+    document.querySelectorAll(".gauge").forEach(gauge => meterGaugeObserver.observe(gauge));
 }
 
 // Mantiene compatibilidad si el navegador conserva un script viejo.
@@ -196,6 +266,29 @@ const meterOptionGroups = [
     },
 ];
 
+const settingsBackupSections = [
+    {key: "network", label: "Red y servicios"},
+    {key: "grid", label: "Estados de red"},
+    {key: "history", label: "Registro histórico"},
+    {key: "capture", label: "Captura de eventos"},
+    {key: "energy", label: "Contadores de energía"},
+    {key: "calibration", label: "Calibración"},
+];
+
+const backupNetworkKeys = [
+    "wifi-mode", "sta-ssid", "sta-pass", "staticIp", "sta-ip", "sta-mask", "sta-gw", "sta-dns1", "sta-dns2",
+    "ap-ssid", "ap-pass", "ap-hide", "ap-custom-ip", "ap-ip", "ap-mask", "ap-gw", "ota-enabled", "ota-name", "ota-pass",
+    "time-start", "time-dsttime", "time-minwest", "time-server", "time-sync", "debug-enabled", "debug-name", "debug-pass",
+    "mqtt-enabled", "mqtt-server", "mqtt-port", "mqtt-user", "mqtt-pass",
+];
+
+const backupGridKeys = ["lowR", "highR", "lowS", "highS", "lowT", "highT", "noVoltage", "hysteresis",
+    "lossConfirmMs", "voltageConfirmMs", "recoveryConfirmMs", "capturePages",
+    "neutralEnabled", "neutralHigh", "neutralHysteresis", "neutralConfirmMs", "neutralRecoveryMs"];
+const backupHistoryKeys = ["enabled", "groupConfig", "samplePeriodDeciseconds"];
+const backupEnergyKeys = ["rWattH", "rVarH", "rVaH", "sWattH", "sVarH", "sVaH", "tWattH", "tVarH", "tVaH", "WattH", "VarH", "VaH"];
+const backupCaptureDefaults = {eventPrevSamples: 100, eventPostSamples: 100, eventMaxSamples: 300};
+
 // Inicializa la pestaña de opciones.
 function initSettingsUI() {
     $("#settings").html(createSettingsHtml());
@@ -205,7 +298,23 @@ function initSettingsUI() {
     $("#btnSaveCalibration").click(saveCalibrationOptions);
     $("#btnRestoreCalibration").click(restoreDefaultCalibration);
     $("#gridSettingsForm").on("submit", saveGridSettings);
+    $("#historySettingsForm").on("submit", saveHistorySettings);
+    $("#historySettingsForm").on("change", "input, select", function () {
+        if (this.id === "history_energy") $("#history_energyExtraMode").prop("disabled", !this.checked);
+        updateHistoryEstimate();
+    });
+    $("#history_period").on("input", updateHistoryEstimate);
     $("#btnLoadGridSettings").on("click", () => loadSettings("grid", true));
+    $("#btnLoadHistorySettings").on("click", () => loadSettings("history", true));
+    $("#btnRefreshStorage").on("click", () => loadSettings("storage", true));
+    $("#btnFormatStorage").on("click", startStorageFormat);
+    $("#storagePartitionRows").off("click", ".btnFormatPartition").on("click", ".btnFormatPartition", function () {
+        startPartitionFormat(this.dataset.partition, this.dataset.label);
+    });
+    $("#btnExportSettingsBackup").on("click", exportSettingsBackup);
+    $("#settingsBackupFile").on("change", function () { loadSettingsBackup(this.files[0]); });
+    $("#btnImportSettingsBackup").on("click", importSettingsBackup);
+    $("#btnRestartAfterImport").on("click", restartAfterSettingsImport);
     $("#btnCopyGridLimits").on("click", () => {
         ["S", "T"].forEach((phase) => ["low", "high"].forEach((limit) => {
             $("#grid_" + limit + phase).val($("#grid_" + limit + "R").val());
@@ -217,18 +326,204 @@ function initSettingsUI() {
 // Crea el HTML base de las opciones.
 function createSettingsHtml() {
     let html = '<div class="p-2"><ul class="nav nav-tabs" id="settingsTabs" role="tablist">';
-    const sections = [["grid", "Estados de red"], ["capture", "Captura de eventos"], ["calibration", "Calibración"]];
+    const sections = [["grid", "Estados de red"], ["history", "Registro histórico"], ["storage", "Almacenamiento NAND"], ["capture", "Captura de eventos"], ["calibration", "Calibración"], ["backup", "Importar / exportar"]];
     sections.forEach(([key, label], i) => {
         html += '<li class="nav-item" role="presentation"><button class="nav-link' + (i ? '' : ' active') + '" id="settingsTab_' + key + '" data-section="' + key + '" data-bs-toggle="tab" data-bs-target="#settings_' + key + '" type="button" role="tab" aria-controls="settings_' + key + '" aria-selected="' + !i + '">' + label + '</button></li>';
     });
     html += '</ul><div class="tab-content">';
-    const contents = [createGridSettingsHtml(), createMeterSettingsHtml(), createCalibrationSettingsHtml()];
+    const contents = [createGridSettingsHtml(), createHistorySettingsHtml(), createStorageSettingsHtml(), createMeterSettingsHtml(), createCalibrationSettingsHtml(), createSettingsBackupHtml()];
     sections.forEach(([key], i) => {
         html += '<section class="tab-pane settingsPane' + (i ? '' : ' active') + '" id="settings_' + key + '" role="tabpanel" aria-labelledby="settingsTab_' + key + '">';
         html += contents[i] + '</section>';
     });
     html += '</div></div>';
     return html;
+}
+
+// Crea la interfaz de respaldo y restauracion de configuracion.
+function createSettingsBackupHtml() {
+    let html = '<div class="settingsSection">' + createSettingsHeaderHtml("Importar y exportar", "Respaldo local de ajustes del medidor.", '<button id="btnExportSettingsBackup" type="button" class="btn btn-sm btn-outline-primary">Exportar JSON</button>');
+    html += '<div class="alert alert-warning py-2 small">El archivo incluye contraseñas en texto plano. Guardalo en un lugar privado.</div>';
+    html += '<div class="settingsGroup"><h3>Secciones del respaldo</h3><div class="settingsGroupGrid settingsGroupGridTwo">';
+    settingsBackupSections.forEach(({key, label}) => {
+        html += '<div class="form-check"><input class="form-check-input backupExportSection" type="checkbox" id="backupExport_' + key + '" value="' + key + '" checked><label class="form-check-label" for="backupExport_' + key + '">' + label + '</label></div>';
+    });
+    html += '</div></div><div class="settingsGroup mt-3"><h3>Restaurar respaldo</h3>';
+    html += '<input id="settingsBackupFile" class="form-control form-control-sm" type="file" accept=".json,application/json">';
+    html += '<div id="settingsBackupWarning" class="small text-muted mt-2">Elegí un respaldo JSON para revisar sus secciones.</div>';
+    html += '<div id="settingsBackupImportSections" class="settingsGroupGrid settingsGroupGridTwo mt-2"></div>';
+    html += '<div class="d-flex flex-wrap gap-2 mt-3"><button id="btnImportSettingsBackup" type="button" class="btn btn-sm btn-success" disabled>Importar seleccionadas</button>';
+    html += '<button id="btnRestartAfterImport" type="button" class="btn btn-sm btn-warning" hidden>Reiniciar para aplicar</button></div>';
+    html += '<ol id="settingsBackupStatus" class="small mt-3 mb-0" aria-live="polite"></ol></div></div>';
+    return html;
+}
+
+// Crea el panel de estado, mapa y acciones disponibles para la NAND; sin parametros.
+function createStorageSettingsHtml() {
+    const actions = '<button id="btnRefreshStorage" type="button" class="btn btn-sm btn-outline-secondary">Actualizar</button>' +
+        '<button id="btnFormatStorage" type="button" class="btn btn-sm btn-outline-danger">Formatear NAND completa</button>';
+    let html = '<div class="settingsSection">' + createSettingsHeaderHtml("Almacenamiento NAND", "Distribución física, capacidad útil y estado de las áreas de almacenamiento.", actions);
+    html += '<div id="storageSettingsStatus" class="settingsStatusLine small text-muted" role="status">Sin consultar.</div>';
+    html += '<div id="storageSummary" class="storageSummary small"></div>';
+    html += '<div id="storageFormatProgress" class="storageFormatProgress" hidden><progress id="storageFormatProgressBar" max="100" value="0"></progress><span id="storageFormatProgressText"></span></div>';
+    html += '<div class="storageWarning small">Cada acción individual borra físicamente solo esa partición. El formato completo borra toda la NAND y reinicializa el mapa.</div>';
+    html += '<div class="table-responsive"><table class="table table-sm table-bordered align-middle storageTable"><thead><tr><th>Área</th><th>Bloques físicos</th><th>Tamaño</th><th>Útil</th><th>Contenido / estado</th><th>Acción</th></tr></thead><tbody id="storagePartitionRows"></tbody></table></div>';
+    html += '</div>';
+    return html;
+}
+
+// Formatea bytes binarios para mostrar capacidades; bytes es la cantidad a convertir.
+function formatStorageSize(bytes) {
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value < 0) return "—";
+    if (value >= 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + " MiB";
+    if (value >= 1024) return (value / 1024).toFixed(0) + " KiB";
+    return value + " B";
+}
+
+// Lee estado NAND y, salvo durante el progreso del formateo, el estado de WebFS.
+// includeWebFs evita repetir la segunda consulta mientras solo se muestra progreso.
+function loadStorageStatus(includeWebFs = true) {
+    return $.ajax({url: board.IP + "/storage", cache: false, timeout: Math.max(board.timeout, 5000)})
+        .then((status) => {
+            const partitionFormats = Object.values(status.partitions || {}).map((part) => part.format || {});
+            const formatting = !!(status.format && status.format.active) || partitionFormats.some((part) => part.active);
+            if (!includeWebFs && formatting) {
+                renderStorageStatus(status, storageWebFsInfo);
+                return status;
+            }
+            return $.ajax({url: board.IP + "/webfs", cache: false, timeout: Math.max(board.timeout, 5000)})
+                .then((response) => {
+                    storageWebFsInfo = response.nand || {};
+                    renderStorageStatus(status, storageWebFsInfo);
+                    return status;
+                }, () => {
+                    storageWebFsInfo = {};
+                    renderStorageStatus(status, storageWebFsInfo);
+                    return status;
+                });
+        })
+        .fail(() => {
+            clearTimeout(storageStatusTimer);
+            $("#storageSettingsStatus").text("No se pudo consultar el estado del almacenamiento NAND.");
+            $("#btnFormatStorage").prop("disabled", false);
+        });
+}
+
+// Actualiza el mapa de particiones y el progreso; status y webFs son respuestas de sus endpoints.
+function renderStorageStatus(status, webFs) {
+    const p = status.partitions || {};
+    const history = status.historyStore || {};
+    const grid = status.gridStore || {};
+    const stateNames = {ready: "Lista", formatting: "Formateando", unformatted: "Sin formato", format_error: "Error de formato", not_detected: "No detectada"};
+    const content = {
+        metadata: "Mapa de particiones y bitmap de bloques defectuosos",
+        history: (history.writtenPages || 0) + " páginas escritas desde el inicio",
+        waveEvents: "Reservada; almacenamiento Wave pendiente",
+        gridEvents: ((Number(grid.recoveredEvents) || 0) + (Number(grid.acceptedEvents) || 0)) + " eventos conocidos",
+        diagnostics: "Registros de diagnóstico",
+        webFsA: storageWebFsLabel(webFs, "a"),
+        webFsB: storageWebFsLabel(webFs, "b"),
+    };
+    const globalFormatActive = !!(status.format && status.format.active);
+    const anyPartitionFormatActive = Object.values(p).some((part) => part.format && part.format.active);
+    const anyFormatActive = globalFormatActive || anyPartitionFormatActive;
+    const html = nandStorageLayout.map((row) => {
+        const part = p[row.key] || {};
+        const format = part.format || {};
+        const bank = row.key === "webFsA" ? webFs.a : row.key === "webFsB" ? webFs.b : null;
+        const blocks = Number(part.blocks) || row.blockCount;
+        const configuredBytes = blocks * 131072;
+        const usableBlocks = row.key === "metadata" ? null : Number(part.usableBlocks ?? blocks);
+        const usableBytes = bank ? Number(bank.capacityBytes) || 0 :
+            usableBlocks === null ? null : usableBlocks * 131072;
+        const range = row.startBlock + "–" + (row.startBlock + row.blockCount - 1);
+        const usableLabel = usableBytes === null ? "Reservados" : formatStorageSize(usableBytes) +
+            "<div class=\"small text-muted\">" + (usableBlocks === null ? "" : usableBlocks + "/" + blocks + " bloques") + "</div>";
+        let rowContent = content[row.key];
+        if (format.active) {
+            rowContent += "<div class=\"small text-primary\">Formateando " + Number(format.percent || 0) + "% · " +
+                formatStorageSize(format.bytesDone) + " / " + formatStorageSize(format.totalBytes) + " · " +
+                Number(format.blocksDone || 0) + "/" + Number(format.blocksTotal || 0) + " bloques</div>";
+        } else if (format.done) {
+            rowContent += "<div class=\"small " + (format.success ? "text-success" : "text-danger") + "\">" +
+                (format.success ? "Formato completo" : "Formato fallido · " + Number(format.failedBlocks || 0) + " bloques con error") +
+                " · " + formatStorageSize(format.bytesErased) + " borrados</div>";
+        }
+        const stateClass = part.enabled === false && status.state === "ready" && row.key !== "metadata" ? "text-muted" : "";
+        const canRetry = format.done && !format.success;
+        const canFormat = row.key !== "metadata" && !anyFormatActive && status.state === "ready" && (part.enabled !== false || canRetry);
+        const isBusy = !!format.active;
+        const action = row.key === "metadata" ? "No aplica" :
+            "<button type=\"button\" class=\"btn btn-sm btn-outline-danger btnFormatPartition\" data-partition=\"" + row.key +
+            "\" data-label=\"" + row.label + "\" " + (!canFormat || isBusy ? "disabled" : "") + ">" +
+            (isBusy ? "Formateando…" : "Formatear") + "</button>";
+        return "<tr><th>" + row.label + "</th><td>" + range + "</td><td>" + formatStorageSize(configuredBytes) +
+            "</td><td>" + usableLabel + "</td><td class=\"" + stateClass + "\">" + rowContent + "</td><td>" + action + "</td></tr>";
+    }).join("");
+    $("#storagePartitionRows").html(html);
+    $("#storageSummary").text((stateNames[status.state] || status.state || "Estado desconocido") + " · " +
+        (Number(status.nand && status.nand.blocks) || 0) + " bloques NAND · " + formatStorageSize(status.nand && status.nand.capacityBytes));
+
+    const format = status.format || {};
+    const partitionBusy = anyPartitionFormatActive;
+    const total = Number(format.totalBlocks) || 0;
+    const scanned = Number(format.scannedBlocks) || 0;
+    const usable = Number(format.usableBlocks) || 0;
+    const erased = Number(format.erasedBlocks) || 0;
+    const progress = total ? Math.min(100, Math.round(scanned < total ? scanned * 50 / total : 50 + (usable ? erased * 50 / usable : 0))) : 0;
+    $("#storageFormatProgress").prop("hidden", !format.active);
+    $("#storageFormatProgressBar").val(progress);
+    $("#storageFormatProgressText").text("Formateo NAND completa: " + progress + "% · escaneados " + scanned + "/" + total +
+        " · borrados " + erased + "/" + usable + " bloques");
+    $("#btnFormatStorage").prop("disabled", format.active || partitionBusy || status.state === "not_detected");
+
+    if (format.active || partitionBusy) {
+        clearTimeout(storageStatusTimer);
+        storageStatusTimer = setTimeout(() => loadStorageStatus(false), 1000);
+        $("#storageSettingsStatus").text(format.active ? "Formateo completo en curso." : "Formateo de partición en curso; las demás áreas siguen disponibles.");
+    } else {
+        clearTimeout(storageStatusTimer);
+        $("#storageSettingsStatus").text(format.completed ? "Formateo completo finalizado." :
+            format.failed ? "El formateo completo terminó con errores." : "Estado actualizado.");
+    }
+}
+
+// Solicita el borrado de key tras confirmar el nombre visible label.
+function startPartitionFormat(key, label) {
+    if (!key) return;
+    const confirmation = prompt("Se borrarán físicamente todos los bloques utilizables de " + label + ". Escribí FORMAT para continuar.");
+    if (confirmation !== "FORMAT") return;
+    $(".btnFormatPartition, #btnFormatStorage").prop("disabled", true);
+    $("#storageSettingsStatus").text("Iniciando formato de " + label + "...");
+    $.ajax({type: "POST", url: board.IP + "/storage/partition/format", data: {partition: key, confirm: "FORMAT"}, timeout: Math.max(board.timeout, 5000)})
+        .done(() => loadStorageStatus(false))
+        .fail((xhr) => {
+            $("#storageSettingsStatus").text(xhr.responseText || "No se pudo iniciar el formato de " + label + ".");
+            $(".btnFormatPartition, #btnFormatStorage").prop("disabled", false);
+        });
+}
+
+// Describe un banco WebFS; webFs contiene ambos bancos y bank es "a" o "b".
+function storageWebFsLabel(webFs, bank) {
+    const info = webFs[bank] || {};
+    const active = webFs.active === bank;
+    if (!info.valid) return active ? "Banco activo sin imagen válida" : "Sin imagen válida";
+    return (active ? "Activo · " : "Respaldo · ") + formatStorageSize(info.imageSize);
+}
+
+// Solicita el formateo completo solo tras confirmacion literal del usuario; sin parametros.
+function startStorageFormat() {
+    const confirmation = prompt("Esto borrará TODA la NAND: histórico, eventos, diagnóstico y WebFS A/B. Escribí FORMAT para continuar.");
+    if (confirmation !== "FORMAT") return;
+    $("#btnFormatStorage").prop("disabled", true);
+    $("#storageSettingsStatus").text("Solicitando formateo completo...");
+    $.ajax({type: "POST", url: board.IP + "/storage/format", data: {confirm: "FORMAT"}, timeout: Math.max(board.timeout, 5000)})
+        .done(() => loadStorageStatus())
+        .fail((xhr) => {
+            $("#storageSettingsStatus").text(xhr.responseText || "No se pudo iniciar el formateo completo.");
+            $("#btnFormatStorage").prop("disabled", false);
+        });
 }
 
 // Crea el formulario compacto de estados de red; sin parametros.
@@ -255,12 +550,244 @@ function createGridSettingsHtml() {
         ["lossConfirmMs", "Confirmación sin tensión (ms)", 20, 60000, "1"],
         ["voltageConfirmMs", "Confirmación bajo/alto voltaje (ms)", 20, 600000, "1"],
         ["recoveryConfirmMs", "Confirmación normalidad (ms)", 20, 60000, "1"],
+        ["capturePages", "Páginas por evento", 3, 6, "1"],
     ];
     fields.forEach(([key, label, min, max, step]) => {
         html += '<div class="settingsField"><label for="grid_' + key + '">' + label + '</label><input class="form-control form-control-sm" required type="number" id="grid_' + key + '" name="' + key + '" min="' + min + '" max="' + max + '" step="' + step + '"></div>';
     });
+    html += '</div><div class="settingsGroup"><h3>Neutro-tierra</h3>';
+    html += '<div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="neutralEnabled" id="grid_neutralEnabled"><label class="form-check-label" for="grid_neutralEnabled">Capturar tensión alta y recuperación</label></div>';
+    const neutralFields = [["neutralHigh", "Umbral (V)", 0.025, 409.55, "0.025"],
+        ["neutralHysteresis", "Histéresis (V)", 0, 409.525, "0.025"],
+        ["neutralConfirmMs", "Confirmación de tensión alta (ms)", 20, 600000, "1"],
+        ["neutralRecoveryMs", "Confirmación de recuperación (ms)", 20, 60000, "1"]];
+    neutralFields.forEach(([key, label, min, max, step]) => {
+        html += '<div class="settingsField"><label for="grid_' + key + '">' + label + '</label><input class="form-control form-control-sm" required type="number" id="grid_' + key + '" name="' + key + '" min="' + min + '" max="' + max + '" step="' + step + '"></div>';
+    });
     html += '</div></div></fieldset></form>';
     return html;
+}
+
+// Crea el formulario del perfil que se escribe periodicamente en la NAND.
+function createHistorySettingsHtml() {
+    const actions = '<button id="btnLoadHistorySettings" type="button" class="btn btn-sm btn-outline-secondary">Recargar</button>' +
+        '<button type="submit" class="btn btn-sm btn-success">Guardar</button>';
+    let html = '<form id="historySettingsForm" class="settingsSection">';
+    html += createSettingsHeaderHtml("Registro histórico", "Muestras periódicas guardadas en la memoria NAND. Cada cambio inicia una página nueva.", actions);
+    html += '<div id="historySettingsStatus" class="settingsStatusLine small text-muted" role="status"></div>';
+    html += '<fieldset id="historySettingsFields" disabled><div class="settingsGroupGrid settingsGroupGridTwo">';
+    html += '<div class="settingsGroup"><h3>Frecuencia</h3>';
+    html += '<div class="form-check form-switch settingsSwitch"><input class="form-check-input" type="checkbox" id="history_enabled" name="enabled"><label class="form-check-label" for="history_enabled">Registrar histórico</label></div>';
+    html += '<div class="settingsField"><label for="history_period">Período de muestra</label><div class="input-group input-group-sm"><input class="form-control" required type="number" id="history_period" name="period" min="0.1" max="300" step="0.1"><span class="input-group-text">s</span></div></div>';
+    html += '<div class="small text-muted mt-2" id="historyProfileInfo">Tamaño de muestra y capacidad calculados por el medidor.</div>';
+    html += '<div class="historyCapacityInfo small" id="historyCapacityInfo" role="status" aria-live="polite">La duración estimada aparecerá al cargar el perfil.</div>';
+    html += '<p class="historyBaseInfo small text-muted mb-0">Siempre: tensión de R/S/T/N (0,01 V), corriente de R/S/T/N (mA) y estado de Wi-Fi, MQTT, alimentación/carga de batería y hora sincronizada.</p>';
+    html += '<div class="form-check form-switch settingsSwitch mt-3"><input class="form-check-input" type="checkbox" id="history_battery" name="battery"><label class="form-check-label" for="history_battery">Guardar mediciones de batería</label></div>';
+    html += '<div class="historyOptionDescription small text-muted">Agrega VBAT, VBUS, corriente de carga y nivel de batería; suma 3 bytes por muestra. El estado de batería ya se guarda siempre.</div>';
+    html += '<div class="small text-muted mt-2">La duración es teórica con la partición llena; cambios de perfil y páginas parciales pueden reducirla un poco.</div></div>';
+    html += '<div class="settingsGroup"><h3>Grupos opcionales</h3>';
+    const modes = [
+        ["activePower", "Potencia activa", "Total compacto o valores por fase R/S/T."],
+        ["reactivePower", "Potencia reactiva", "Total compacto o valores por fase R/S/T."],
+        ["apparentPower", "Potencia aparente", "Total compacto o valores por fase R/S/T."],
+        ["frequency", "Frecuencia", "Frecuencia general; formato compacto (0,1 Hz) o completo (0,01 Hz)."],
+    ];
+    modes.forEach(([key, label, description]) => {
+        const fullLabel = key === "frequency" ? "Completa" : "Por fase R/S/T";
+        const compactLabel = key === "frequency" ? "Compacta" : "Total compacta";
+        html += '<div class="settingsField"><label for="history_' + key + '">' + label + '</label><select class="form-select form-select-sm" id="history_' + key + '" name="' + key + '"><option value="off">No guardar</option><option value="compact">' + compactLabel + '</option><option value="full">' + fullLabel + '</option></select></div>';
+        html += '<div class="historyOptionDescription small text-muted">' + description + '</div>';
+    });
+    const groups = [
+        ["voltageFull", "Tensiones entre fases", "R-S, S-T y T-R; agrega 6 bytes por muestra."],
+        ["powerFactor", "Factor de potencia", "Factor por fase R/S/T."],
+        ["voltageThd", "THD de tensión", "Distorsión armónica de tensión por fase R/S/T."],
+        ["currentThd", "THD de corriente", "Distorsión armónica de corriente por fase R/S/T."],
+        ["voltageAngles", "Ángulos entre tensiones", "Ángulos R-S, S-T y T-R."],
+    ];
+    groups.forEach(([key, label, description]) => {
+        html += '<div class="form-check form-switch settingsSwitch"><input class="form-check-input" type="checkbox" id="history_' + key + '" name="' + key + '"><label class="form-check-label" for="history_' + key + '">' + label + '</label></div>';
+        html += '<div class="historyOptionDescription small text-muted">' + description + '</div>';
+    });
+    html += '<div class="form-check form-switch settingsSwitch"><input class="form-check-input" type="checkbox" id="history_energy" name="energy"><label class="form-check-label" for="history_energy">Energía activa por fase</label></div>';
+    html += '<div class="historyOptionDescription small text-muted">Wh acumulados de R/S/T; opcionalmente agrega energía reactiva y/o aparente.</div>';
+    html += '<div class="settingsField"><label for="history_energyExtraMode">Energías adicionales</label><select class="form-select form-select-sm" id="history_energyExtraMode" name="energyExtraMode">' +
+        '<option value="0">Ninguna</option><option value="1">Reactiva total</option><option value="2">Aparente total</option>' +
+        '<option value="3">Reactiva y aparente total</option><option value="4">Reactiva por fase</option><option value="5">Aparente por fase</option>' +
+        '<option value="6">Reactiva por fase + aparente total</option><option value="7">Reactiva y aparente por fase</option></select></div>';
+    html += '</div></div></fieldset></form>';
+    return html;
+}
+
+// Completa el formulario desde la configuracion publicada por el recorder.
+function fillHistorySettings(config) {
+    $("#history_enabled").prop("checked", config.enabled);
+    $("#history_period").val(config.samplePeriod);
+    $("#history_voltageFull").prop("checked", config.voltageMode === "full");
+    $("#history_activePower").val(config.activePower);
+    $("#history_reactivePower").val(config.reactivePower);
+    $("#history_apparentPower").val(config.apparentPower);
+    $("#history_powerFactor").prop("checked", config.powerFactor);
+    $("#history_frequency").val(config.frequency);
+    $("#history_voltageThd").prop("checked", config.voltageThd);
+    $("#history_currentThd").prop("checked", config.currentThd);
+    $("#history_voltageAngles").prop("checked", config.voltageAngles);
+    $("#history_battery").prop("checked", config.battery);
+    $("#history_energy").prop("checked", config.energy);
+    $("#history_energyExtraMode").val(String(config.energyExtraMode || 0)).prop("disabled", !config.energy);
+    updateHistoryEstimate();
+}
+
+// Muestra el tamano de muestra y la autonomia estimada; estimate contiene el calculo del firmware.
+function renderHistoryEstimate(estimate) {
+    $("#historyProfileInfo").text("Muestra de " + estimate.sampleSize + " bytes · " + estimate.samplesPerPage + " muestras por página.");
+    if (!estimate.ready) {
+        $("#historyCapacityInfo").text("Duración no disponible: la partición histórica no está lista.");
+        return;
+    }
+    const duration = formatHistoryRetention(Number(estimate.duration));
+    const enabled = $("#history_enabled").prop("checked");
+    const label = enabled ? "Autonomía estimada al llenar la partición" : "Con el registro deshabilitado, este perfil permitiría";
+    const samples = Number(estimate.estimatedSamples).toLocaleString("es-AR");
+    $("#historyCapacityInfo").text(label + ": " + duration + " · " + samples + " muestras · " + estimate.usableBlocks + " bloques disponibles.");
+}
+
+// Formatea la retencion calculada en segundos; durationSeconds proviene del firmware.
+function formatHistoryRetention(durationSeconds) {
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return "sin capacidad estimable";
+    const totalSeconds = Math.floor(durationSeconds);
+    const days = Math.floor(totalSeconds / 86400);
+    if (days) return days + " días " + Math.floor(totalSeconds % 86400 / 3600) + " h";
+    const hours = Math.floor(totalSeconds / 3600);
+    if (hours) return hours + " h " + Math.floor(totalSeconds % 3600 / 60) + " min";
+    const minutes = Math.floor(totalSeconds / 60);
+    if (minutes) return minutes + " min " + totalSeconds % 60 + " s";
+    return durationSeconds.toFixed(1) + " s";
+}
+
+// Reune las opciones visibles del formulario en el formato usado por los endpoints.
+function getHistoryConfigOptions() {
+    const energy = $("#history_energy").prop("checked");
+    return {
+        samplePeriod: Number($("#history_period").val()),
+        voltageMode: $("#history_voltageFull").prop("checked") ? "full" : "basic",
+        activePower: $("#history_activePower").val(),
+        reactivePower: $("#history_reactivePower").val(),
+        apparentPower: $("#history_apparentPower").val(),
+        powerFactor: $("#history_powerFactor").prop("checked"),
+        voltageThd: $("#history_voltageThd").prop("checked"),
+        currentThd: $("#history_currentThd").prop("checked"),
+        frequency: $("#history_frequency").val(),
+        voltageAngles: $("#history_voltageAngles").prop("checked"),
+        battery: $("#history_battery").prop("checked"),
+        energy,
+        energyExtraMode: energy ? Number($("#history_energyExtraMode").val()) : 0,
+    };
+}
+
+// Consulta de inmediato la estimacion para la seleccion actual; no guarda cambios y no recibe parametros.
+function updateHistoryEstimate() {
+    const revision = ++historyEstimateRevision;
+    if (historyEstimateRequest) {
+        historyEstimateRequest.abort();
+        historyEstimateRequest = null;
+    }
+    const seconds = Number($("#history_period").val());
+    if (!Number.isFinite(seconds) || seconds < 0.1 || seconds > 300) {
+        $("#historyCapacityInfo").text("Ingresá un período entre 0,1 y 300 segundos para estimar la duración.");
+        return;
+    }
+    const options = getHistoryConfigOptions();
+    $("#historyCapacityInfo").text("Calculando capacidad con el medidor...");
+    historyEstimateRequest = $.ajax({
+        url: board.IP + "/history/estimate",
+        data: options,
+        cache: false,
+        timeout: Math.max(board.timeout, 3000),
+    }).done((estimate) => {
+        if (revision === historyEstimateRevision) renderHistoryEstimate(estimate);
+    }).fail((xhr, status) => {
+        if (revision === historyEstimateRevision && status !== "abort")
+            $("#historyCapacityInfo").text("No se pudo calcular la duración estimada.");
+    }).always(() => {
+        if (revision === historyEstimateRevision) historyEstimateRequest = null;
+    });
+}
+
+// Lee una vez el perfil del histórico; sin parametros.
+function loadHistorySettings() {
+    $("#historySettingsFields").prop("disabled", true);
+    $("#historySettingsStatus").text("Cargando...");
+    return $.ajax({url: board.IP + "/history/config", cache: false, timeout: Math.max(board.timeout, 3000)})
+        .done((config) => {
+            fillHistorySettings(config);
+            $("#historySettingsFields").prop("disabled", false);
+            $("#historySettingsStatus").text("Perfil cargado.");
+        })
+        .fail(() => $("#historySettingsStatus").text("No se pudo cargar el perfil histórico."));
+}
+
+// Convierte options a bitmap solo para conservar el formato de respaldos existentes.
+function historyOptionsToGroupConfig(options) {
+    const mode = value => ({off: 0, compact: 1, full: 2})[String(value).toLowerCase()] || 0;
+    let config = String(options.voltageMode).toLowerCase() === "full" ? 1 : 0;
+    config |= mode(options.activePower) << 1;
+    config |= mode(options.reactivePower) << 3;
+    config |= mode(options.apparentPower) << 5;
+    if (options.powerFactor) config |= 1 << 7;
+    if (options.voltageThd) config |= 1 << 8;
+    if (options.currentThd) config |= 1 << 9;
+    config |= mode(options.frequency) << 10;
+    if (options.voltageAngles) config |= 1 << 12;
+    if (options.battery) config |= 1 << 13;
+    if (options.energy) config |= (1 << 14) | (Number(options.energyExtraMode) << 15);
+    return config;
+}
+
+// Convierte values del respaldo a opciones legibles para enviar al firmware.
+function historyBackupToOptions(values) {
+    const config = Number(values.groupConfig);
+    const mode = shift => ({0: "off", 1: "compact", 2: "full"}[(config >> shift) & 3] || "off");
+    const energy = Boolean(config & (1 << 14));
+    return {
+        enabled: values.enabled,
+        samplePeriod: Number(values.samplePeriodDeciseconds) / 10,
+        voltageMode: config & 1 ? "full" : "basic",
+        activePower: mode(1),
+        reactivePower: mode(3),
+        apparentPower: mode(5),
+        powerFactor: Boolean(config & (1 << 7)),
+        voltageThd: Boolean(config & (1 << 8)),
+        currentThd: Boolean(config & (1 << 9)),
+        frequency: mode(10),
+        voltageAngles: Boolean(config & (1 << 12)),
+        battery: Boolean(config & (1 << 13)),
+        energy,
+        energyExtraMode: energy ? (config >> 15) & 7 : 0,
+    };
+}
+
+// Valida y guarda el perfil del histórico; event contiene el envio del formulario.
+function saveHistorySettings(event) {
+    event.preventDefault();
+    const form = document.getElementById("historySettingsForm");
+    if (!form.reportValidity()) return;
+    const period = Number($("#history_period").val());
+    if (!Number.isFinite(period) || period < 0.1 || period > 300 || Math.abs(period * 10 - Math.round(period * 10)) > 0.001) {
+        $("#historySettingsStatus").text("El período debe estar entre 0,1 y 300 segundos.");
+        return;
+    }
+    const values = getHistoryConfigOptions();
+    values.enabled = $("#history_enabled").prop("checked");
+    $("#historySettingsFields, #btnLoadHistorySettings").prop("disabled", true);
+    $("#historySettingsStatus").text("Guardando y cerrando la página actual...");
+    $.ajax({type: "POST", url: board.IP + "/history/config", data: values, timeout: Math.max(board.timeout, 5000)})
+        .done((config) => {
+            fillHistorySettings(config);
+            $("#historySettingsStatus").text("Guardado. Las muestras nuevas usan este perfil.");
+        })
+        .fail((xhr) => $("#historySettingsStatus").text(xhr.responseText || "No se pudo guardar el perfil histórico."))
+        .always(() => $("#historySettingsFields, #btnLoadHistorySettings").prop("disabled", false));
 }
 
 // Crea el encabezado comun de una seccion; title y description son textos, actions contiene sus botones.
@@ -271,14 +798,17 @@ function createSettingsHeaderHtml(title, description, actions) {
 
 // Completa el formulario con values recibidos del medidor.
 function fillGridSettings(values) {
-    $("#gridSettingsForm input[name]").each(function () { $(this).val(values[this.name]); });
+    $("#gridSettingsForm input[name]").each(function () {
+        if (this.type === "checkbox") $(this).prop("checked", Boolean(Number(values[this.name])));
+        else $(this).val(values[this.name]);
+    });
 }
 
 // Lee ajustes una sola vez por solicitud, sin consultas periodicas; sin parametros.
 function loadGridSettings() {
     $("#gridSettingsFields").prop("disabled", true);
     $("#gridSettingsStatus").text("Cargando...");
-    return $.ajax({url: board.IP + "/gridopts", cache: false, timeout: Math.max(board.timeout, 3000)})
+    return $.ajax({url: board.IP + "/grid/config", cache: false, timeout: Math.max(board.timeout, 3000)})
         .done((values) => {
             fillGridSettings(values);
             $("#gridSettingsFields").prop("disabled", false);
@@ -293,7 +823,11 @@ function saveGridSettings(event) {
     const form = document.getElementById("gridSettingsForm");
     if (!form.reportValidity()) return;
     const values = Object.fromEntries(new FormData(form));
+    values.neutralEnabled = document.getElementById("grid_neutralEnabled").checked ? 1 : 0;
     const absence = Number(values.noVoltage), hysteresis = Number(values.hysteresis);
+    if (Number(values.neutralHysteresis) >= Number(values.neutralHigh)) {
+        $("#gridSettingsStatus").text("La histéresis de neutro debe ser menor que el umbral."); return;
+    }
     if (["R", "S", "T"].some((phase) => Number(values["low" + phase]) <= absence + hysteresis ||
         Number(values["high" + phase]) <= Number(values["low" + phase]) + 2 * hysteresis)) {
         $("#gridSettingsStatus").text("Los límites deben dejar espacio para la histéresis: sin tensión < bajo < alto.");
@@ -301,7 +835,7 @@ function saveGridSettings(event) {
     }
     $("#gridSettingsFields, #btnLoadGridSettings").prop("disabled", true);
     $("#gridSettingsStatus").text("Guardando...");
-    $.ajax({type: "POST", url: board.IP + "/gridopts", data: values, timeout: Math.max(board.timeout, 5000)})
+    $.ajax({type: "POST", url: board.IP + "/grid/config", data: values, timeout: Math.max(board.timeout, 5000)})
         .done((saved) => {
             fillGridSettings(saved);
             $("#gridSettingsStatus").text("Guardado. Los estados se confirman nuevamente con estos ajustes.");
@@ -400,13 +934,15 @@ let settingsLoadQueue = Promise.resolve();
 
 // Carga section solo al abrirla; force permite recargar explicitamente. Serializa consultas de ajustes.
 function loadSettings(section = $("#settingsTabs .active").data("section"), force = false) {
-    if (!["grid", "capture", "calibration"].includes(section)) return;
+    if (!["grid", "history", "storage", "capture", "calibration"].includes(section)) return;
     const panel = $("#settings_" + section);
     if (panel.data("loading") || (!force && panel.data("loaded"))) return settingsLoadQueue;
     panel.data("loading", true);
     settingsLoadQueue = settingsLoadQueue.then(async () => {
         try {
             if (section === "grid") await loadGridSettings();
+            else if (section === "history") await loadHistorySettings();
+            else if (section === "storage") await loadStorageStatus();
             else {
                 $("#" + section + "Fields").prop("disabled", true);
                 $(section === "capture" ? "#btnSaveMeterOptions" : "#btnSaveCalibration").prop("disabled", true);
@@ -423,7 +959,8 @@ function loadSettings(section = $("#settingsTabs .active").data("section"), forc
             panel.data("loaded", true);
         } catch (error) {
             panel.data("loaded", false);
-            if (section !== "grid") setSettingsStatus("No se pudieron cargar las opciones.", true, section);
+            if (section === "storage") $("#storageSettingsStatus").text("No se pudo cargar el estado NAND.");
+            else if (section !== "grid") setSettingsStatus("No se pudieron cargar las opciones.", true, section);
         } finally {
             panel.data("loading", false);
         }
@@ -437,16 +974,206 @@ function readOptions(namespace, keys) {
     let params = new URLSearchParams();
     params.append("ns", namespace);
     keys.forEach((key) => params.append(key, ""));
-    return $.ajax({type: "GET", url: board.IP + "/opts?" + params.toString(), cache: false, timeout: Math.max(board.timeout, 3000)});
+    return $.ajax({type: "GET", url: board.IP + "/options?" + params.toString(), cache: false, timeout: Math.max(board.timeout, 3000)});
 }
 
 // Escribe opciones en un namespace.
 // namespace: nombre del namespace. values: objeto clave valor.
 function writeOptions(namespace, values) {
-    let params = new URLSearchParams();
-    params.append("ns", namespace);
-    Object.keys(values).forEach((key) => params.append(key, values[key]));
-    return $.ajax({type: "GET", url: board.IP + "/opts?" + params.toString(), cache: false, timeout: Math.max(board.timeout, 3000)});
+    return $.ajax({type: "POST", url: board.IP + "/options", data: {...values, ns: namespace}, cache: false, timeout: Math.max(board.timeout, 5000)});
+}
+
+// Devuelve las claves permitidas para una seccion del respaldo.
+// section: identificador de seccion.
+function getBackupSectionKeys(section) {
+    if (section === "network") return backupNetworkKeys;
+    if (section === "grid") return backupGridKeys;
+    if (section === "history") return backupHistoryKeys;
+    if (section === "capture") return getMeterOptionKeys();
+    if (section === "energy") return backupEnergyKeys;
+    if (section === "calibration") return [...getCalibrationKeys(), "neutralRms", "neutralFast"];
+    return [];
+}
+
+// Valida la forma y los valores de una seccion antes de guardarla.
+// section: identificador de seccion. values: objeto leido del JSON.
+function validateBackupSection(section, values) {
+    if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("La sección no es un objeto.");
+    const allowed = getBackupSectionKeys(section);
+    const keys = Object.keys(values);
+    if (!keys.length) throw new Error("La sección está vacía.");
+    const unknownKeys = keys.filter((key) => !allowed.includes(key));
+    if (unknownKeys.length) throw new Error("Contiene campos no reconocidos: " + unknownKeys.join(", ") + ".");
+    if (keys.some((key) => values[key] === null || !["string", "number", "boolean"].includes(typeof values[key])))
+        throw new Error("Contiene un valor con formato inválido.");
+    if (section === "grid" && !backupGridKeys.filter((key) => !key.startsWith("neutral")).every((key) => Object.prototype.hasOwnProperty.call(values, key)))
+        throw new Error("Faltan límites o tiempos de red.");
+    if (section === "history" && (!backupHistoryKeys.every((key) => Object.prototype.hasOwnProperty.call(values, key)) ||
+        ![true, false, 0, 1, "true", "false", "0", "1"].includes(values.enabled) ||
+        !Number.isInteger(Number(values.groupConfig)) || Number(values.groupConfig) < 0 || Number(values.groupConfig) > 0xFFFFFF ||
+        !Number.isInteger(Number(values.samplePeriodDeciseconds)) || Number(values.samplePeriodDeciseconds) < 1 || Number(values.samplePeriodDeciseconds) > 3000))
+        throw new Error("La configuración histórica no es válida.");
+    if (section === "energy" && keys.some((key) => !Number.isFinite(Number(values[key]))))
+        throw new Error("Los totalizadores deben ser números finitos.");
+    if (section === "grid" && keys.some((key) => !Number.isFinite(Number(values[key]))))
+        throw new Error("Los ajustes de red deben ser numéricos.");
+    if (section === "calibration" && keys.some((key) => ["neutralRms", "neutralFast"].includes(key) ?
+        !Number.isFinite(Number(values[key])) || Number(values[key]) < 0.1 || Number(values[key]) > 10 : !isHex32(String(values[key]))))
+        throw new Error("La calibración debe contener enteros hexadecimales de 32 bits.");
+    return true;
+}
+
+// Lee una seccion y completa solo opciones de captura ausentes con sus valores predeterminados del firmware.
+// section: identificador de seccion.
+async function readBackupSection(section) {
+    let values;
+    let defaultsUsed = [];
+    if (section === "network") {
+        const response = await $.ajax({url: board.IP + "/network/config", cache: false, timeout: Math.max(board.timeout, 5000)});
+        const keys = getBackupSectionKeys(section);
+        const missingKeys = keys.filter((key) => !Object.prototype.hasOwnProperty.call(response, key));
+        if (missingKeys.length) throw new Error("Opciones de red ausentes: " + missingKeys.join(", ") + ".");
+        values = Object.fromEntries(keys.map((key) => [key, response[key]]));
+    } else if (section === "capture" || section === "calibration") {
+        const namespace = section === "capture" ? "meter" : "ADE9000";
+        const keys = getBackupSectionKeys(section);
+        const response = await readOptions(namespace, keys);
+        const missingKeys = keys.filter((key) => !Object.prototype.hasOwnProperty.call(response, key) || response[key] === "key no existe");
+        const invalidKeys = keys.filter((key) => response[key] === "invalid type");
+        defaultsUsed = section === "capture" ? missingKeys.filter((key) => Object.prototype.hasOwnProperty.call(backupCaptureDefaults, key)) : [];
+        const unresolvedKeys = missingKeys.filter((key) => !defaultsUsed.includes(key));
+        if (invalidKeys.length || unresolvedKeys.length)
+            throw new Error("Opciones ausentes o inválidas: " + [...unresolvedKeys, ...invalidKeys].join(", ") + ".");
+        values = Object.fromEntries(keys.map((key) => {
+            const value = defaultsUsed.includes(key) ? backupCaptureDefaults[key] : response[key];
+            return [key, section === "calibration" && !["neutralRms", "neutralFast"].includes(key) ? toHex32(value) : value];
+        }));
+    } else if (section === "grid") {
+        const response = await $.ajax({url: board.IP + "/grid/config", cache: false, timeout: Math.max(board.timeout, 5000)});
+        values = Object.fromEntries(backupGridKeys.map((key) => [key, response[key]]));
+    } else if (section === "history") {
+        const response = await $.ajax({url: board.IP + "/history/config", cache: false, timeout: Math.max(board.timeout, 5000)});
+        values = {enabled: response.enabled, groupConfig: historyOptionsToGroupConfig(response),
+            samplePeriodDeciseconds: Math.round(Number(response.samplePeriod) * 10)};
+    } else if (section === "energy") {
+        const response = await $.ajax({url: board.IP + "/meter?energy=1", cache: false, timeout: Math.max(board.timeout, 5000)});
+        values = {
+            rWattH: response.wattH.r, rVarH: response.varH.r, rVaH: response.vaH.r,
+            sWattH: response.wattH.s, sVarH: response.varH.s, sVaH: response.vaH.s,
+            tWattH: response.wattH.t, tVarH: response.varH.t, tVaH: response.vaH.t,
+            WattH: response.wattH.tot, VarH: response.varH.tot, VaH: response.vaH.tot,
+        };
+    } else throw new Error("Sección desconocida.");
+    validateBackupSection(section, values);
+    return {values, defaultsUsed};
+}
+
+// Descarga un respaldo con las secciones seleccionadas en la interfaz.
+async function exportSettingsBackup() {
+    const selected = $(".backupExportSection:checked").map((_, input) => input.value).get();
+    if (!selected.length) { $("#settingsBackupStatus").text("Seleccioná al menos una sección."); return; }
+    const button = $("#btnExportSettingsBackup").prop("disabled", true);
+    const status = $("#settingsBackupStatus").empty();
+    const sections = {};
+    try {
+        for (const key of selected) {
+            const label = settingsBackupSections.find((item) => item.key === key).label;
+            const row = $("<li>").text(label + ": leyendo...").appendTo(status);
+            const result = await readBackupSection(key);
+            sections[key] = result.values;
+            const fallbackNames = result.defaultsUsed.map((field) => field === "eventPrevSamples" ? "muestras previas (100)" : field === "eventPostSamples" ? "muestras posteriores (100)" : "muestras máximas (300)");
+            row.text(label + ": lista." + (fallbackNames.length ? " Se usaron valores predeterminados no guardados: " + fallbackNames.join(", ") + "." : ""));
+        }
+        const backup = {format: "pm9000-config", version: 1, exportedAt: new Date().toISOString(), sections};
+        const blobUrl = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], {type: "application/json"}));
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = "power-meter-config-" + new Date().toISOString().replace(/[:.]/g, "-") + ".json";
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch (error) {
+        $("<li class=\"text-danger\">").text("No se generó el respaldo: " + error.message).appendTo(status);
+    } finally {
+        button.prop("disabled", false);
+    }
+}
+
+// Carga y valida un archivo JSON para restaurar.
+// file: archivo elegido por el usuario.
+async function loadSettingsBackup(file) {
+    loadedSettingsBackup = null;
+    $("#settingsBackupImportSections").empty();
+    $("#btnImportSettingsBackup").prop("disabled", true);
+    $("#btnRestartAfterImport").prop("hidden", true);
+    if (!file) return;
+    try {
+        const backup = JSON.parse(await file.text());
+        if (backup.format !== "pm9000-config" || backup.version !== 1 || !backup.sections || typeof backup.sections !== "object")
+            throw new Error("El archivo no es un respaldo Power Meter compatible.");
+        const available = settingsBackupSections.filter(({key}) => Object.prototype.hasOwnProperty.call(backup.sections, key));
+        if (!available.length) throw new Error("El archivo no contiene secciones conocidas.");
+        available.forEach(({key, label}) => {
+            validateBackupSection(key, backup.sections[key]);
+            $("#settingsBackupImportSections").append('<div class="form-check"><input class="form-check-input backupImportSection" type="checkbox" id="backupImport_' + key + '" value="' + key + '" checked><label class="form-check-label" for="backupImport_' + key + '">' + label + '</label></div>');
+        });
+        loadedSettingsBackup = backup;
+        $("#settingsBackupWarning").removeClass("text-danger").text("Respaldo válido. " + available.length + " secciones; todas seleccionadas.");
+        $("#btnImportSettingsBackup").prop("disabled", false);
+    } catch (error) {
+        $("#settingsBackupWarning").text("No se puede usar el archivo: " + error.message).addClass("text-danger");
+    }
+}
+
+// Aplica una seccion usando su endpoint especifico.
+// section: identificador. values: configuracion validada de esa seccion.
+async function applyBackupSection(section, values) {
+    if (section === "network") return $.ajax({type: "POST", url: board.IP + "/network/config", data: values, timeout: Math.max(board.timeout, 5000)});
+    if (section === "grid") return $.ajax({type: "POST", url: board.IP + "/grid/config", data: values, timeout: Math.max(board.timeout, 5000)});
+    if (section === "history") return $.ajax({type: "POST", url: board.IP + "/history/config", data: historyBackupToOptions(values), timeout: Math.max(board.timeout, 5000)});
+    if (section === "capture") {
+        await writeOptions("meter", values);
+        return $.ajax({type: "POST", url: board.IP + "/options/reload", timeout: Math.max(board.timeout, 5000)});
+    }
+    if (section === "energy") return writeOptions("meter", values);
+    if (section === "calibration") return writeOptions("ADE9000", values);
+    throw new Error("Sección desconocida.");
+}
+
+// Restaura las secciones marcadas, una por una, y deja visible el resultado de cada una.
+async function importSettingsBackup() {
+    if (!loadedSettingsBackup) return;
+    let selected = $(".backupImportSection:checked").map((_, input) => input.value).get();
+    if (!selected.length) { $("#settingsBackupWarning").text("Seleccioná al menos una sección."); return; }
+    if (!confirm("Se van a sobrescribir " + selected.length + " secciones del medidor. ¿Continuar?")) return;
+    selected = selected.filter((key) => key !== "network").concat(selected.includes("network") ? ["network"] : []);
+    settingsBackupRestartRequired = false;
+    $("#btnImportSettingsBackup").prop("disabled", true);
+    $("#btnRestartAfterImport").prop("hidden", true);
+    const status = $("#settingsBackupStatus").empty();
+    let failed = false;
+    for (const key of selected) {
+        const label = settingsBackupSections.find((item) => item.key === key).label;
+        const row = $("<li>").text(label + ": aplicando...").appendTo(status);
+        try {
+            await applyBackupSection(key, loadedSettingsBackup.sections[key]);
+            if (["network", "energy", "calibration"].includes(key)) settingsBackupRestartRequired = true;
+            row.text(label + (["network", "energy", "calibration"].includes(key) ? ": guardada; requiere reinicio." : ": aplicada."));
+        } catch (error) {
+            failed = true;
+            row.addClass("text-danger").text(label + ": error; puede haber quedado parcialmente escrita. " + (error.responseText || error.message || ""));
+        }
+    }
+    if (settingsBackupRestartRequired) $("#btnRestartAfterImport").prop("hidden", false);
+    $("#settingsBackupWarning").text(failed ? "La importación terminó con errores. Revisá cada sección; no hay rollback automático." : "Importación terminada." + (settingsBackupRestartRequired ? " Reiniciá para aplicar los cambios pendientes." : ""));
+    $("#btnImportSettingsBackup").prop("disabled", false);
+}
+
+// Reinicia el medidor sin guardar encima los totalizadores recién importados.
+function restartAfterSettingsImport() {
+    if (!settingsBackupRestartRequired || !confirm("El medidor se reiniciará ahora. ¿Continuar?")) return;
+    $("#btnRestartAfterImport").prop("disabled", true).text("Reiniciando...");
+    $.ajax({type: "POST", url: board.IP + "/restart", timeout: Math.max(board.timeout, 5000)})
+        .fail(() => $("#settingsBackupWarning").text("No se confirmó el reinicio. Podés reiniciar el medidor manualmente."));
 }
 
 // Devuelve las claves de opciones del medidor.
@@ -484,7 +1211,7 @@ function saveMeterOptions() {
     setSettingsStatus("Guardando opciones de captura...", false, "capture");
     $("#btnSaveMeterOptions, #btnLoadSettings, #captureFields").prop("disabled", true);
     writeOptions("meter", collectMeterOptionValues())
-        .then(() => $.ajax({type: "GET", url: board.IP + "/reloadopts", timeout: Math.max(board.timeout, 3000)}))
+        .then(() => $.ajax({type: "POST", url: board.IP + "/options/reload", timeout: Math.max(board.timeout, 3000)}))
         .done(() => {
             setSettingsStatus("Opciones de captura guardadas y aplicadas.", false, "capture");
         })
@@ -508,7 +1235,7 @@ function saveCalibrationOptions() {
 function restoreDefaultCalibration() {
     if (!confirm("¿Restaurar la calibración por defecto? Se reemplazarán los valores guardados.")) return;
     setSettingsStatus("Restaurando calibración por defecto...", false, "calibration");
-    $.ajax({type: "GET", url: board.IP + "/restorecal", timeout: board.timeout})
+    $.ajax({type: "POST", url: board.IP + "/calibration/restore", timeout: board.timeout})
         .done(() => {
             loadSettings("calibration", true).then(() => setSettingsStatus("Calibración por defecto restaurada. Reinicie para aplicarla.", false, "calibration"));
         })
@@ -665,7 +1392,7 @@ function refreshEventLists() {
 // Genera un evento virtual en el firmware para probar el flujo Manager.
 function createVirtualEvent() {
     $("#eventRamStatus").text("Iniciando captura de evento...").removeClass("text-danger");
-    $.ajax({type: "GET", url: board.IP + "/api/v1/events/test", timeout: board.timeout})
+    $.ajax({type: "POST", url: board.IP + "/events/test", timeout: board.timeout})
         .done((event) => {
             renderRamEventStatus("Captura iniciada. Esperando cierre...");
             setTimeout(loadRamEventsList, 1800);
@@ -679,7 +1406,7 @@ function createVirtualEvent() {
 function createRampTestEvent() {
     $("#eventRampBtn").prop("disabled", true);
     renderRamEventStatus("Generando rampa de prueba en RAM...");
-    $.ajax({type: "GET", url: board.IP + "/api/v1/events/test?pattern=ramp", cache: false, timeout: board.timeout})
+    $.ajax({type: "POST", url: board.IP + "/events/test", data: {pattern: "ramp"}, cache: false, timeout: board.timeout})
         .done((data) => {
             renderRamEventStatus("Rampa generada: " + data.eventId);
             setTimeout(loadRamEventsList, 500);
@@ -694,12 +1421,12 @@ function createRampTestEvent() {
 // Carga la lista de eventos retenidos en RAM por el firmware.
 function loadRamEventsList() {
     $("#eventRamStatus").text("Cargando eventos RAM...").removeClass("text-danger");
-    $.ajax({type: "GET", url: board.IP + "/api/v1/events", timeout: board.timeout})
+    $.ajax({type: "GET", url: board.IP + "/events", timeout: board.timeout})
         .done((data) => {
             renderRamEventsList(data);
         })
         .fail((error) => {
-            renderRamEventStatus("No se pudo leer /api/v1/events." + getAjaxErrorText(error), true);
+            renderRamEventStatus("No se pudo leer /events." + getAjaxErrorText(error), true);
         });
 }
 
@@ -710,7 +1437,7 @@ function renderRamEventStatus(message, isError = false) {
 }
 
 // Renderiza los eventos RAM disponibles para descarga local.
-// data: respuesta de /api/v1/events.
+// data: respuesta de /events.
 function renderRamEventsList(data) {
     if (!data || !Array.isArray(data.events)) {
         renderRamEventStatus("La placa no devolvio una lista valida.", true);
@@ -753,7 +1480,7 @@ function renderRamEventsList(data) {
 function clearRamEvent(eventId) {
     if (!eventId) return;
     renderRamEventStatus("Borrando evento " + eventId + "...");
-    $.ajax({type: "POST", url: board.IP + "/api/v1/events/clear?eventId=" + encodeURIComponent(eventId), timeout: board.timeout})
+    $.ajax({type: "POST", url: board.IP + "/events/clear", data: {eventId}, timeout: board.timeout})
         .done(() => {
             renderRamEventStatus("Evento borrado: " + eventId);
             loadRamEventsList();
@@ -815,28 +1542,49 @@ function meterParseEventFile(data) {
     return resp;
 }
 
-// Muestra estados confirmados; states ausente indica que no hay informacion disponible.
-function showGridStates(states = {}) {
+// Formatea la antigüedad de un estado; ageMs es el tiempo transcurrido en milisegundos.
+function formatGridStateAge(ageMs) {
+    const seconds = Math.floor(ageMs / 1000);
+    if (seconds < 60) return `${seconds} s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)} min`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ${Math.floor(seconds % 3600 / 60)} min`;
+    return `${Math.floor(seconds / 86400)} d ${Math.floor(seconds % 86400 / 3600)} h`;
+}
+
+// Muestra estados confirmados y su antigüedad; states/ages vienen del JSON de mediciones.
+function showGridStates(states = {}, ages = {}) {
     const labels = {normal: "Normal", undervoltage: "Bajo voltaje", overvoltage: "Alto voltaje",
         phase_loss: "Sin tensión", abnormal: "Fuera de rango", outage: "Corte total"};
     ["r", "s", "t", "overall"].forEach((key) => {
         const state = states[key];
         const color = state === "normal" ? "text-success" :
             state === "phase_loss" || state === "outage" ? "text-danger" : labels[state] ? "text-warning" : "text-muted";
+        const stateClass = state === "normal" ? "normal" :
+            state === "phase_loss" || state === "outage" ? "danger" : labels[state] ? "warning" : "unknown";
+        $("#gridStatusCard_" + key).attr("data-state", stateClass);
         $("#gridState_" + key).attr("class", "fw-bold " + color).text(labels[state] || "Sin datos");
+        const ageMs = Number(ages[key]);
+        $("#gridStateAge_" + key).text(labels[state] && Number.isFinite(ageMs) && ageMs >= 0
+            ? "Desde hace " + formatGridStateAge(ageMs) : "");
     });
 }
 
 function meterOk(resp) {
-    showGridStates(resp.gridState);
+    showGridStates(resp.gridState, resp.gridStateAgeMs);
+    ["r", "s", "t"].forEach((key) => {
+        $("#gridVoltage_" + key).text(formatNumber(resp.vrms[key], "V"));
+        $("#gridCurrent_" + key).text(formatNumber(resp.irms[key], "A"));
+    });
+    phasorData.voltage = resp.vrms;
+    phasorData.current = resp.irms;
+    updatePhasorDiagram();
     if (meterOk.fail) $(".meter").removeClass("notLoading");
     meterOk.fail = false;
 
-    //Actualizar los gauge
-    $("#gaugeVoltaje").simpleGauge("setValue", resp.vrms.avg);
-    $("#gaugeVoltajeF").simpleGauge("setValue", resp.vvrms.avg);
-    $("#gaugeCorriente").simpleGauge("setValue", resp.irms.avg);
-    $("#gaugePotencia").simpleGauge("setValue", (resp.watt.avg / 1000).toFixed(1));
+    updateMeterGauge("gaugeVoltaje", resp.vrms.avg);
+    updateMeterGauge("gaugeVoltajeF", resp.vvrms.avg);
+    updateMeterGauge("gaugeCorriente", resp.irms.avg);
+    updateMeterGauge("gaugePotencia", resp.watt.tot / 1000);
 
     // //Llenar las celdas de voltaje
     $(".vvrmsR").text(formatNumber(resp.vvrms.r, "V"));
@@ -847,7 +1595,8 @@ function meterOk(resp) {
     $(".vrmsR").text(formatNumber(resp.vrms.r, "V"));
     $(".vrmsS").text(formatNumber(resp.vrms.s, "V"));
     $(".vrmsT").text(formatNumber(resp.vrms.t, "V"));
-    $(".vrmsN").text(formatNumber(resp.vrms.n, "V"));
+    $(".vrmsN").text(Number.isFinite(resp.vrms.n) ? formatNumber(resp.vrms.n, "V") : "Sin datos");
+    $(".fastVrmsN").text(Number.isFinite(resp.fastVn) ? formatNumber(resp.fastVn, "V") : "Sin datos");
     $(".vrmsAvg").text(formatNumber(resp.vrms.avg, "V"));
 
     // //Llenar las celdas de corriente
@@ -882,6 +1631,11 @@ function meterOk(resp) {
     $(".freqS").text(formatNumber(resp.freq, "Hz"));
     $(".freqT").text(formatNumber(resp.freq, "Hz"));
     $(".freqAvg").text(formatNumber(resp.freq, "Hz"));
+
+    $(".fpR").text(resp.pf.r.toFixed(decimalPlaces.fp));
+    $(".fpS").text(resp.pf.s.toFixed(decimalPlaces.fp));
+    $(".fpT").text(resp.pf.t.toFixed(decimalPlaces.fp));
+    $(".fpAvg").text(resp.pf.tot.toFixed(decimalPlaces.fp));
 }
 
 function meterFail(response) {
@@ -922,6 +1676,8 @@ function angleOk(resp) {
     // //Ángulos entre fases de voltaje
     if (angleOk.fail) $(".angulos").removeClass("notLoading");
     angleOk.fail = false;
+    phasorData.angles = resp;
+    updatePhasorDiagram();
 
     $(".degvR").text(formatNumber(resp.voltage.r, "°", "degv"));
     $(".degvS").text(formatNumber(resp.voltage.s, "°", "degv"));
@@ -936,6 +1692,65 @@ function angleOk(resp) {
     $(".degiR").text(formatNumber(resp.current.r, "°", "degi"));
     $(".degiS").text(formatNumber(resp.current.s, "°", "degi"));
     $(".degiT").text(formatNumber(resp.current.t, "°", "degi"));
+}
+
+// Dibuja un vector SVG con magnitud normalizada y orientacion en grados.
+// kind: Voltage o Current; phase: r, s o t; magnitude/maxMagnitude: valor y escala;
+// angle: orientacion absoluta; visible: indica si el vector debe mostrarse.
+function setPhasorVector(kind, phase, magnitude, maxMagnitude, angle, visible) {
+    const suffix = phase.toUpperCase();
+    const line = document.getElementById("phasor" + kind + suffix);
+    const dot = document.getElementById("phasor" + kind + "Dot" + suffix);
+    const radius = visible && maxMagnitude > 0 ? 120 * magnitude / maxMagnitude : 0;
+    const radians = angle * Math.PI / 180;
+    const x = 165 + radius * Math.cos(radians);
+    const y = 160 - radius * Math.sin(radians);
+    line.setAttribute("x2", x.toFixed(1));
+    line.setAttribute("y2", y.toFixed(1));
+    line.style.display = radius > 0.5 ? "" : "none";
+    dot.setAttribute("cx", x.toFixed(1));
+    dot.setAttribute("cy", y.toFixed(1));
+    dot.style.display = radius > 0.5 ? "" : "none";
+}
+
+// Actualiza el diagrama y las lecturas de fase con los ultimos datos disponibles.
+// No recibe parametros; utiliza phasorData y los selectores de visibilidad.
+function updatePhasorDiagram() {
+    const {angles, voltage, current} = phasorData;
+    if (!angles || !voltage || !current) return;
+
+    const phases = [
+        {key: "r", voltageAngle: 0},
+        {key: "s", voltageAngle: Number(angles.voltage.r)},
+        {key: "t", voltageAngle: Number(angles.voltage.t)}
+    ].map(phase => ({
+        ...phase,
+        volts: Number(voltage[phase.key]),
+        amps: Number(current[phase.key]),
+        angleVI: Number(angles.vi[phase.key])
+    }));
+    if (!phases.every(phase => Number.isFinite(phase.voltageAngle) && Number.isFinite(phase.volts) &&
+        Number.isFinite(phase.amps) && Number.isFinite(phase.angleVI))) return;
+
+    const maxVolts = Math.max(...phases.map(phase => phase.volts));
+    const maxAmps = Math.max(...phases.map(phase => phase.amps));
+    const showVoltage = $("#phasorShowVoltage").prop("checked");
+    const showCurrent = $("#phasorShowCurrent").prop("checked");
+
+    phases.forEach(phase => {
+        const currentAngle = ((phase.voltageAngle + phase.angleVI) % 360 + 360) % 360;
+        setPhasorVector("Voltage", phase.key, phase.volts, maxVolts, phase.voltageAngle,
+            showVoltage && phase.volts > 0);
+        setPhasorVector("Current", phase.key, phase.amps, maxAmps, currentAngle,
+            showCurrent && phase.amps >= 0.2);
+        $("#phasorV" + phase.key.toUpperCase()).text(formatNumber(phase.volts, "V"));
+        $("#phasorI" + phase.key.toUpperCase()).text(formatNumber(phase.amps, "A"));
+        $("#phasorAngle" + phase.key.toUpperCase()).text(formatNumber(phase.angleVI, "°", "degvi"));
+    });
+
+    $("#phasorStatus").text(maxVolts > 0
+        ? "Flechas solidas: tensión. Punteadas: corriente. Corrientes menores a 0,2 A se omiten."
+        : "No hay tensión disponible para representar.");
 }
 
 function angleFail(response) {
@@ -991,109 +1806,6 @@ function formatEnergy(value, unit, kiloUnit) {
     return formatNumber(value / 1000.0, kiloUnit);
 }
 
-function getGaugeOptions(signal) {
-    let options = {
-        min: 0,
-        max: 100,
-        value: 0,
-        type: "analog digital",
-        container: {
-            scale: 95, // scale of gauge, in percent
-            style: "background: #ddd; background: linear-gradient(335deg, #ddd 0%, #fff 30%, #fff 50%, #bbb 100%); border-radius: 1000px; border: 8px solid #bbb;",
-        },
-        title: {
-            text: signal,
-            style: "color: #555; font-size: 20px; padding: 5px;",
-        },
-        digital: {
-            text: "{value.2} V", // value with number of decimals
-            style: "color: auto; font-size: 30px; z-index=10; ",
-        },
-        analog: {
-            minAngle: -150,
-            maxAngle: 150,
-        },
-        labels: {
-            text: "{value}",
-            count: 10,
-            scale: 72,
-            style: "font-size: 20px;",
-        },
-        ticks: {
-            count: 14,
-            scale1: 84,
-            scale2: 93,
-            style: "width: 2px; color: #999;",
-        },
-        subTicks: {
-            count: 5,
-            scale1: 93,
-            scale2: 96,
-            style: "width: 1px; color: #bbb;",
-        },
-        bars: {
-            scale1: 88,
-            scale2: 94,
-        },
-        pointer: {
-            scale: 95,
-            style: "color: #000000; opacity: 0.8; filter: drop-shadow(-3px 3px 2px rgba(0, 0, 0, .7));",
-        },
-    };
-
-    options.title.text = "";
-
-    if (signal.toLowerCase() == "voltaje") {
-        options.digital.text = "{value.1} V";
-        options.min = 180;
-        options.max = 260;
-        options.labels.count = 8;
-        options.ticks.count = 8;
-        options.bars.colors = [
-            [180, "#dd2222", 0, 0],
-            [190, "#ffa500", 0, 0],
-            [200, "#378618", 0, 0],
-            [240, "#ffa500", 0, 0],
-            [250, "#dd2222", 0, 0],
-        ];
-    } else if (signal.toLowerCase() == "voltaje fases") {
-        options.digital.text = "{value.1} V";
-        options.min = 340;
-        options.max = 420;
-        options.labels.count = 8;
-        options.ticks.count = 16;
-        options.bars.colors = [
-            [340, "#dd2222", 0, 0],
-            [350, "#ffa500", 0, 0],
-            [360, "#378618", 0, 0],
-            [400, "#ffa500", 0, 0],
-            [410, "#dd2222", 0, 0],
-        ];
-    } else if (signal.toLowerCase() == "corriente") {
-        options.digital.text = "{value.3} A";
-        options.min = 0;
-        options.max = 100;
-        options.labels.count = 10;
-        options.bars.colors = [
-            [0, "#378618", 0, 0],
-            [70, "#ffa500", 0, 0],
-            [85, "#dd2222", 0, 0],
-        ];
-    } else if (signal.toLowerCase() == "potencia") {
-        options.digital.text = "{value.3} kW";
-        options.min = 0;
-        options.max = 20;
-        options.labels.count = 10;
-        options.bars.colors = [
-            [0, "#378618", 0, 0],
-            [14, "#ffa500", 0, 0],
-            [17, "#dd2222", 0, 0],
-        ];
-    }
-
-    return options;
-}
-
 function createTable() {
     decimalPlaces = {}; //Crear una tabla que contenga la cantidad de lugrares decimales por variable
     tableRows.forEach((row) => {
@@ -1117,7 +1829,7 @@ function createTable() {
                 if (rowItem.visible) {
                     let id = rowItem.unit + headerItem.short;
                     if (indexHead == 0) row += `<td scope="row">${rowItem.name}</td>`;
-                    else row += `<td id="pt_${id}" class="valueTable ${rowItem.source} ${id}"></td>`;
+                    else row += `<td id="pt_${id}" class="valueTable ${rowItem.source} ${id}">${rowItem.unit === "fastVrms" ? "—" : ""}</td>`;
                 }
             });
             row += "</tr>";
