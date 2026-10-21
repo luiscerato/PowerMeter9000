@@ -137,6 +137,8 @@ struct MeterCase {
     int halfCycleSamples[1] = {}, halfCycleSamplesIndex = 0, meterUpdated = 0, pushes = 0;
     uint32_t storedMs = 0, observedMs = 0; uint16_t storedTimestamp = 0;
     float storedAde = 0;
+    // Conserva la interfaz de detectores; ms es el instante original verificado en esta prueba.
+    constexpr void meterPollCapturedEvents(uint32_t ms) {}
     // Registra el instante observado; v/i son las lecturas originales y ms su tiempo.
     constexpr void meterApplyFastRms(const float* v, const float* i, uint32_t ms) {
         storedAde = v[0]; observedMs = ms;

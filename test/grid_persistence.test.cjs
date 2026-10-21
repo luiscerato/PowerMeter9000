@@ -21,6 +21,7 @@ for (const name of ['setCurrentState', 'refreshStartTimestamp']) {
 }
 assert.doesNotMatch(method(meter, 'MeterTask'), /gridEventsPersistLoop|saveSnapshot|Preferences|putBytes/);
 assert.match(method(meter, 'MeterLoop'), /gridEventsPersistLoop\(\)/);
+assert.match(method(meter, 'MeterLoop'), /if \(!waveCaptureBusy\(\)\) gridEventsPersistLoop\(\)/);
 assert.equal((source.match(/saveSnapshot\(slot, snapshot\)/g) || []).length, 1);
 
 // Hace evaluables los metodos reales con persistencia simulada; name identifica el metodo.

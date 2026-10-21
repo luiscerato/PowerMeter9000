@@ -25,8 +25,9 @@ const harness = `
 ${states}
 namespace GridEventFormat { enum class Subject : uint8_t { phaseR, phaseS, phaseT, neutral, grid }; }
 struct meterValues { struct { float FastVrms = NAN; } neutral; bool neutralFastValid = true; };
-struct TestSettings { float noVoltage = 0, hysteresis = 0; uint32_t voltageConfirmMs = 0, recoveryConfirmMs = 0; };
+struct TestSettings { float noVoltage = 0, neutralHigh = 0; uint32_t neutralConfirmMs = 0; };
 struct Candidate {
+    uint8_t capturePages = 5;
     bool active = false;
     GridEventFormat::Subject subject = GridEventFormat::Subject::phaseR;
     uint8_t previousState = 0, currentState = 0;
@@ -43,6 +44,7 @@ constexpr bool sameSettings(const neutralSettings& a, const neutralSettings& b) 
 struct Store {
     static constexpr uint32_t captureArmMs = 150;
     Candidate candidates[4], last;
+    struct { bool active = false, sustained = false; } points[10];
     phaseState neutralState;
     neutralSettings lastNeutralSettings;
     float neutralPreviousVoltage = NAN;
@@ -59,7 +61,11 @@ struct Store {
     // Simula liberacion de una captura cancelada; success no afecta la prueba de propiedad.
     constexpr void finishCapture(bool success) { capture.active = capture.rootAssigned = false; ++finishes; }
     // Contextualiza target usando config; las muestras se verifican por separado con el codec real.
-    static constexpr void snapshotSettings(TestSettings& target, const gridSettings& config) { target.noVoltage = config.noVoltage; }
+    static constexpr void snapshotSettings(TestSettings& target, const gridSettings& config) {
+        target.noVoltage = config.noVoltage;
+        target.neutralHigh = config.neutral.highVoltage;
+        target.neutralConfirmMs = config.neutral.confirmMs;
+    }
     // Marca el contexto copiado; target y meter representan el snapshot del primer cruce.
     static constexpr void snapshotMeter(uint8_t& target, const meterValues& meter) { target = 1; }
     ${method('discardCandidate')}
@@ -80,7 +86,8 @@ constexpr bool transitions() {
     feed(store, config, 30, 360, 360);
     if (store.confirmed != 1 || store.last.subject != GridEventFormat::Subject::neutral ||
         store.last.startedMs != 260 || store.last.previousVoltage != 3 || store.last.currentVoltage != 30 ||
-        store.last.settings.noVoltage != 25 || store.last.settings.voltageConfirmMs != 100) return false;
+        store.last.settings.noVoltage != config.noVoltage || store.last.settings.neutralHigh != 25 ||
+        store.last.settings.neutralConfirmMs != 100) return false;
     feed(store, config, 23, 370, 600);
     feed(store, config, 22, 610, 850);
     if (store.confirmed != 1) return false;
@@ -105,6 +112,7 @@ constexpr bool gapsAndCancel() {
 // Verifica silencio tras alarma, opcion desactivada y aislamiento de otros candidatos; sin parametros.
 constexpr bool disabledAndMissing() {
     Store store; gridSettings config;
+    config.neutral.enabled = false;
     feed(store, config, 230, 0, 2000);
     if (store.confirmed) return false;
     config.neutral.enabled = true;
@@ -128,5 +136,5 @@ static_assert(disabledAndMissing(), "Neutro: sin muestra no hay recuperacion y n
 const output = path.join(root, '.pio/build/neutral_capture_test.cpp');
 fs.writeFileSync(output, harness);
 const compiler = path.join(process.env.USERPROFILE, '.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-g++.exe');
-execFileSync(compiler, ['-std=c++14', '-c', output, '-o', output + '.o'], {stdio: 'inherit'});
+execFileSync(compiler, ['-std=c++14', '-Isrc', '-c', output, '-o', output + '.o'], {stdio: 'inherit'});
 console.log('PASS: observador real de neutro, subida/retorno, histéresis, NaN, huecos y cancelación sin liberar otros candidatos.');

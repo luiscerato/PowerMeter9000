@@ -14,8 +14,8 @@ async function run() {
         page.on('pageerror', error => errors.push(error.message));
         let values = {schemaVersion: 1, lowR: 185, highR: 250, lowS: 180, highS: 255,
             lowT: 190, highT: 260, noVoltage: 20, hysteresis: 5,
-            lossConfirmMs: 250, voltageConfirmMs: 5000, recoveryConfirmMs: 250, capturePages: 3,
-            neutralEnabled: false, neutralHigh: 25, neutralHysteresis: 2, neutralConfirmMs: 100, neutralRecoveryMs: 250};
+            lossConfirmMs: 250, pointLimitMs: 3700, recoveryConfirmMs: 250, capturePages: 5,
+            neutralHigh: 25, neutralHysteresis: 2, neutralConfirmMs: 100, neutralRecoveryMs: 250};
         let posts = 0, optionLoads = 0, failLoad = false, failSave = false;
         await page.route('http://meter.test/**', async route => {
             const request = route.request(), url = new URL(request.url());
@@ -25,6 +25,7 @@ async function run() {
                 if (request.method() === 'POST') {
                     posts++;
                     values = Object.fromEntries([...new URLSearchParams(request.postData())].map(([key, value]) => [key, Number(value)]));
+                    values.pointLimitMs = 3700; values.capturePages = 5;
                 }
                 return route.fulfill({json: values});
             }
@@ -53,7 +54,7 @@ async function run() {
         await page.waitForFunction(() => document.getElementById('gridSettingsStatus').textContent === 'Ajustes cargados.');
         assert.equal(optionLoads, 0);
         assert.equal(await page.inputValue('#grid_lowS'), '180');
-        assert.equal(await page.isChecked('#grid_neutralEnabled'), false);
+        assert.equal(await page.locator('#grid_neutralEnabled').count(), 0);
         assert.equal(await page.inputValue('#grid_neutralHigh'), '25');
         await page.click('#btnCopyGridLimits');
         assert.equal(await page.inputValue('#grid_highT'), '250');
@@ -63,7 +64,7 @@ async function run() {
         assert.equal(values.lowR, 195);
         assert.equal(values.lowS, 185);
         assert.equal(posts, 1);
-        assert.equal(values.neutralEnabled, 0);
+        assert.equal(Object.hasOwn(values, 'neutralEnabled'), false);
         assert.equal(values.neutralConfirmMs, 100);
         await page.fill('#grid_lowR', '249');
         await page.click('#gridSettingsForm button[type=submit]');
@@ -120,10 +121,9 @@ async function run() {
         assert.match(await page.textContent('#gridSettingsStatus'), /histéresis de neutro/);
         assert.equal(posts, 1);
         await page.fill('#grid_neutralHysteresis', '2');
-        await page.check('#grid_neutralEnabled');
         await page.click('#gridSettingsForm button[type=submit]');
         await page.waitForFunction(() => document.getElementById('gridSettingsStatus').textContent.startsWith('Guardado.'));
-        assert.equal(values.neutralEnabled, 1);
+        assert.equal(Object.hasOwn(values, 'neutralEnabled'), false);
         assert.equal(posts, 2);
         await page.evaluate(() => {
             window.neutralFixture.vrms.n = null;

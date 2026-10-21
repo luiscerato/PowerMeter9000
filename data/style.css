@@ -343,6 +343,22 @@ input[type=range][orient=vertical] {
     overflow-y: auto;
 }
 
+.gridEventInfo { min-width: 0; }
+.gridEventInfo summary { cursor: pointer; }
+.gridEventInfo .table { font-size: 12px; }
+.gridEventInfo .table > :not(caption) > * > * { padding: 3px 5px; }
+.gridEventInfo h6 { font-size: 13px; margin-top: 8px !important; }
+.gridEventInfo p { font-size: 12px; }
+.gridEventOverview { font-size: 13px; border-top: 1px solid #dee2e6; }
+.gridEventOverview:empty { display: none; }
+.gridEventOverviewRow { display: grid; width: 100%; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; padding: 5px 0; border: 0; border-bottom: 1px solid #dee2e6; background: transparent; color: inherit; font: inherit; text-align: left; }
+.gridEventOverviewRow > div { overflow-wrap: anywhere; }
+.gridEventOverviewRow:hover, .gridEventOverviewRow[aria-pressed="true"] { background: #eef5ff; }
+#gridEventTransitions tr[data-record] { cursor: pointer; }
+#gridEventTransitions tr[data-record]:hover { background: #eef5ff; }
+#gridEventTransitions .table { font-size: 12px; }
+#gridEventTransitions .badge { font-size: 10px; }
+
 .logsViewer { padding: 12px; }
 .logsToolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .logsActions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

@@ -12,6 +12,7 @@ test('las rutas hijas se registran antes de sus raices', () => {
     const checks = [
         [webServer, 'server.on("/history/data"', 'registerHistoryRoot();'],
         [webServer, 'server.on("/grid-events/list"', 'registerGridEventsRoot();'],
+        [webServer, 'server.on("/wave-events/data"', 'server.on("/wave-events", HTTP_GET'],
         [webServer, 'server.on("/storage/test-download"', 'server.on("/storage", HTTP_GET'],
         [webFs, 'server.on("/webfs/image", HTTP_GET', 'registerWebFsStatus();'],
         [webFs, 'server.on("/webfs/image", HTTP_POST', 'registerWebFsStatus();'],

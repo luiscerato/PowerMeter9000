@@ -9,8 +9,8 @@ public:
 	// Prepara una lectura desde el inicio de partition; totalBytes define la longitud publicada.
 	bool begin(NandPartition& partition, size_t totalBytes);
 
-	// Prepara una lectura contigua desde block/page; pageCount define las paginas publicadas.
-	bool begin(NandPartition& partition, uint16_t block, uint8_t page, uint32_t pageCount);
+	// Lee pageCount paginas desde block/page; onReadFinished libera recursos al terminar el ultimo acceso NAND.
+	bool begin(NandPartition& partition, uint16_t block, uint8_t page, uint32_t pageCount, void (*onReadFinished)() = nullptr);
 
 	// Copia el siguiente fragmento HTTP o devuelve RESPONSE_TRY_AGAIN mientras NAND precarga datos.
 	size_t copyChunk(uint8_t* dest, size_t maxLen, size_t index);
@@ -40,6 +40,7 @@ private:
 	uint8_t freeQueueData[bufferCount], readyQueueData[bufferCount];
 	uint8_t completionQueueData[sizeof(NandIoResult)];
 	TaskHandle_t taskHandle = nullptr;
+	void (*onReadFinished)() = nullptr;
 
 	// Ejecuta la precarga secuencial en una tarea FreeRTOS; parameter identifica la sesion.
 	static void readTaskEntry(void* parameter);

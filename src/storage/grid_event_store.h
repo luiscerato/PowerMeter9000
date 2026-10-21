@@ -3,6 +3,7 @@
 #include "grid_event_format.h"
 #include "nand_partition.h"
 #include "../meter.h"
+#include "../event_capture_config.h"
 #include <atomic>
 
 static_assert(sizeof(fastRMSData_t) == 16, "Fast RMS includes eight packed 14-bit channels");
@@ -16,6 +17,9 @@ struct GridEventStoreMetrics {
 	uint32_t failedEvents = 0;
 	uint32_t writtenPages = 0;
 	uint32_t failedPages = 0;
+	uint32_t droppedRecords = 0;
+	uint32_t completedPoints = 0;
+	uint32_t limitedPoints = 0;
 	uint32_t nextEventId = 1;
 	bool captureActive = false;
 	bool rootPending = false;
@@ -35,7 +39,7 @@ struct GridEventCatalog {
 	uint32_t newestId = 0;
 };
 
-// Guarda incidentes Grid variables de tres a seis paginas en un anillo NAND.
+// Guarda incidentes de tres a cinco paginas en un anillo NAND.
 class GridEventStore {
 public:
 	// Asocia el Store con la particion Grid; partition permanece bajo control externo.
@@ -56,6 +60,8 @@ public:
 
 	// Agrega una muestra Fast nueva a la captura candidata abierta.
 	void pushFastSample(const fastRMSData_t& sample, uint32_t sampleMs);
+	// Integra los diez detectores de software; meter/settings y sampleMs son del turno FAST.
+	void observeEvents(const meterValues& meter, const gridSettings& settings, uint32_t sampleMs);
 
 	// Recoge resultados NAND y sella paginas cuando el incidente queda completo.
 	void poll();
@@ -78,11 +84,15 @@ private:
 	static constexpr uint32_t estimatedEpoch = 1767225600UL;
 
 	struct Candidate {
+		uint8_t capturePages = 5;
+		uint16_t word = 0;
+		uint32_t duration10Ms = 0;
 		bool active = false;
 		GridEventFormat::Subject subject = GridEventFormat::Subject::phaseR;
 		uint8_t previousState = 0;
 		uint8_t currentState = 0;
 		uint32_t startedMs = 0;
+		uint64_t startedUs = 0;
 		float previousVoltage = 0;
 		float currentVoltage = 0;
 		uint8_t sourceFlags = 0;
@@ -101,8 +111,10 @@ private:
 		uint32_t eventId = 0;
 		uint32_t startedMs = 0;
 		uint32_t endMs = 0;
+		uint32_t closeAfterMs = 0;
 		uint32_t rootStartedMs = 0;
 		uint32_t firstSampleMs = 0;
+		uint64_t startedUs = 0, rootStartedUs = 0, firstSampleUs = 0;
 		uint8_t pageCount = GridEventFormat::minPagesPerEvent;
 		uint8_t rootSampleCount = 0;
 		uint8_t continuationSampleCount[GridEventFormat::maxPagesPerEvent - 1] = {};
@@ -117,6 +129,24 @@ private:
 		GridEventFormat::Transition transitions[GridEventFormat::maxTransitions] = {};
 		uint8_t* pages = nullptr;
 	};
+	struct pointTracker {
+		bool active = false;
+		bool captured = false;
+		bool root = false;
+		bool clipped = false;
+		bool sustained = false;
+		bool savePoint = true;
+		uint32_t captureId = 0;
+		uint32_t startedMs = 0;
+		float previousValue = NAN;
+		float extremeValue = NAN;
+		Candidate origin;
+	};
+	pointTracker points[10] = {}; // dip R/S/T, swell R/S/T, OC R/S/T/N.
+	uint32_t currentStartedMs[4] = {};
+	struct deferredRecord { Candidate candidate; uint32_t previousStartedMs = 0; };
+	deferredRecord deferred[8];
+	uint8_t deferredRead = 0, deferredCount = 0;
 
 	NandPartition& partition;
 	std::atomic<bool> formatPaused{false};
@@ -182,6 +212,16 @@ private:
 
 	// Agrega una transicion secundaria si su inicio pertenece a la ventana de captura.
 	void addTransition(const Candidate& candidate, uint32_t previousStartedMs);
+	// Empaqueta y agrega record en una continuacion con espacio; devuelve false si se agoto la capacidad.
+	bool appendRecord(const GridEventFormat::Transition& record);
+	// Inicia, actualiza o cierra index; active/value son el detector y su magnitud, config/settings contextualizan.
+	void observePoint(uint8_t index, bool active, float value, const meterValues& meter,
+		const eventCaptureConfig& config, const gridSettings& settings, uint32_t sampleMs, uint32_t detectedMs = UINT32_MAX,
+		uint32_t recoveredMs = UINT32_MAX);
+	// Cierra index con su duracion observada; limited indica que no se vio su recuperacion.
+	void finishPoint(uint8_t index, uint32_t endedMs, bool limited);
+	// Cierra eventos que llegaron al final de la ventana; sin parametros.
+	void limitPoints();
 
 	// Copia configuracion y mediciones del instante del candidato en formatos persistentes.
 	static void snapshotSettings(GridEventFormat::SettingsSnapshot& dest, const gridSettings& settings);
@@ -236,5 +276,8 @@ void gridEventStoreObserve(const phaseState& r, const phaseState& s, const phase
 // Entrega una muestra Fast al Store Grid montado.
 void gridEventStorePushFastSample(const fastRMSData_t& sample, uint32_t sampleMs);
 
-// Solicita una captura Grid artificial que sera creada desde MeterTask.
-void gridEventStoreRequestTest();
+// Integra detectores puntuales al mismo Store NAND; meter/settings y sampleMs pertenecen al turno FAST.
+void gridEventStoreObserveEvents(const meterValues& meter, const gridSettings& settings, uint32_t sampleMs);
+
+// Solicita prueba desde MeterTask; type: 1 estado, 2 dip, 3 swell, 4 OC, 5 mixta. False si ya hay una pendiente.
+bool gridEventStoreRequestTest(uint8_t type = 1);

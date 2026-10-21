@@ -4,7 +4,7 @@
 
 // Asocia el manager con el driver y crea el servicio de I/O que lo controlara.
 StorageManager::StorageManager(WinbondSpiNand& nandDriver) : nand(nandDriver), nandService(nandDriver),
-	historyStore(historyPartition), gridEventStore(gridPartition), diagnosticStore(diagnosticPartition) {}
+	historyStore(historyPartition), waveStore(wavePartition), gridEventStore(gridPartition), diagnosticStore(diagnosticPartition) {}
 
 // Inicia el servicio y monta metadata existente sin escribir ni borrar la NAND.
 bool StorageManager::begin(void (*onDiagnosticsReady)(DiagnosticStore&))
@@ -263,6 +263,7 @@ void StorageManager::partitionFormatTaskLoop()
 	bool canErase = true;
 	if (formatTarget == StoragePartitionId::history) historyStore.prepareFormat();
 	else if (formatTarget == StoragePartitionId::gridEvents) gridEventStore.prepareFormat();
+	else if (formatTarget == StoragePartitionId::waveEvents) canErase = waveStore.prepareFormat();
 	else if (formatTarget == StoragePartitionId::diagnostics) canErase = diagnosticLogger.prepareStoreFormat();
 	if (!canErase) {
 		target.cancelFormat();
@@ -296,6 +297,7 @@ void StorageManager::partitionFormatTaskLoop()
 		}
 		case StoragePartitionId::waveEvents:
 			target.finishFormat(true);
+			waveStore.finishFormat(true);
 			return;
 		}
 	}
@@ -308,6 +310,7 @@ void StorageManager::partitionFormatTaskLoop()
 	target.finishFormat(false);
 	if (formatTarget == StoragePartitionId::history) historyStore.finishFormat(false);
 	if (formatTarget == StoragePartitionId::gridEvents) gridEventStore.finishFormat(false);
+	if (formatTarget == StoragePartitionId::waveEvents) waveStore.finishFormat(false);
 }
 
 // Lee los marcadores de fabrica de toda la NAND y crea el bitmap de bloques utilizables.

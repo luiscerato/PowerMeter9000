@@ -15,8 +15,8 @@
 </div>
 <script>
 const bootStyles = ["lib/bootstrap.min.css","lib/jquery.simplegauge.css","style.css"];
-const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","board.js","scope.js","logs_ui.js","index.js","history_ui.js","grid_events_ui.js","scope_ui.js","script.js"];
-const bootBuild = "20261003-logs-format-v1";
+const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","board.js","scope.js","logs_ui.js","index.js","history_ui.js","grid_events_ui.js","wave_events_ui.js","scope_ui.js","script.js"];
+const bootBuild = "20261020-wave-nand-v1";
 
 // Agrega una linea al progreso de carga.
 // message: texto que se muestra en el textarea.
@@ -96,9 +96,8 @@ bootApp();
                 <a class="nav-link app-page-link" href="#home" id="navindex" data-page="home" title="Resumen"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3zm2 1V19h2v-6h10v6h2v-7.5l-7-5.83z"/></svg><span class="navLabel">Resumen</span></a>
                 <a class="nav-link app-page-link" href="#allMeasures" id="allMeasures-tab" data-page="allMeasures" title="Mediciones"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h3V9H4zm6 0h4V4h-4zm7 0h3v-7h-3z"/></svg><span class="navLabel">Mediciones</span></a>
                 <a class="nav-link app-page-link" href="#history" id="history-tab" data-page="history" title="Histórico"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 1 1-8.94 10h2.02A7 7 0 1 0 8 7.1L11 10H4V3l2.58 2.58A8.96 8.96 0 0 1 13 3m-1 5h2v4.2l3 1.8-1 1.7-4-2.4z"/></svg><span class="navLabel">Histórico</span></a>
-                <a class="nav-link app-page-link" href="#events" id="events-tab" data-page="events" title="Eventos"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2m0 16H5V9h14zm-9-3 6-5-1.3-1.5-4.5 3.8-2.1-1.8L6.8 14z"/></svg><span class="navLabel">Eventos</span></a>
 				<a class="nav-link app-page-link" href="#logs" id="logs-tab" data-page="logs" title="Logs"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zm2 2v12h12V6zm2 2h8v2H8zm0 4h8v2H8z"/><path d="M9 9h1v1H9zm0 4h1v1H9z"/></svg><span class="navLabel">Logs</span></a>
-				<a class="nav-link app-page-link" href="#gridEvents" id="gridEvents-tab" data-page="gridEvents" title="Red"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a2 2 0 0 0-2 2c0 .74.4 1.38 1 1.72v2.34L6 10.8a2 2 0 1 0 1 1.73l5-2.74 5 2.74a2 2 0 1 0 1-1.73l-5-2.74V5.72A2 2 0 0 0 12 2M4 16a2 2 0 1 0 2 2c0-.27-.05-.52-.15-.75L12 13.9l6.15 3.35A2 2 0 1 0 19 16l-7-3.8z"/></svg><span class="navLabel">Red</span></a>
+				<a class="nav-link app-page-link" href="#gridEvents" id="gridEvents-tab" data-page="gridEvents" title="Eventos"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a2 2 0 0 0-2 2c0 .74.4 1.38 1 1.72v2.34L6 10.8a2 2 0 1 0 1 1.73l5-2.74 5 2.74a2 2 0 1 0 1-1.73l-5-2.74V5.72A2 2 0 0 0 12 2M4 16a2 2 0 1 0 2 2c0-.27-.05-.52-.15-.75L12 13.9l6.15 3.35A2 2 0 1 0 19 16l-7-3.8z"/></svg><span class="navLabel">Eventos</span></a>
                 <a class="nav-link app-page-link" href="#scopePage" id="navscope" data-page="scopePage" title="Osciloscopio"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3zm2 2v12h14V6zm1 7h2l2-5 3 8 2-5h2v2h-1l-2 5h-2l-2.5-6.6-1.5 3.6H6z"/></svg><span class="navLabel">Osciloscopio</span></a>
                 <a class="nav-link app-page-link" href="#settings" id="settings-tab" data-page="settings" title="Configuración"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="m19.4 13 .1-1-.1-1 2-1.6-2-3.5-2.4 1a8 8 0 0 0-1.7-1L15 3h-4l-.4 2.9a8 8 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.6-.1 1 .1 1-2 1.6 2 3.5 2.4-1a8 8 0 0 0 1.7 1L11 22h4l.4-2.9a8 8 0 0 0 1.7-1l2.4 1 2-3.5zM13 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8"/></svg><span class="navLabel">Configuración</span></a>
             </div>
@@ -393,30 +392,6 @@ bootApp();
                         </div>
                     </section>
                 </div>
-                <div class="tab-pane" id="events" role="region" aria-labelledby="events-tab">
-                    <div class="row">
-                        <div class="col-sm-12 col-md-3 p-1 pt-2 pb-2">
-                            <div class="border rounded p-2 mb-2">
-                                <div class="d-grid gap-2">
-                                    <button id="eventTestBtn" class="btn btn-sm btn-warning" type="button">Iniciar captura de evento</button>
-                                    <button id="eventRampBtn" class="btn btn-sm btn-outline-warning" type="button">Generar rampa de prueba</button>
-                                    <button id="eventRefreshBtn" class="btn btn-sm btn-outline-secondary" type="button">Recargar eventos</button>
-                                </div>
-                                <div id="eventRamStatus" class="small text-muted mt-2">Eventos RAM sin cargar.</div>
-                                <div id="eventRamList" class="mt-2"></div>
-                            </div>
-                            <div id="eventList" style="max-height: 70vh; overflow-y: auto;" class="eventElements"></div>
-                        </div>
-                        <div class="col-sm-12 col-md-9 p-1 pt-2 pb-2">
-                            <div class="card p-1">
-                                <div id="eventChartContainer" style="height: 70vh"  class="eventElements"></div>
-                            </div>
-                        </div>
-                        <!-- <div class="col-9">
-                            <div id="eventData"></div>
-                        </div> -->
-                    </div>
-                </div>
                 <div class="tab-pane" id="logs" role="region" aria-labelledby="logs-tab">
                     <section class="logsViewer" aria-label="Registro de diagnóstico">
                         <div class="logsToolbar">
@@ -483,11 +458,51 @@ bootApp();
                 </div>
                 <div class="tab-pane" id="settings" role="region" aria-labelledby="settings-tab"></div>
 				<div class="tab-pane" id="gridEvents" role="region" aria-labelledby="gridEvents-tab">
-					<div class="row p-2"><div class="col-sm-12 col-md-4 col-lg-3 mb-2"><div class="border rounded p-2"><div class="d-flex justify-content-between align-items-center mb-2"><strong>Eventos de red</strong><div class="btn-group btn-group-sm"><button id="gridEventsTest" class="btn btn-outline-warning" type="button">Prueba</button><button id="gridEventsRefresh" class="btn btn-outline-secondary" type="button">Recargar</button></div></div><div id="gridEventsStatus" class="small text-muted mb-2" role="status">Seleccione la pestaña Red para cargar eventos.</div><div id="gridEventsList" class="list-group list-group-flush" style="max-height: 64vh; overflow-y: auto;"></div></div></div><div class="col-sm-12 col-md-8 col-lg-9"><div class="border rounded p-2"><div class="d-flex justify-content-between align-items-center mb-2"><div id="gridEventSummary" class="small text-muted">Seleccione un evento para revisar la captura Fast RMS.</div><div class="btn-group btn-group-sm"><button id="gridEventVoltageToggle" class="btn btn-outline-primary active" type="button" aria-pressed="true">Voltajes</button><button id="gridEventCurrentToggle" class="btn btn-outline-primary" type="button" aria-pressed="false">Corrientes</button></div></div><div class="row g-2"><div class="col-lg-8"><div id="gridEventVoltageChart" class="historyChart"><div class="text-muted p-3">Sin evento cargado.</div></div><div id="gridEventCurrentChart" class="historyChart d-none"><div class="text-muted p-3">Sin evento cargado.</div></div></div><div class="col-lg-4"><div class="border rounded p-2 h-100"><strong class="small">Transiciones</strong><div id="gridEventTransitions" class="small mt-2" style="max-height: 50vh; overflow-y: auto;"><span class="text-muted">Sin evento cargado.</span></div></div></div></div></div></div></div>
-					<details id="gridEventContextDetails" class="mx-2 mb-2 border-top pt-2">
-                        <summary class="small fw-bold">Contexto de medición guardado</summary>
-                        <div id="gridEventContext" class="mt-2"><span class="small text-muted">Seleccione un evento para consultar su contexto.</span></div>
-                    </details>
+                    <div class="row p-2">
+                        <div class="col-sm-12 col-md-4 col-lg-3 mb-2">
+                            <div class="border rounded p-2">
+                                <div class="d-flex justify-content-between align-items-center mb-2"><strong>Capturas</strong><div class="btn-group btn-group-sm"><button id="gridEventsTest" class="btn btn-outline-warning" type="button">Prueba</button><button id="gridEventsRefresh" class="btn btn-outline-secondary" type="button">Recargar</button></div></div>
+                                <div id="gridEventsStatus" class="small text-muted mb-2" role="status">Seleccione Eventos para cargar las capturas.</div>
+                                <div id="gridEventsList" class="list-group list-group-flush" style="max-height: 64vh; overflow-y: auto;"></div>
+                            </div>
+                        </div>
+                        <div class="col-sm-12 col-md-8 col-lg-9">
+                            <div class="p-2">
+                                <div id="gridEventSummary" class="small fw-bold">Seleccione una captura para revisar sus registros.</div>
+                                <div id="gridEventTrigger" class="small text-muted mt-1"></div>
+                                <div id="gridEventWarnings" class="small text-danger mt-1 d-none" role="status"></div>
+                                <div id="gridEventOverview" class="gridEventOverview my-2" aria-label="Resumen de la captura"></div>
+                                <div class="d-flex flex-wrap gap-3 align-items-center justify-content-end mb-2">
+                                    <label class="small d-inline-flex gap-1 align-items-center"><input id="gridEventMarkers" type="checkbox" checked>Marcas</label>
+                                    <div class="btn-group btn-group-sm"><button id="gridEventVoltageToggle" class="btn btn-outline-primary active" type="button" aria-pressed="true">Voltajes</button><button id="gridEventCurrentToggle" class="btn btn-outline-primary" type="button" aria-pressed="false">Corrientes</button></div>
+                                    <button id="gridEventResetZoom" class="btn btn-outline-secondary btn-sm" type="button" title="Ver todo el tramo FAST" aria-label="Ver todo el tramo FAST"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button>
+                                </div>
+                                <div class="row g-2">
+                                    <div id="gridEventChartPanel" class="col-lg-8">
+                                        <div id="gridEventVoltageChart" class="historyChart"><div class="text-muted p-3">Sin evento cargado.</div></div>
+                                        <div id="gridEventCurrentChart" class="historyChart d-none"><div class="text-muted p-3">Sin evento cargado.</div></div>
+                                        <details id="gridEventWaveDetails" class="gridEventInfo border-top mt-2 py-2">
+                                            <summary>Oscilografía</summary>
+                                            <div class="d-flex gap-2 align-items-center my-2"><select id="gridWaveSelect" class="form-select form-select-sm" aria-label="Captura Wave"></select><button id="gridWaveRefresh" type="button" class="btn btn-sm btn-outline-secondary">Recargar</button></div>
+                                            <div id="gridWaveStatus" class="small text-muted" role="status">Sin evento seleccionado.</div>
+                                            <div id="gridWaveChart" class="historyChart"></div>
+                                        </details>
+                                        <details id="gridEventContextDetails" class="gridEventInfo border-top mt-2 py-2">
+                                            <summary class="small fw-bold">Contexto de medición</summary>
+                                            <div id="gridEventContext" class="mt-2"><span class="small text-muted">Seleccione un evento para consultar su contexto.</span></div>
+                                        </details>
+                                        <details id="gridEventSettingsDetails" class="gridEventInfo border-top py-2">
+                                            <summary class="small fw-bold">Configuración de captura</summary>
+                                            <div id="gridEventSettings" class="mt-2"><span class="small text-muted">Seleccione un evento.</span></div>
+                                        </details>
+                                    </div>
+                                    <div class="col-lg-4">
+                                        <div class="border-start ps-2"><strong class="small">Transiciones y eventos</strong><div id="gridEventTransitions" class="small mt-2" style="max-height: 50vh; overflow-y: auto;"><span class="text-muted">Sin evento cargado.</span></div></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 				</div>
             </div>
         </div>

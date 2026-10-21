@@ -6,6 +6,7 @@
 #include "diagnostic_store.h"
 #include "nand_partition.h"
 #include "webfs_store.h"
+#include "wave_event_store.h"
 
 enum class StorageState : uint8_t {
 	notDetected,
@@ -110,6 +111,8 @@ public:
 
 	// Devuelve el Store de incidentes Grid ya asociado a su particion.
 	GridEventStore& gridEvents();
+	// Devuelve el guardador Wave asociado a su particion; sin parametros.
+	waveEventStore& waveEvents() { return waveStore; }
 
 	// Devuelve el escritor de logs de la particion diagnostica.
 	DiagnosticStore& diagnostics();
@@ -150,6 +153,7 @@ private:
 	NandPartition historyPartition;
 	HistoryStore historyStore;
 	NandPartition wavePartition;
+	waveEventStore waveStore;
 	NandPartition gridPartition;
 	GridEventStore gridEventStore;
 	NandPartition diagnosticPartition;

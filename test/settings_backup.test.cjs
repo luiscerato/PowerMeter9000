@@ -14,9 +14,9 @@ async function run() {
         const calls = [];
         const networkKeys = new Set(['sta-ssid', 'sta-pass', 'ap-pass', 'ota-pass', 'time-server', 'debug-pass', 'mqtt-pass', 'mqtt-server', 'mqtt-user', 'ota-name', 'debug-name', 'ap-ssid', 'sta-ip', 'sta-mask', 'sta-gw', 'sta-dns1', 'sta-dns2', 'ap-ip', 'ap-mask', 'ap-gw']);
         const boolKeys = new Set(['staticIp', 'ap-hide', 'ap-custom-ip', 'ota-enabled', 'time-sync', 'debug-enabled', 'mqtt-enabled', 'dipEnabled', 'swellEnabled', 'overcurrent']);
-        const signedKeys = new Set(['wifi-mode', 'time-dsttime', 'time-minwest', 'dipCicles', 'swellCicles']);
+        const signedKeys = new Set(['wifi-mode', 'time-dsttime', 'time-minwest', 'dipMs', 'swellMs', 'ocMs']);
         const unsignedKeys = new Set(['time-start', 'mqtt-port', 'eventPrevSamples', 'eventPostSamples', 'eventMaxSamples']);
-        const floatKeys = new Set(['dipVoltage', 'swellVoltage', 'ocCurrent']);
+        const floatKeys = new Set(['ocCurrent', 'ocHyst']);
         await page.route('http://meter.test/**', async route => {
             const request = route.request(), url = new URL(request.url());
             if (url.pathname === '/network/config' && request.method() === 'GET') {
@@ -44,9 +44,9 @@ async function run() {
                     if (namespace === 'ADE9000') values[key] = ['neutralRms', 'neutralFast'].includes(key) ? 1.17 : -1;
                     else if (networkKeys.has(key)) values[key] = key === 'sta-pass' ? 'clear"text' : key + '-value';
                     else if (boolKeys.has(key)) values[key] = 1;
-                    else if (signedKeys.has(key)) values[key] = -180;
+                    else if (signedKeys.has(key)) values[key] = namespace === 'meter' ? 50 : -180;
                     else if (unsignedKeys.has(key)) values[key] = 5;
-                    else if (floatKeys.has(key)) values[key] = 200.25;
+                    else if (floatKeys.has(key)) values[key] = key === 'ocCurrent' ? 85 : 1;
                 }
                 if (namespace === 'meter') {
                     values.eventPrevSamples = 'key no existe';
@@ -66,7 +66,7 @@ async function run() {
             if (url.pathname === '/grid/config') {
                 if (request.method() === 'POST') calls.push('grid');
                 return route.fulfill({json: {lowR: 185, highR: 250, lowS: 180, highS: 255, lowT: 190, highT: 260,
-                    noVoltage: 20, hysteresis: 5, lossConfirmMs: 250, voltageConfirmMs: 5000, recoveryConfirmMs: 250, capturePages: 3,
+                    noVoltage: 20, hysteresis: 5, lossConfirmMs: 250, pointLimitMs: 3700, recoveryConfirmMs: 250, capturePages: 5,
                     neutralEnabled: false, neutralHigh: 25, neutralHysteresis: 2, neutralConfirmMs: 100, neutralRecoveryMs: 250}});
             }
             if (url.pathname === '/history/config') {
@@ -117,16 +117,16 @@ async function run() {
         assert.equal(backup.sections.calibration.neutralFast, 1.17);
         assert.equal(backup.sections.history.groupConfig, 0xC894);
         assert.equal(backup.sections.history.samplePeriodDeciseconds, 10);
-        assert.equal(backup.sections.capture.eventPrevSamples, 100);
-        assert.equal(backup.sections.capture.eventPostSamples, 100);
-        assert.equal(backup.sections.capture.eventMaxSamples, 5);
+        assert.equal(Object.hasOwn(backup.sections.capture, 'eventPrevSamples'), false);
+        assert.equal(Object.hasOwn(backup.sections.capture, 'eventPostSamples'), false);
+        assert.equal(Object.hasOwn(backup.sections.capture, 'eventMaxSamples'), false);
         assert.equal(Object.keys(backup.sections).length, 6);
         assert.equal(Object.hasOwn(backup.sections, 'web'), false);
         assert.equal(await page.evaluate(() => {
             try { validateBackupSection('calibration', {neutralRms: -1}); return false; }
             catch { return true; }
         }), true);
-        assert.match(await page.textContent('#settingsBackupStatus'), /valores predeterminados no guardados: muestras previas \(100\), muestras posteriores \(100\)/);
+        assert.doesNotMatch(await page.textContent('#settingsBackupStatus'), /valores predeterminados no guardados/);
 
         page.on('dialog', dialog => dialog.accept());
         await page.setInputFiles('#settingsBackupFile', {name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(backup))});

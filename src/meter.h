@@ -4,7 +4,6 @@
 #include "AsyncWebSocket.h"
 #include "time.h"
 #include "wifiUtils.h"
-#include "event_trigger.h"
 #include "grid_state.h"
 #include "fast_rms_format.h"
 
@@ -20,189 +19,13 @@ inline const char* meterJsonNumber(float value, char* buffer, size_t size) {
 struct fastRmsRingSample {
 	fastRMSData_t data;
 	uint32_t sampleMs;
+	uint64_t sampleUs;
 };
 
-class capturedEvent {
-	fastRMSData_t* data;
-	uint32_t maxSamples;
-	uint32_t sampleCount;
-	String events;
-	uint32_t eventCounter;
-	uint64_t eventDurationMs;
-	String eventId;
-	uint32_t prevSampleQty;				//Cantidad de muestras previas
-	int32_t triggerSample = -1;
-	bool capturing, canDownload, canStart;
-	timeval startDate, endDate;
-	uint32_t dipCycles = 5, swellCycles = 5;
-	float dipVoltage, swellVoltage, overCurrent;
-
-	void init(uint32_t maxSamples) {
-		data = nullptr;
-		this->maxSamples = maxSamples;
-		sampleCount = 0;
-		events = "";
-		capturing = false;
-		canDownload = false;
-		canStart = true;
-		eventCounter = 0;
-		eventDurationMs = 0;
-		eventId = "";
-	};
-
-public:
-
-	void setDipEventParam(float vLevel, uint32_t halfCycles) {dipVoltage = vLevel; dipCycles = halfCycles;};
-	void seSwellEventParam(float vLevel, uint32_t halfCycles) {swellVoltage = vLevel; swellCycles = halfCycles;}
-	void setOverCurrentParam(float iLevel) {overCurrent = iLevel; };
-
-	capturedEvent(uint16_t maxSamples){ init(maxSamples);};
-
-	~capturedEvent() {
-		if (data) free(data);
-		events.~String();
-	}
-
-	const char *getBuffer() {if (data) return (const char*)data; return nullptr; };
-
-	bool isCapturing() {return capturing;};
-
-	uint32_t getSampleCount() {return sampleCount;};
-
-	// Devuelve el inicio estimado dentro de las muestras, o -1 si quedo afuera; sin parametros.
-	int32_t getTriggerSample() {return triggerSample;};
-
-	// Descuenta lookbackUs de la frontera de deteccion a 100 Hz; cero para captura manual.
-	void markTriggerSample(uint64_t lookbackUs = 0) {
-		triggerSample = eventTriggerIndex(int64_t(sampleCount) - int64_t(lookbackUs / 10000));
-	};
-
-	// Devuelve los semiciclos configurados; swell selecciona el detector de sobretension.
-	uint32_t getConfirmationHalfCycles(bool swell) {return swell ? swellCycles : dipCycles;};
-
-	uint64_t getEventDurationMs() {return eventDurationMs;};
-
-	const String& getEventId() {return eventId;};
-
-	bool isSampleBufferFull() {return sampleCount >= maxSamples;};
-
-	// Iniciar la clase para emperzar a capturar datos. Inicia el buffer según la cantidad de muestras máximas a guardar.
-	bool startCapture(uint32_t prevSampleQty, const String& eventId) {
-		uint32_t size = sizeof(fastRMSData_t) * maxSamples;
-		if (capturing || (data != nullptr) || !canStart ) {
-			// debugE("Captura en curso!");
-			return false;
-		};
-		data = (fastRMSData_t*)malloc(size);
-		if (data == nullptr) {
-			// debugE("Fallo al intentar asignar %d bytes", size);
-			return false;
-		};
-		// debugI("Iniciando captura... Asignados %u bytes para %u samples", size, maxSamples);
-		memset(data, 0, size);	//Iniciar todo a 0
-		sampleCount = 0;
-		events = "";	//Crear un array Json para los eventos de texto
-		eventDurationMs = 0;
-		this->eventId = eventId;
-		capturing = true;
-		canDownload = canStart = false;
-		eventCounter++;		//Incrementar contador de evento
-		gettimeofday(&startDate, nullptr);
-		this->prevSampleQty = prevSampleQty;
-		triggerSample = -1;
-		return true;
-	};
-
-	bool isDataReady() {return canDownload; };
-
-	void stopCapture() {
-		if (!capturing) return;
-		// debugI("Terminando captura... %d samples capturadas", sampleCount);
-		capturing = false;
-		canDownload = true;
-		canStart = false;
-		gettimeofday(&endDate, nullptr);
-	};
-
-	void reset() {
-		if (capturing) stopCapture();
-		if (data) free(data);
-		data = nullptr;
-		events = "";
-		eventId = "";
-		canDownload = false;
-		canStart = true;
- 	};
-
-	void printSamples(uint32_t start, uint32_t end) {
-		if (!canDownload) return;
-		if (start > end) return;
-		if (start >= sampleCount) return;
-		if (end > (sampleCount-1)) end = sampleCount-1;
- 
-		for (uint32_t i = start; i < end; i++) {
-			fastRMSData_t sample = data[i];
-			debugI("[%03d] %6d -> %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f %3.2f %3.3f", i, sample.timeStamp,
-			sample.getValue(0), sample.getValue(1), sample.getValue(2),
-			sample.getValue(3), sample.getValue(4), sample.getValue(5), sample.getValue(6), sample.getValue(7));
-		}
-	};
-
-	//[[123, 225.05, 225.05, 225.05, 15.05, 10.08, 9.86, 10.02],]
-
-	bool getEvents(String &event) {
-		if (!canDownload) return false;
-
-		char info[300];
-		uint64_t startMs = ((uint64_t)startDate.tv_sec * 1000ULL) + (startDate.tv_usec / 1000ULL);
-		uint64_t endMs = ((uint64_t)endDate.tv_sec * 1000ULL) + (endDate.tv_usec / 1000ULL);
-		uint64_t captureDurationMs = endMs >= startMs ? endMs - startMs : 0;
-		String triggerJson = triggerSample >= 0 && triggerSample < sampleCount ? String(triggerSample) : String("null");
-		snprintf(info, sizeof(info), "{\"event\": %d, \"eventId\": \"%s\", \"sampleCount\": %d, \"triggerSample\": %s, \"start\": %llu, \"end\": %llu, \"captureDurationMs\": %llu, \"eventDurationMs\": %llu, \"list\":",
-			eventCounter, eventId.c_str(), sampleCount, triggerJson.c_str(), (unsigned long long)startMs, (unsigned long long)endMs, (unsigned long long)captureDurationMs, (unsigned long long)eventDurationMs);
-		
-		event.reserve(events.length() + 300);
-		event = info;
-		event += "[" + events + "]}";
-		return true;
-	};
-
-	uint32_t pushSamples(fastRMSData_t* samples) {
-		if (!capturing) return 0;
-		if (sampleCount >= maxSamples) return 0;
-		if (data == nullptr || samples == nullptr) return 0;
-
-		data[sampleCount++] = *samples;
-		return 1;
-	};
-
-	uint32_t pushSamples(fastRMSData_t* samples, uint32_t count) {
-		if (!capturing) return 0;
-		if (data == nullptr || samples == nullptr) return 0;
-		uint32_t i = 0;
-		for (i = 0; i < count; i++) {
-			if (sampleCount >= maxSamples) return i;
-			*data++ = *samples++;
-			sampleCount++;
-		}
-		return i;
-	};
-
-	void pushEvent(const char * event) {
-		if (!capturing) return;
-		// debugI("Evento: %s", event);
-		if (events.length() ) events += ", ";
-		events += event;
-	};
-
-	// Guarda un evento y conserva la mayor duracion real detectada.
-	// event: JSON del evento. durationMs: duracion real del evento electrico.
-	void pushEvent(const char * event, uint64_t durationMs) {
-		pushEvent(event);
-		if (durationMs > eventDurationMs) eventDurationMs = durationMs;
-	};
-
-};
+// Recupera el reloj monotono del turno FAST sampleMs; usa el anillo y luego una estimacion acotada.
+uint64_t meterFastTimeUs(uint32_t sampleMs);
+// Convierte sampleUs monotono a Unix us usando la hora actual; cero si no hay hora valida.
+uint64_t meterUnixTimeUs(uint64_t sampleUs);
 
 enum class eventType {
 	voltageDip,
@@ -220,6 +43,8 @@ enum class phaseName {
 class phaseEvent_t {
 public:
 	bool active = false;
+	uint32_t fastStartedMs = 0;
+	uint32_t fastEndedMs = 0;
 	float value = 0.0;
 	timeval start;
 	timeval end;
@@ -585,16 +410,10 @@ bool meterSaveGridSettings(const gridSettings& config);
 void MeterLoop();
 uint64_t MeterGetLastSampleTimestampMs();
 
-// Solicita generar un evento virtual usando el flujo real de captura.
-bool MeterTriggerTestEvent();
-
 void MeterTask(void* arg);
 
 // Copia una mitad Wave usando la seleccion original del osciloscopio; sin parametros.
 void readWaveBuffer();
-
-// Devuelve metricas del osciloscopio y fragmentos Wave recientes; dest recibe el JSON.
-void meterGetWaveDiagnostics(String& dest);
 
 void scaleBuffer(WFBFixedDataRate_t* samplesBuffer, int32_t samplesCount, float voltage, float current);
 
@@ -602,9 +421,6 @@ void compressWaveBuffer12(int32_t* waveBufferRaw, uint8_t* waveBuffer, uint16_t 
 
 
 void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len);
-
-
-void acEventsWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len);
 
 
 void meterCheckEvents();
@@ -638,10 +454,6 @@ void meterReadPeriods();
 void meterReadAngles();
 
 void meterReadEnergy();
-
-ADE_EVENT_STATUS_t meterReadDipSwell();
-
-ADE_OISTATUS_t meterReadOverCurrent();
 
 float sumVoltages(float v1, float deg1, float v2, float deg2);
 

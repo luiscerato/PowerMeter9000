@@ -1,7 +1,6 @@
 #include "manager_api.h"
 #include "wifiUtils.h"
 #include "meter.h"
-#include "event_store.h"
 #include <Preferences.h>
 #include <WiFi.h>
 #include <sys/time.h>
@@ -205,13 +204,6 @@ uint32_t managerNextSequence()
 	return ++telemetrySequence;
 }
 
-uint16_t managerPublishEventNotification(const String& notificationPayload)
-{
-	if (!mqtt.connected()) return 0;
-	String topic = String(managerMqttBaseTopic) + "/events/notification";
-	return mqtt.publish(topic.c_str(), 1, false, notificationPayload.c_str());
-}
-
 void managerGetDiscoveryJson(String& dest)
 {
 	String mac = WiFi.macAddress();
@@ -232,10 +224,10 @@ void managerGetDiscoveryJson(String& dest)
 	dest += ",\"brokerUrl\":";
 	managerAppendJsonString(dest, brokerUrl);
 	dest += "},\"electrical\":{\"system\":\"three_phase\",\"phases\":[\"R\",\"S\",\"T\",\"N\"]},";
-	dest += "\"capabilities\":{\"telemetry\":true,\"telemetryRest\":true,\"eventNotifications\":true,";
+	dest += "\"capabilities\":{\"telemetry\":true,\"telemetryRest\":true,\"eventNotifications\":false,";
 	dest += "\"eventCatalog\":true,\"eventDownload\":true,\"historySync\":false,\"configuration\":false,\"localWeb\":true},";
 	dest += "\"links\":{\"status\":\"/manager/status\",\"telemetry\":\"/telemetry\",";
-	dest += "\"events\":\"/events\",\"history\":\"/history\"}}";
+	dest += "\"events\":\"/grid-events\",\"history\":\"/history\"}}";
 }
 
 void managerGetStatusJson(String& dest)
@@ -269,11 +261,8 @@ void managerGetStatusJson(String& dest)
 	else dest += "null";
 	dest += "},\"storage\":{\"available\":";
 	dest += storageManager.isReady() ? "true" : "false";
-	dest += ",\"historyRecords\":0,\"eventCount\":";
-	dest += String(eventStoreEventCount());
-	dest += ",\"pendingEventUploads\":";
-	dest += String(eventStoreWaveCount());
-	dest += ",\"failedEventUploads\":0}}";
+
+	dest += "}}";
 }
 
 void managerGetTelemetryCurrentJson(String& dest)

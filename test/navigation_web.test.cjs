@@ -104,7 +104,7 @@ async function run() {
         assert.equal(await page.textContent('#gridState_r'), 'Normal');
         assert.equal(await page.textContent('#gridVoltage_r'), '230.00 V');
         assert.equal(await page.textContent('#gridCurrent_s'), '8.000 A');
-        assert.equal(await page.textContent('#gridVoltageSpread'), '2.00 V');
+        assert.equal(await page.textContent('#gridVoltage_t'), '229.00 V');
         await page.screenshot({path: path.join(root, '.pio/build/grid-web/summary-states-1280.png')});
         assert.ok(Math.abs(Number(await page.locator('#phasorVoltageS').getAttribute('x2')) - 105) < 1);
         assert.ok(Math.abs(Number(await page.locator('#phasorVoltageS').getAttribute('y2')) - 56) < 1);
@@ -126,7 +126,7 @@ async function run() {
         await page.screenshot({path: path.join(root, '.pio/build/grid-web/summary-states-390.png')});
         await page.screenshot({path: path.join(root, '.pio/build/grid-web/phasors-390.png')});
         await page.setViewportSize({width: 1280, height: 900});
-        for (const [pageId, title] of [['allMeasures', 'Mediciones'], ['events', 'Eventos'], ['scopePage', 'Osciloscopio'], ['settings', 'Configuración']]) {
+        for (const [pageId, title] of [['allMeasures', 'Mediciones'], ['gridEvents', 'Eventos'], ['scopePage', 'Osciloscopio'], ['settings', 'Configuración']]) {
             await page.click('[data-page="' + pageId + '"]');
             assert.equal(await page.textContent('#pageTitle'), title);
             assert.equal(await page.locator('[data-page="' + pageId + '"]').getAttribute('aria-current'), 'page');
@@ -220,7 +220,7 @@ async function run() {
         await page.setViewportSize({width: 390, height: 900});
         await page.click('.navbar-toggler');
         await page.waitForFunction(() => document.getElementById('navbarNavAltMarkup').classList.contains('show'));
-        await page.click('[data-page="events"]');
+        await page.click('[data-page="gridEvents"]');
         await page.waitForFunction(() => {
             const menu = document.getElementById('navbarNavAltMarkup');
             return !menu.classList.contains('show') && !menu.classList.contains('collapsing');

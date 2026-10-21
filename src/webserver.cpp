@@ -1,14 +1,15 @@
 #include "Arduino.h"
 #include "ESPAsyncWebServer.h"
 #include "esp_system.h"
+#include <esp_heap_caps.h>
 #include "Preferences.h"
 #include "webserver.h"
 #include "wifiUtils.h"
 #include "meter.h"
 #include "meter_timing.h"
+#include "event_capture_config.h"
 #include "bl0942/bl0942.h"
 #include "manager_api.h"
-#include "event_store.h"
 #include "storage/winbond_spi_nand.h"
 #include "storage/nand_benchmark.h"
 #include "storage/storage_manager.h"
@@ -28,7 +29,6 @@
 AsyncWebServer server(80);
 AsyncWebSocket scopeWS("/ws");
 AsyncWebSocket remoteScreen("/screen");
-AsyncWebSocket acEventsWS("/acevents");
 extern WinbondSpiNand eventFlash;
 extern bool flashDetected;
 extern BL0942 bl0942;
@@ -143,10 +143,10 @@ static uint32_t nandRateBytesPerSecond(uint64_t bytes, uint64_t elapsedUs)
 }
 
 // Lee un parametro decimal de 32 bits; request contiene la URL y name identifica el parametro.
-static bool getUint32Parameter(AsyncWebServerRequest* request, const char* name, uint32_t& value)
+static bool getUint32Parameter(AsyncWebServerRequest* request, const char* name, uint32_t& value, bool post = false)
 {
-	if (!request->hasParam(name)) return false;
-	const String text = request->getParam(name)->value();
+	if (!request->hasParam(name, post)) return false;
+	const String text = request->getParam(name, post)->value();
 	char* end = nullptr;
 	const unsigned long parsed = strtoul(text.c_str(), &end, 10);
 	if (!end || end == text.c_str() || *end || parsed > UINT32_MAX) return false;
@@ -208,14 +208,15 @@ static HistoryReadSession* findHistoryReadSession()
 static void appendGridEventJson(String& json, const GridEventIndexEntry& entry)
 {
 	const GridEventFormat::ListHeader& header = entry.header;
-	const uint64_t changedAt = uint64_t(header.unixSeconds) * 1000ULL + header.milliseconds;
+	const double changedAt = double(header.unixSeconds) * 1000.0 + header.fraction100Us / 10.0;
 	const uint64_t previousAt = changedAt >= uint64_t(header.previousStateDuration10Ms) * 10ULL ?
 		changedAt - uint64_t(header.previousStateDuration10Ms) * 10ULL : 0;
 	const uint8_t subject = header.subjectAndStates & 0x07U;
 	const uint8_t previous = header.subjectAndStates >> 3 & 0x07U;
 	const uint8_t current = header.subjectAndStates >> 6 & 0x07U;
+	const bool point = GridEventFormat::isPointEvent(header.subjectAndStates);
 	const char* subjects[] = { "R", "S", "T", "N", "G" };
-	const char* phaseStates[] = { "?", "N", "L", "H", "X", "?", "?", "?" };
+	const char* phaseStates[] = { "?", "N", "L", "H", "X", "C", "?", "?" };
 	const char* gridStates[] = { "?", "N", "A", "O", "?", "?", "?", "?" };
 	const char* const* states = subject == uint8_t(GridEventFormat::Subject::grid) ? gridStates : phaseStates;
 	json += "{\"i\":";
@@ -229,12 +230,19 @@ static void appendGridEventJson(String& json, const GridEventIndexEntry& entry)
 	json += ",\"s\":\"";
 	json += states[current];
 	json += "\",\"t\":";
-	managerAppendUint64(json, changedAt);
+	json += String(changedAt, 1);
 	json += ",\"v\":[";
 	json += header.previousVoltage;
 	json += ',';
 	json += header.currentVoltage;
 	json += ']';
+	if (!point && (header.subjectAndStates & 0x0400U)) json += ",\"c\":true";
+	if (point) {
+		json += ",\"k\":";
+		json += (header.subjectAndStates >> 10) & 31U;
+		json += ",\"l\":";
+		json += (header.subjectAndStates & 0x8000U) ? "true" : "false";
+	}
 	if (header.timeStatus & GridEventFormat::timestampEstimated) json += ",\"e\":1";
 	json += '}';
 }
@@ -450,7 +458,7 @@ static void appendNandOperationMetrics(String& json, const char* name, const Nan
 }
 
 
-WSeventFunctionCallback meterEvents = nullptr, screenEvents = nullptr, acEvents = nullptr;		//Punteros a los callback de los eventos de los websockets
+WSeventFunctionCallback meterEvents = nullptr, screenEvents = nullptr;		//Punteros a los callback de los eventos de los websockets
 //
 
 enum class BackupOptionType : uint8_t { invalid, string, boolean, signedInt, unsignedInt, floatingPoint };
@@ -484,10 +492,9 @@ static BackupOptionType backupOptionType(const String& nameSpace, const String& 
 		"ap-ssid", "ap-pass", "ap-ip", "ap-mask", "ap-gw", "ota-name", "ota-pass", "time-server",
 		"debug-name", "debug-pass", "mqtt-server", "mqtt-user", "mqtt-pass"};
 	static const char* const meterBool[] = {"dipEnabled", "swellEnabled", "overcurrent"};
-	static const char* const meterFloat[] = {"dipVoltage", "swellVoltage", "ocCurrent", "rWattH", "rVarH", "rVaH",
+	static const char* const meterFloat[] = {"ocCurrent", "ocHyst", "rWattH", "rVarH", "rVaH",
 		"sWattH", "sVarH", "sVaH", "tWattH", "tVarH", "tVaH", "WattH", "VarH", "VaH"};
-	static const char* const meterSigned[] = {"dipCicles", "swellCicles"};
-	static const char* const meterUnsigned[] = {"eventPrevSamples", "eventPostSamples", "eventMaxSamples"};
+	static const char* const meterSigned[] = {"dipMs", "swellMs", "ocMs"};
 	static const char* const calibration[] = {"APHCAL0", "BPHCAL0", "CPHCAL0", "NPHCAL", "AIGAIN", "BIGAIN", "CIGAIN", "NIGAIN",
 		"AVGAIN", "BVGAIN", "CVGAIN", "AIRMSOS", "BIRMSOS", "CIRMSOS", "NIRMSOS", "AVRMSOS", "BVRMSOS", "CVRMSOS",
 		"AIFRMSOS", "BIFRMSOS", "CIFRMSOS", "AVFRMSOS", "BVFRMSOS", "CVFRMSOS", "AIRMSONEOS", "BIRMSONEOS", "CIRMSONEOS",
@@ -503,7 +510,6 @@ static BackupOptionType backupOptionType(const String& nameSpace, const String& 
 		if (backupKeyInList(key, meterBool, sizeof(meterBool) / sizeof(meterBool[0]))) return BackupOptionType::boolean;
 		if (backupKeyInList(key, meterFloat, sizeof(meterFloat) / sizeof(meterFloat[0]))) return BackupOptionType::floatingPoint;
 		if (backupKeyInList(key, meterSigned, sizeof(meterSigned) / sizeof(meterSigned[0]))) return BackupOptionType::signedInt;
-		if (backupKeyInList(key, meterUnsigned, sizeof(meterUnsigned) / sizeof(meterUnsigned[0]))) return BackupOptionType::unsignedInt;
 	}
 	else if (nameSpace == "ADE9000" && (key == "neutralRms" || key == "neutralFast"))
 		return BackupOptionType::floatingPoint;
@@ -528,6 +534,8 @@ static bool parseBackupOption(BackupOptionValue& item, const String& nameSpace)
 	char* end = nullptr;
 	if (item.type == BackupOptionType::floatingPoint) {
 		item.floatValue = strtof(item.text.c_str(), &end);
+		if (nameSpace == "meter" && (item.key == "ocHyst" || item.key == "ocCurrent") &&
+			(item.floatValue < 0 || item.floatValue > 163.82f || (item.key == "ocCurrent" && item.floatValue == 0))) return false;
 		if (nameSpace == "ADE9000" && (item.floatValue < 0.1f || item.floatValue > 10)) return false;
 		return end != item.text.c_str() && *end == '\0' && isfinite(item.floatValue);
 	}
@@ -541,6 +549,8 @@ static bool parseBackupOption(BackupOptionValue& item, const String& nameSpace)
 	if (item.type == BackupOptionType::signedInt) {
 		const long long value = strtoll(item.text.c_str(), &end, 10);
 		if (end == item.text.c_str() || *end || value < INT32_MIN || value > INT32_MAX) return false;
+		if (nameSpace == "meter" && (item.key == "dipMs" || item.key == "swellMs" || item.key == "ocMs") &&
+			(value < 10 || value > eventConfirmMaxMs || value % 10)) return false;
 		item.signedValue = static_cast<int32_t>(value);
 		return true;
 	}
@@ -587,6 +597,14 @@ static void writeBackupOptions(AsyncWebServerRequest* request, const String& nam
 		return;
 	}
 	size_t writtenCount = 0;
+	if (nameSpace == "meter") {
+		float current = options.getFloat("ocCurrent", 50), hysteresis = options.getFloat("ocHyst", 1);
+		for (size_t i = 0; i < count; ++i) {
+			if (values[i].key == "ocCurrent") current = values[i].floatValue;
+			if (values[i].key == "ocHyst") hysteresis = values[i].floatValue;
+		}
+		if (hysteresis >= current) { options.end(); request->send(400, "text/plain", "Histeresis de corriente incompatible"); return; }
+	}
 	for (; writtenCount < count; ++writtenCount) {
 		BackupOptionValue& item = values[writtenCount];
 		size_t written = 0;
@@ -706,25 +724,19 @@ static void handleGridSettings(AsyncWebServerRequest* request) {
 	meterGetGridSettings(config);
 	if (request->method() == HTTP_POST) {
 		const char* keys[] = {"lowR", "highR", "lowS", "highS", "lowT", "highT",
-			"noVoltage", "hysteresis", "lossConfirmMs", "voltageConfirmMs", "recoveryConfirmMs", "capturePages",
-			"neutralEnabled", "neutralHigh", "neutralHysteresis", "neutralConfirmMs", "neutralRecoveryMs"};
-		double values[17] = {};
-		values[12] = config.neutral.enabled; values[13] = config.neutral.highVoltage;
-		values[14] = config.neutral.hysteresis; values[15] = config.neutral.confirmMs; values[16] = config.neutral.recoveryMs;
-		for (unsigned i = 0; i < 17; ++i) {
+			"noVoltage", "hysteresis", "lossConfirmMs", "recoveryConfirmMs",
+			"neutralHigh", "neutralHysteresis", "neutralConfirmMs", "neutralRecoveryMs"};
+		double values[14] = {};
+		if (request->params() != 14) { request->send(400, "text/plain", "Se requieren los 14 ajustes actuales"); return; }
+		for (unsigned i = 0; i < 14; ++i) {
 			if (!request->hasParam(keys[i], true)) {
-				if (i >= 12) continue; // Los respaldos anteriores conservan los ajustes actuales de neutro.
 				request->send(400, "text/plain", "Faltan ajustes de red"); return;
 			}
 			const String& text = request->getParam(keys[i], true)->value();
-			if (i == 12 && (text.equalsIgnoreCase("true") || text.equalsIgnoreCase("false"))) {
-				values[i] = text.equalsIgnoreCase("true"); continue;
-			}
 			char* end;
 			values[i] = strtod(text.c_str(), &end);
 			if (end == text.c_str() || *end || !isfinite(values[i]) || values[i] < 0 ||
-				values[i] > 600000 || (((i >= 8 && i <= 12) || i >= 15) && floor(values[i]) != values[i]) ||
-				(i == 12 && values[i] > 1)) {
+				values[i] > 600000 || (((i >= 8 && i <= 9) || i >= 12) && floor(values[i]) != values[i])) {
 				request->send(400, "text/plain", "Valor de red invalido"); return;
 			}
 		}
@@ -733,11 +745,10 @@ static void handleGridSettings(AsyncWebServerRequest* request) {
 			config.phases[i].highVoltage = values[i * 2 + 1];
 		}
 		config.noVoltage = values[6]; config.hysteresis = values[7];
-		config.lossConfirmMs = values[8]; config.voltageConfirmMs = values[9];
-		config.recoveryConfirmMs = values[10];
-		config.capturePages = values[11];
-		config.neutral.enabled = values[12]; config.neutral.highVoltage = values[13];
-		config.neutral.hysteresis = values[14]; config.neutral.confirmMs = values[15]; config.neutral.recoveryMs = values[16];
+		config.lossConfirmMs = values[8]; config.recoveryConfirmMs = values[9];
+		config.voltageConfirmMs = eventPointLimitMs(); config.capturePages = eventCapturePages;
+		config.neutral.enabled = true; config.neutral.highVoltage = values[10];
+		config.neutral.hysteresis = values[11]; config.neutral.confirmMs = values[12]; config.neutral.recoveryMs = values[13];
 		if (!validGridSettings(config)) {
 			request->send(400, "text/plain", "Limites o tiempos de red incompatibles"); return;
 		}
@@ -749,27 +760,18 @@ static void handleGridSettings(AsyncWebServerRequest* request) {
 	snprintf(json, sizeof(json), "{\"schemaVersion\":1,\"lowR\":%.2f,\"highR\":%.2f,"
 		"\"lowS\":%.2f,\"highS\":%.2f,\"lowT\":%.2f,\"highT\":%.2f,"
 		"\"noVoltage\":%.2f,\"hysteresis\":%.2f,\"lossConfirmMs\":%u,"
-		"\"voltageConfirmMs\":%u,\"recoveryConfirmMs\":%u,\"capturePages\":%u,"
-		"\"neutralEnabled\":%s,\"neutralHigh\":%.3f,\"neutralHysteresis\":%.3f,\"neutralConfirmMs\":%u,\"neutralRecoveryMs\":%u}",
+		"\"pointLimitMs\":%u,\"recoveryConfirmMs\":%u,\"capturePages\":%u,"
+		"\"neutralHigh\":%.3f,\"neutralHysteresis\":%.3f,\"neutralConfirmMs\":%u,\"neutralRecoveryMs\":%u}",
 		config.phases[0].lowVoltage, config.phases[0].highVoltage,
 		config.phases[1].lowVoltage, config.phases[1].highVoltage,
 		config.phases[2].lowVoltage, config.phases[2].highVoltage,
 		config.noVoltage, config.hysteresis, config.lossConfirmMs,
 		config.voltageConfirmMs, config.recoveryConfirmMs, config.capturePages,
-		config.neutral.enabled ? "true" : "false", config.neutral.highVoltage, config.neutral.hysteresis,
+		config.neutral.highVoltage, config.neutral.hysteresis,
 		config.neutral.confirmMs, config.neutral.recoveryMs);
 	auto* response = request->beginResponse(200, "application/json", json);
 	response->addHeader("Cache-Control", "no-store");
 	request->send(response);
-}
-
-// Obtiene el identificador requerido por las rutas de artefactos de eventos.
-// request: solicitud HTTP. eventId: destino del identificador validado.
-static bool getEventIdParam(AsyncWebServerRequest* request, String& eventId)
-{
-	if (!request->hasParam("eventId")) return false;
-	eventId = request->getParam("eventId")->value();
-	return eventId.length() > 0;
 }
 
 void webServerSetMeterEvents(WSeventFunctionCallback func)
@@ -783,23 +785,11 @@ AsyncWebSocket* webServerGetMeterWS()
 	return &scopeWS;
 }
 
-void webServerSetAcEvents(WSeventFunctionCallback func)
-{
-	if (func != nullptr)
-		acEvents = func;
-}
-
-AsyncWebSocket* webServerGetAcWS()
-{
-	return &acEventsWS;
-}
-
 // Retira clientes WebSocket desconectados de las listas internas.
 void webServerCleanupClients()
 {
 	scopeWS.cleanupClients();
 	remoteScreen.cleanupClients();
-	acEventsWS.cleanupClients();
 }
 
 
@@ -815,8 +805,6 @@ void Init_WebServer()
 
 	scopeWS.onEvent(meterEvents);
 	server.addHandler(&scopeWS);
-	acEventsWS.onEvent(acEvents);
-	server.addHandler(&acEventsWS);
 
 	// server.addHandler(&remoteScreen);
 
@@ -1517,6 +1505,12 @@ void Init_WebServer()
 			json += ESP.getFreeHeap();
 			json += ",\"minFreeHeap\":";
 			json += ESP.getMinFreeHeap();
+			json += ",\"free8\":";
+			json += heap_caps_get_free_size(MALLOC_CAP_8BIT);
+			json += ",\"largest8\":";
+			json += heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+			json += ",\"min8\":";
+			json += heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
 			json += "},\"historyRecovery\":{\"headerReads\":";
 			json += status.historyRecovery.headerReads;
 			json += ",\"validHeaders\":";
@@ -1599,96 +1593,6 @@ void Init_WebServer()
 	server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest* request) {
 		String response;
 		managerGetTelemetryCurrentJson(response);
-		request->send(200, "application/json", response);
-		});
-
-	server.on("/events/test", HTTP_POST, [](AsyncWebServerRequest* request) {
-		if (!requireExactPath(request, "/events/test")) return;
-		if (request->hasParam("pattern", true)) {
-			if (request->getParam("pattern", true)->value() != "ramp") {
-				request->send(400, "application/json", "{\"schemaVersion\":1,\"ok\":false,\"reason\":\"unknown_pattern\"}");
-				return;
-			}
-			String eventId, reason;
-			bool created = eventStoreCreateRampTest(eventId, reason);
-			String payload = created
-				? "{\"schemaVersion\":1,\"ok\":true,\"eventId\":\"" + eventId + "\",\"testPattern\":\"triangle-int12-v1\"}"
-				: "{\"schemaVersion\":1,\"ok\":false,\"reason\":\"" + reason + "\"}";
-			AsyncWebServerResponse* response = request->beginResponse(created ? 201 : 503, "application/json", payload);
-			response->addHeader("Cache-Control", "no-store");
-			request->send(response);
-			return;
-		}
-		MeterTriggerTestEvent();
-		String response = "{\"ok\":true,\"message\":\"test event capture requested\"}";
-		request->send(200, "application/json", response);
-		});
-
-	server.on("/events/fast-rms", HTTP_GET, [](AsyncWebServerRequest* request) {
-		if (!requireExactPath(request, "/events/fast-rms")) return;
-		String eventId;
-		if (!getEventIdParam(request, eventId)) {
-			request->send(400, "application/json", "{\"error\":\"eventId is required\"}");
-			return;
-		}
-		size_t dataSize = 0;
-		if (!eventStoreGetFastRmsSize(eventId, dataSize)) {
-			request->send(404, "application/json", "{\"error\":\"fast RMS data not available\"}");
-			return;
-		}
-		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", dataSize, [eventId](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
-			return eventStoreCopyFastRmsChunk(eventId, index, buffer, maxLen);
-			});
-		response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-		request->send(response);
-		});
-
-	server.on("/events/wave", HTTP_GET, [](AsyncWebServerRequest* request) {
-		if (!requireExactPath(request, "/events/wave")) return;
-		String eventId;
-		if (!getEventIdParam(request, eventId)) {
-			request->send(400, "application/json", "{\"error\":\"eventId is required\"}");
-			return;
-		}
-		size_t dataSize = 0;
-		if (!eventStoreGetWaveSize(eventId, dataSize)) {
-			request->send(404, "application/json", "{\"error\":\"wave data not available\"}");
-			return;
-		}
-		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", dataSize, [eventId](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
-			return eventStoreCopyWaveChunk(eventId, index, buffer, maxLen);
-			});
-		response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-		request->send(response);
-		});
-
-	server.on("/events/wave-diagnostics", HTTP_GET, [](AsyncWebServerRequest* request) {
-		if (!requireExactPath(request, "/events/wave-diagnostics")) return;
-		String payload;
-		meterGetWaveDiagnostics(payload);
-		AsyncWebServerResponse* response = request->beginResponse(200, "application/json", payload);
-		response->addHeader("Cache-Control", "no-store");
-		request->send(response);
-		});
-
-	server.on("/events/clear", HTTP_POST, [](AsyncWebServerRequest* request) {
-		if (!requireExactPath(request, "/events/clear")) return;
-		if (!request->hasParam("eventId", true) || request->getParam("eventId", true)->value().length() == 0) {
-			request->send(400, "application/json", "{\"error\":\"eventId is required\"}");
-			return;
-		}
-		const String eventId = request->getParam("eventId", true)->value();
-		if (!eventStoreClearEvent(eventId)) {
-			request->send(404, "application/json", "{\"error\":\"event not available\"}");
-			return;
-		}
-		request->send(200, "application/json", "{\"ok\":true}");
-		});
-
-	server.on("/events", HTTP_GET, [](AsyncWebServerRequest* request) {
-		if (!requireExactPath(request, "/events")) return;
-		String response;
-		eventStoreGetListJson(response);
 		request->send(200, "application/json", response);
 		});
 
@@ -1915,7 +1819,7 @@ void Init_WebServer()
 		GridEventCatalog catalog;
 		storageManager.gridEvents().getCatalog(catalog);
 		String json = "{\"schemaVersion\":1,\"ready\":";
-		json += status.state == StorageState::ready ? "true" : "false";
+		json += status.state == StorageState::ready && status.gridEvents.enabled ? "true" : "false";
 		json += ",\"pageSize\":";
 		json += GridEventFormat::pageSize;
 		json += ",\"partitionBytes\":";
@@ -1930,6 +1834,12 @@ void Init_WebServer()
 		json += status.gridStore.captureActive ? "true" : "false";
 		json += ",\"writtenPages\":";
 		json += status.gridStore.writtenPages;
+		json += ",\"points\":";
+		json += status.gridStore.completedPoints;
+		json += ",\"limited\":";
+		json += status.gridStore.limitedPoints;
+		json += ",\"dropped\":";
+		json += status.gridStore.droppedRecords;
 		json += "}";
 		AsyncWebServerResponse* response = request->beginResponse(200, "application/json", json);
 		response->addHeader("Cache-Control", "no-store");
@@ -1937,6 +1847,73 @@ void Init_WebServer()
 		});
 	};
 
+	// Las rutas especificas van antes de sus prefijos: evita que otra ruta intercepte la descarga.
+	server.on("/wave-events/data", HTTP_GET, [](AsyncWebServerRequest* request) {
+		if (!requireExactPath(request, "/wave-events/data")) return;
+		uint32_t block = 0, id = 0;
+		if (!getUint32Parameter(request, "block", block) || !getUint32Parameter(request, "waveId", id) ||
+			block >= 320 || !id || request->params() != 2) { request->send(400, "text/plain", "invalid_query"); return; }
+		auto& store = storageManager.waveEvents();
+		// FAST y Wave comparten las dos paginas de lectura; otra descarga recibe ocupado.
+		if (gridEventReadSession.isActive() || !store.pin(uint16_t(block), id)) {
+			request->send(409, "text/plain", "wave_unavailable_or_busy"); return;
+		}
+		if (!gridEventReadSession.begin(storageManager.partition(StoragePartitionId::waveEvents), uint16_t(block), 0, 64,
+			[]() { storageManager.waveEvents().unpin(); })) {
+			store.unpin(); request->send(503, "text/plain", "wave_reader_unavailable"); return;
+		}
+		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", 131072,
+			[](uint8_t* buffer, size_t length, size_t offset) -> size_t { return gridEventReadSession.copyChunk(buffer, length, offset); });
+		response->addHeader("Cache-Control", "no-store");
+		request->send(response);
+	});
+	server.on("/wave-events", HTTP_GET, [](AsyncWebServerRequest* request) {
+		if (!requireExactPath(request, "/wave-events")) return;
+		uint32_t eventId = 0;
+		if (!getUint32Parameter(request, "eventId", eventId) || !eventId || request->params() != 1) {
+			request->send(400, "text/plain", "eventId_required"); return;
+		}
+		GridEventIndexEntry entry;
+		if (!storageManager.gridEvents().findEntry(eventId, entry)) { request->send(404, "text/plain", "event_not_found"); return; }
+		const uint64_t unixUs = uint64_t(entry.header.unixSeconds) * 1000000ULL + entry.header.fraction100Us * 100ULL;
+		uint16_t cursor = 0, block = 0;
+		waveEventFormat::commitHeader commit;
+		String json = "{\"captures\":[";
+		uint8_t count = 0;
+		while (count < 8 && storageManager.waveEvents().find(eventId, unixUs, cursor, block, commit)) {
+			if (count++) json += ',';
+			char item[160];
+			snprintf(item, sizeof(item), "{\"id\":%lu,\"block\":%u,\"triggerUs\":%llu,\"endUs\":%llu}",
+				(unsigned long)commit.waveId, block, commit.triggerUs, commit.endUs);
+			json += item;
+		}
+		json += "]}";
+		request->send(200, "application/json", json);
+	});
+	server.on("/wave/config", HTTP_GET, [](AsyncWebServerRequest* request) {
+		if (!requireExactPath(request, "/wave/config")) return;
+		waveStoreMetrics metrics; storageManager.waveEvents().getMetrics(metrics);
+		Preferences prefs; uint16_t requested = 192;
+		if (prefs.begin("wave", true)) { requested = prefs.getUShort("preMs", 192); prefs.end(); }
+		char json[600];
+		snprintf(json, sizeof(json), "{\"preMs\":%u,\"actualPreMs\":%u,\"reservedBytes\":%lu,\"enabled\":%s,\"capturing\":%s,"
+			"\"captures\":%lu,\"committed\":%lu,\"orphans\":%lu,\"gaps\":%lu,\"droppedTriggers\":%lu,"
+			"\"failedWrites\":%lu,\"erasedBlocks\":%u,\"pendingLinks\":%lu,\"publishedSlices\":%lu,\"wordHeapBytes\":%lu,\"stackFreeBytes\":%u}", requested,
+			metrics.actualPreMs, (unsigned long)metrics.reservedBytes, metrics.enabled ? "true" : "false", metrics.capturing ? "true" : "false",
+			(unsigned long)metrics.captures, (unsigned long)metrics.committed, (unsigned long)metrics.orphans, (unsigned long)metrics.gaps,
+			(unsigned long)metrics.droppedTriggers, (unsigned long)metrics.failedWrites, metrics.erasedBlocks,
+			(unsigned long)metrics.pendingLinks, (unsigned long)metrics.publishedSlices, (unsigned long)metrics.wordHeapBytes, metrics.stackFreeBytes);
+		request->send(200, "application/json", json);
+	});
+	server.on("/wave/config", HTTP_POST, [](AsyncWebServerRequest* request) {
+		if (!requireExactPath(request, "/wave/config")) return;
+		uint32_t value = 0;
+		if (!getUint32Parameter(request, "preMs", value, true) || value > 288 ||
+			!storageManager.waveEvents().savePreMs(uint16_t(value))) {
+			request->send(400, "text/plain", "preMs_must_be_48_to_288_step_48"); return;
+		}
+		request->send(200, "application/json", "{\"ok\":true,\"restartRequired\":true}");
+	});
 	server.on("/grid-events/data", HTTP_GET, [](AsyncWebServerRequest* request) {
 		if (!requireExactPath(request, "/grid-events/data")) return;
 		StorageManagerStatus status;
@@ -2017,7 +1994,11 @@ void Init_WebServer()
 
 	server.on("/grid-events/test", HTTP_POST, [](AsyncWebServerRequest* request) {
 		if (!requireExactPath(request, "/grid-events/test")) return;
-		gridEventStoreRequestTest();
+		const String type = request->hasParam("type", true) ? request->getParam("type", true)->value() : "mixed";
+		const uint8_t code = type.equalsIgnoreCase("state") ? 1 : type.equalsIgnoreCase("dip") ? 2 :
+			type.equalsIgnoreCase("swell") ? 3 : type.equalsIgnoreCase("overcurrent") ? 4 : type.equalsIgnoreCase("mixed") ? 5 : 0;
+		if (!code) { request->send(400, "application/json", "{\"error\":\"invalid_type\"}"); return; }
+		if (!gridEventStoreRequestTest(code)) { request->send(409, "application/json", "{\"error\":\"test_pending\"}"); return; }
 		request->send(202, "application/json", "{\"schemaVersion\":1,\"accepted\":true}");
 		});
 	registerGridEventsRoot();

@@ -168,12 +168,8 @@ void MQTTStart()
 
 		mqtt.onDisconnect([](AsyncMqttClientDisconnectReason reason) {
 			debugI("Desconectado de servidor MQTT!");
-			gridEventNotificationDisconnected();
 			});
 
-		mqtt.onPublish([](uint16_t packetId) {
-			gridEventNotificationAck(packetId);
-			});
 	}
 	else {
 		usingMQTT = false;

@@ -10,7 +10,7 @@ vm.runInContext(source, context);
 // Genera tres paginas validas; sin parametros, con contexto distinguible para verificar offsets.
 function fixture() {
     const bytes = Buffer.alloc(6144);
-    bytes[0] = 1; bytes.writeUInt32LE(136, 1); bytes[13] = 32; bytes[27] = 3;
+    bytes[0] = 4; bytes.writeUInt32LE(136, 1); bytes[13] = 32; bytes[27] = 3;
     for (let index = 0; index < 33; ++index) bytes.writeFloatLE(index + 0.25, 78 + index * 4);
     for (let index = 0; index < 3; ++index) bytes.writeDoubleLE(10000000000.125 + index, 210 + index * 8);
     bytes.writeUInt16LE(context.gridCrc16(bytes, 30, 204), 234);

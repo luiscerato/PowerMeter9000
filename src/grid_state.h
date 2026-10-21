@@ -1,12 +1,13 @@
 #pragma once
 #include <stdint.h>
 #include <cmath>
+#include "capture_policy.h"
 
 enum class phaseCondition : uint8_t { unknown, normal, undervoltage, overvoltage, phaseLoss };
 enum class gridCondition : uint8_t { unknown, normal, abnormal, outage };
 
 struct phaseLimits {
-    float lowVoltage = 185;
+    float lowVoltage = 190;
     float highVoltage = 250;
 };
 
@@ -15,7 +16,7 @@ struct neutralSettings {
     float hysteresis = 2;
     uint32_t confirmMs = 100;
     uint32_t recoveryMs = 250;
-    bool enabled = false;
+    bool enabled = true;
     uint8_t reserved[3] = {};
 };
 
@@ -24,7 +25,7 @@ struct gridSettings {
     float noVoltage = 20;
     float hysteresis = 5;
     uint32_t lossConfirmMs = 250;
-    uint32_t voltageConfirmMs = 5000;
+    uint32_t voltageConfirmMs = eventPointLimitMs();
     uint32_t recoveryConfirmMs = 250;
     uint8_t capturePages = 5;
     uint8_t reserved[3] = {};
@@ -50,14 +51,14 @@ inline bool validGridSettings(const gridSettings& config) {
               phase.highVoltage > phase.lowVoltage + 2 * config.hysteresis &&
               phase.highVoltage <= 500)) return false;
     }
-    return config.lossConfirmMs >= 20 && config.lossConfirmMs <= 60000 &&
-        config.voltageConfirmMs >= 20 && config.voltageConfirmMs <= 600000 &&
-        config.recoveryConfirmMs >= 20 && config.recoveryConfirmMs <= 60000 &&
-        config.capturePages >= 3 && config.capturePages <= 6 &&
-        config.neutral.highVoltage >= 0.025f && config.neutral.highVoltage <= 409.55f &&
+    return config.lossConfirmMs >= 20 && config.lossConfirmMs <= 2000 &&
+        config.voltageConfirmMs == eventPointLimitMs() &&
+        config.recoveryConfirmMs >= 20 && config.recoveryConfirmMs <= 1000 &&
+        config.capturePages == eventCapturePages &&
+        config.neutral.enabled && config.neutral.highVoltage >= 0.025f && config.neutral.highVoltage <= 409.55f &&
         config.neutral.hysteresis >= 0 && config.neutral.hysteresis < config.neutral.highVoltage &&
-        config.neutral.confirmMs >= 20 && config.neutral.confirmMs <= 600000 &&
-        config.neutral.recoveryMs >= 20 && config.neutral.recoveryMs <= 60000;
+        config.neutral.confirmMs >= 20 && config.neutral.confirmMs <= 2000 &&
+        config.neutral.recoveryMs >= 20 && config.neutral.recoveryMs <= 1000;
 }
 
 // Devuelve el nombre estable del estado confirmado state para JSON.
@@ -100,7 +101,7 @@ inline phaseCondition classifyPhase(float volts, phaseCondition current,
 // Procesa una muestra nueva volts en nowMs; modifica phase y devuelve si confirmo una transicion.
 inline bool updatePhaseState(phaseState& phase, float volts, uint32_t nowMs,
                                 const phaseLimits& limits, const gridSettings& settings) {
-    const auto next = classifyPhase(volts, phase.state, limits, settings);
+    const auto next = classifyPhase(volts, phase.pending == phaseCondition::unknown ? phase.state : phase.pending, limits, settings);
     // No contar muestras ausentes como confirmacion continua de una condicion.
     if (!phase.hasSample || uint32_t(nowMs - phase.lastSampleMs) > 50 || next != phase.pending) {
         phase.pending = next;

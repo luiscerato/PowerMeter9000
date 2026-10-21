@@ -6,7 +6,7 @@
 
 // Canales LSB-first: VR, VS, VT, IR, IS, IT, IN, VN; ocho valores unsigned de 14 bits.
 struct fastRMSData_t {
-    uint16_t timeStamp = 0;
+    uint16_t timeStamp = 0; // Reloj monotono en unidades de 100 us; desborda cada 6.5536 s.
     uint8_t channels[14] = {};
     static constexpr uint16_t unavailable = 0x3FFF;
 

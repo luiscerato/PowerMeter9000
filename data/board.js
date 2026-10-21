@@ -1,10 +1,6 @@
 //Funciones generales
 let boardURL = location; //IP de la placa a la que conectar
 let editBoardURL = false; //Indica que se puede editar la IP porque está en modo localhost
-let nodeUser; //Nombre de usuario para cargar el archivo desde nodered
-let nodePass; //Pass
-let nodeLocalURL;
-let nodeRemoteURL;
 
 if (location.hostname.startsWith("127.0") || location.hostname.startsWith("localhost")) {
     try {
@@ -23,16 +19,6 @@ let board = {}; //Objeto con las funciones
 board.IP = boardIP;
 board.timeout = boardTimeOut;
 board.updateTime = boardUpdateTime;
-
-try {
-    //Cargar configuracion de nodered para leer los archivos de eventos
-    board.nodeUser = localStorage.getItem("nodeUser") || "luis";
-    board.nodePass = localStorage.getItem("nodePass") || "luis";
-    board.nodeLocalURL = localStorage.getItem("nodeLocalURL") || "http://192.168.1.30:1880/endpoint";
-    board.nodeRemoteURL = localStorage.getItem("nodeRemoteURL") || "https://node.luiscerato.com.ar/endpoint";
-} catch (error) {
-    console.log("Error al cargar la nombre de usuario y pass desde localStorage", error);
-}
 
 /*
 	Guarda la dirección de la placa en el almacenamiento local
@@ -76,66 +62,6 @@ board.getWebSocketURL = function (server) {
     let url = socket + server.host;
     if (server.pathname !== "") url += server.pathname;
     return url;
-};
-
-function makeBaseAuth(user, pass) {
-    let token = user + ":" + pass;
-    let hash = "";
-    if (btoa) hash = btoa(token);
-    return "Basic " + hash;
-}
-
-board.loadNodeFileList = function (done = undefined, fail = undefined, async = true) {
-    if (done == undefined && fail == undefined) async = false;
-
-    let response;
-    let url = isServerRemote(board.IP) ? board.nodeRemoteURL : board.nodeLocalURL;
-
-    $.ajax({
-        type: "GET",
-        url: url + "/files",
-        timeout: board.timeout,
-        async: async,
-        cache: false,
-        beforeSend: function (xhr) {
-            xhr.setRequestHeader("Authorization", makeBaseAuth(board.nodeUser, board.nodePass));
-        },
-    })
-        .done((result) => {
-            board.conf = response = result;
-            if (typeof done == "function") done(result);
-        })
-        .fail((result) => {
-            response = result;
-            if (typeof fail == "function") fail(result);
-        });
-    return response;
-};
-
-board.loadNodeFile = function (path, done = undefined, fail = undefined, async = true) {
-    if (done == undefined && fail == undefined) async = false;
-
-    let response;
-    let url = isServerRemote(board.IP) ? board.nodeRemoteURL : board.nodeLocalURL;
-
-    $.ajax({
-        type: "GET",
-        url: url + "/filedata?file=" + encodeURIComponent(path),
-        timeout: board.timeout,
-        async: async,
-        beforeSend: function (xhr) {
-            xhr.setRequestHeader("Authorization", makeBaseAuth(board.nodeUser, board.nodePass));
-        },
-    })
-        .done((result) => {
-            board.conf = response = result;
-            if (typeof done == "function") done(result);
-        })
-        .fail((result) => {
-            response = result;
-            if (typeof fail == "function") fail(result);
-        });
-    return response;
 };
 
 board.ping = function (done, fail, timeout = boardTimeOut) {

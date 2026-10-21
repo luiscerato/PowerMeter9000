@@ -193,6 +193,8 @@ void setup(void)
 	strip.begin();
 	strip.setAllLedsColor(0);
 
+	// Reserva Wave despues de red/web, pero antes de que MeterTask pueda publicar muestras.
+	if (storageManager.isReady()) storageManager.waveEvents().begin();
 	MeterInit();
 
 	Batt.Init();

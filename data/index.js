@@ -62,12 +62,6 @@ function initMeterUI() {
     initHistoryViewer();
 	initGridEventsViewer();
 	initLogsViewer();
-    $("#eventList").html('<div class="text-muted p-2">Seleccione la pestaña Eventos para cargar la lista.</div>');
-    $("#eventRamList").html("");
-    $("#eventChartContainer").html('<div class="text-muted p-3">Sin evento cargado.</div>');
-    $("#eventTestBtn").on("click", createVirtualEvent);
-    $("#eventRampBtn").on("click", createRampTestEvent);
-    $("#eventRefreshBtn").on("click", refreshEventLists);
 
 }
 
@@ -239,29 +233,20 @@ const meterOptionGroups = [
         title: "Perturbaciones de voltaje (Dip / Swell)",
         namespace: "meter",
         fields: [
-            {key: "dipEnabled", label: "Detectar Dip", type: "bool"},
-            {key: "dipVoltage", label: "Umbral Dip", type: "float", unit: "V"},
-            {key: "dipCicles", label: "Confirmación Dip (DIP_CYC)", type: "int"},
-            {key: "swellEnabled", label: "Detectar Swell", type: "bool"},
-            {key: "swellVoltage", label: "Umbral Swell", type: "float", unit: "V"},
-            {key: "swellCicles", label: "Confirmación Swell (SWELL_CYC)", type: "int"},
+            {key: "dipEnabled", label: "Guardar DIP puntuales", type: "bool"},
+            {key: "dipMs", label: "Mínimo DIP", type: "int", unit: "ms"},
+            {key: "swellEnabled", label: "Guardar swell puntuales", type: "bool"},
+            {key: "swellMs", label: "Mínimo swell", type: "int", unit: "ms"},
         ],
     },
     {
         title: "Eventos de corriente",
         namespace: "meter",
         fields: [
-            {key: "overcurrent", label: "Detectar sobrecorriente", type: "bool"},
+            {key: "overcurrent", label: "Guardar sobrecorrientes puntuales", type: "bool"},
             {key: "ocCurrent", label: "Nivel sobrecorriente", type: "float", unit: "A"},
-        ],
-    },
-    {
-        title: "Ventana de captura",
-        namespace: "meter",
-        fields: [
-            {key: "eventPrevSamples", label: "Muestras previas", type: "int"},
-            {key: "eventPostSamples", label: "Muestras posteriores", type: "int"},
-            {key: "eventMaxSamples", label: "Muestras máximas", type: "int"},
+            {key: "ocHyst", label: "Histéresis de corriente", type: "float", unit: "A"},
+            {key: "ocMs", label: "Mínimo sobrecorriente", type: "int", unit: "ms"},
         ],
     },
 ];
@@ -283,11 +268,10 @@ const backupNetworkKeys = [
 ];
 
 const backupGridKeys = ["lowR", "highR", "lowS", "highS", "lowT", "highT", "noVoltage", "hysteresis",
-    "lossConfirmMs", "voltageConfirmMs", "recoveryConfirmMs", "capturePages",
-    "neutralEnabled", "neutralHigh", "neutralHysteresis", "neutralConfirmMs", "neutralRecoveryMs"];
+    "lossConfirmMs", "recoveryConfirmMs",
+    "neutralHigh", "neutralHysteresis", "neutralConfirmMs", "neutralRecoveryMs"];
 const backupHistoryKeys = ["enabled", "groupConfig", "samplePeriodDeciseconds"];
 const backupEnergyKeys = ["rWattH", "rVarH", "rVaH", "sWattH", "sVarH", "sVaH", "tWattH", "tVarH", "tVaH", "WattH", "VarH", "VaH"];
-const backupCaptureDefaults = {eventPrevSamples: 100, eventPostSamples: 100, eventMaxSamples: 300};
 
 // Inicializa la pestaña de opciones.
 function initSettingsUI() {
@@ -295,6 +279,8 @@ function initSettingsUI() {
     $("#btnLoadSettings").click(() => loadSettings("capture", true));
     $("#btnLoadCalibration").click(() => loadSettings("calibration", true));
     $("#btnSaveMeterOptions").click(saveMeterOptions);
+    $("#waveConfigForm").on("submit", saveWaveConfig);
+    $("#waveConfigRefresh").on("click", loadWaveConfig);
     $("#btnSaveCalibration").click(saveCalibrationOptions);
     $("#btnRestoreCalibration").click(restoreDefaultCalibration);
     $("#gridSettingsForm").on("submit", saveGridSettings);
@@ -419,7 +405,7 @@ function renderStorageStatus(status, webFs) {
     const content = {
         metadata: "Mapa de particiones y bitmap de bloques defectuosos",
         history: (history.writtenPages || 0) + " páginas escritas desde el inicio",
-        waveEvents: "Reservada; almacenamiento Wave pendiente",
+        waveEvents: "Oscilografias: un bloque de 128 KiB por captura",
         gridEvents: ((Number(grid.recoveredEvents) || 0) + (Number(grid.acceptedEvents) || 0)) + " eventos conocidos",
         diagnostics: "Registros de diagnóstico",
         webFsA: storageWebFsLabel(webFs, "a"),
@@ -531,7 +517,7 @@ function createGridSettingsHtml() {
     const actions = '<button id="btnLoadGridSettings" type="button" class="btn btn-sm btn-outline-secondary">Recargar</button>' +
         '<button type="submit" class="btn btn-sm btn-success">Guardar</button>';
     let html = '<form id="gridSettingsForm" class="settingsSection">';
-    html += createSettingsHeaderHtml("Estados de red", "Límites confirmados para las fases y los indicadores LED.", actions);
+    html += createSettingsHeaderHtml("Voltajes y estados", "Umbrales compartidos por DIP/swell y estados sostenidos. Los estados se guardan siempre.", actions);
     html += '<div id="gridSettingsStatus" class="settingsStatusLine small text-muted" role="status"></div>';
     html += '<fieldset id="gridSettingsFields" disabled><div class="settingsGroupGrid settingsGroupGridTwo">';
     html += '<div class="settingsGroup"><h3>Límites por fase</h3><div class="table-responsive"><table class="table table-sm align-middle settingsTable"><thead><tr><th>Fase</th><th>Bajo voltaje (V)</th><th>Alto voltaje (V)</th></tr></thead><tbody>';
@@ -547,20 +533,17 @@ function createGridSettingsHtml() {
     const fields = [
         ["noVoltage", "Sin tensión (V)", 1, 100, "0.01"],
         ["hysteresis", "Histéresis (V)", 0, 50, "0.01"],
-        ["lossConfirmMs", "Confirmación sin tensión (ms)", 20, 60000, "1"],
-        ["voltageConfirmMs", "Confirmación bajo/alto voltaje (ms)", 20, 600000, "1"],
-        ["recoveryConfirmMs", "Confirmación normalidad (ms)", 20, 60000, "1"],
-        ["capturePages", "Páginas por evento", 3, 6, "1"],
+        ["lossConfirmMs", "Confirmación sin tensión (ms)", 20, 2000, "1"],
+        ["recoveryConfirmMs", "Confirmación normalidad (ms)", 20, 1000, "1"],
     ];
     fields.forEach(([key, label, min, max, step]) => {
         html += '<div class="settingsField"><label for="grid_' + key + '">' + label + '</label><input class="form-control form-control-sm" required type="number" id="grid_' + key + '" name="' + key + '" min="' + min + '" max="' + max + '" step="' + step + '"></div>';
     });
-    html += '</div><div class="settingsGroup"><h3>Neutro-tierra</h3>';
-    html += '<div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="neutralEnabled" id="grid_neutralEnabled"><label class="form-check-label" for="grid_neutralEnabled">Capturar tensión alta y recuperación</label></div>';
+    html += '<div id="gridCapturePolicy" class="small text-muted mt-2"></div></div><div class="settingsGroup"><h3>Neutro-tierra</h3>';
     const neutralFields = [["neutralHigh", "Umbral (V)", 0.025, 409.55, "0.025"],
         ["neutralHysteresis", "Histéresis (V)", 0, 409.525, "0.025"],
-        ["neutralConfirmMs", "Confirmación de tensión alta (ms)", 20, 600000, "1"],
-        ["neutralRecoveryMs", "Confirmación de recuperación (ms)", 20, 60000, "1"]];
+        ["neutralConfirmMs", "Confirmación de tensión alta (ms)", 20, 2000, "1"],
+        ["neutralRecoveryMs", "Confirmación de recuperación (ms)", 20, 1000, "1"]];
     neutralFields.forEach(([key, label, min, max, step]) => {
         html += '<div class="settingsField"><label for="grid_' + key + '">' + label + '</label><input class="form-control form-control-sm" required type="number" id="grid_' + key + '" name="' + key + '" min="' + min + '" max="' + max + '" step="' + step + '"></div>';
     });
@@ -798,6 +781,7 @@ function createSettingsHeaderHtml(title, description, actions) {
 
 // Completa el formulario con values recibidos del medidor.
 function fillGridSettings(values) {
+    $("#gridCapturePolicy").text("Máximo puntual: " + (values.pointLimitMs / 1000).toFixed(2) + " s · " + values.capturePages + " páginas · 1 s posterior. Si persiste, se registra como estado sostenido.");
     $("#gridSettingsForm input[name]").each(function () {
         if (this.type === "checkbox") $(this).prop("checked", Boolean(Number(values[this.name])));
         else $(this).val(values[this.name]);
@@ -823,7 +807,6 @@ function saveGridSettings(event) {
     const form = document.getElementById("gridSettingsForm");
     if (!form.reportValidity()) return;
     const values = Object.fromEntries(new FormData(form));
-    values.neutralEnabled = document.getElementById("grid_neutralEnabled").checked ? 1 : 0;
     const absence = Number(values.noVoltage), hysteresis = Number(values.hysteresis);
     if (Number(values.neutralHysteresis) >= Number(values.neutralHigh)) {
         $("#gridSettingsStatus").text("La histéresis de neutro debe ser menor que el umbral."); return;
@@ -850,8 +833,35 @@ function createMeterSettingsHtml() {
         '<button class="btn btn-sm btn-success" id="btnSaveMeterOptions" type="button" disabled>Guardar</button>';
     let html = '<div class="settingsSection">' + createSettingsHeaderHtml("Captura de eventos", "Umbrales Dip/Swell, sobrecorriente y tamaño de las capturas.", actions);
     html += '<div class="settingsStatus settingsStatusLine small text-muted" role="status"></div>';
-    html += '<fieldset id="captureFields" disabled><div class="settingsGroupGrid">' + createOptionGroupsHtml(meterOptionGroups, "meter") + "</div></fieldset></div>";
+    html += '<fieldset id="captureFields" disabled><div class="settingsGroupGrid">' + createOptionGroupsHtml(meterOptionGroups, "meter") + "</div></fieldset>";
+    html += '<form id="waveConfigForm" class="border-top mt-3 pt-2"><strong class="small">Oscilografia NAND</strong><div class="d-flex flex-wrap gap-2 align-items-end mt-2"><label class="small">Historial previo (ms)<select id="wavePreMs" class="form-select form-select-sm">' +
+        [48,96,144,192,240,288].map(value => '<option value="' + value + '">' + value + '</option>').join("") +
+        '</select></label><button class="btn btn-sm btn-success" type="submit">Guardar</button><button id="waveConfigRefresh" class="btn btn-sm btn-outline-secondary" type="button">Recargar</button></div><div id="waveConfigStatus" class="small text-muted mt-2" role="status"></div></form></div>';
     return html;
+}
+
+// Consulta reserva y contadores Wave, sin descargar muestras; sin parametros.
+async function loadWaveConfig() {
+    try {
+        const response = await fetch(board.IP + "/wave/config", {cache: "no-store"});
+        if (!response.ok) throw Error("No se pudo leer la configuracion Wave.");
+        const value = await response.json();
+        $("#wavePreMs").val(value.preMs);
+        $("#waveConfigStatus").text((value.enabled ? "Activa" : "No disponible") + " · Previo efectivo: " + value.actualPreMs +
+            " ms · Buffers: " + value.reservedBytes + " B (heap de palabras) · Confirmadas: " + value.committed + " · Huerfanas: " + value.orphans +
+            " · Perdidas: " + value.gaps + " · Disparos descartados: " + value.droppedTriggers + " · Fallos NAND: " + value.failedWrites +
+            " · Bloques libres: " + value.erasedBlocks + " · Pendientes: " + value.pendingLinks);
+    } catch (error) { $("#waveConfigStatus").text(error.message); }
+}
+
+// Persiste la prehistoria del formulario; event cancela la navegacion y muestra que requiere reinicio.
+async function saveWaveConfig(event) {
+    event.preventDefault();
+    try {
+        const response = await fetch(board.IP + "/wave/config", {method: "POST", body: new URLSearchParams({preMs: $("#wavePreMs").val()})});
+        if (!response.ok) throw Error("No se pudo guardar Wave.");
+        $("#waveConfigStatus").text("Guardado. La reserva nueva se aplica al reiniciar la placa.");
+    } catch (error) { $("#waveConfigStatus").text(error.message); }
 }
 
 // Crea el bloque compacto de calibración.
@@ -921,7 +931,8 @@ function createOptionInputHtml(field, prefix) {
         return '<div class="form-check form-switch settingsSwitch"><input class="form-check-input optionInput" type="checkbox" id="' + id + '" data-key="' + field.key + '" data-type="' + field.type + '"><label class="form-check-label" for="' + id + '">' + field.label + "</label></div>";
     }
     let unit = field.unit ? '<span class="input-group-text">' + field.unit + "</span>" : "";
-    return '<div class="settingsField settingsFieldStack"><label for="' + id + '">' + field.label + '</label><div class="input-group input-group-sm"><input class="form-control optionInput" type="text" id="' + id + '" data-key="' + field.key + '" data-type="' + field.type + '">' + unit + "</div></div>";
+    const attributes = prefix !== "meter" ? 'type="text"' : field.unit === "ms" ? 'type="number" min="10" max="2000" step="10"' : 'type="number" min="0" max="' + (field.unit === "A" ? 163.82 : 500) + '" step="any"';
+    return '<div class="settingsField settingsFieldStack"><label for="' + id + '">' + field.label + '</label><div class="input-group input-group-sm"><input class="form-control optionInput" ' + attributes + ' id="' + id + '" data-key="' + field.key + '" data-type="' + field.type + '">' + unit + "</div></div>";
 }
 
 // Devuelve el id de un input de opción.
@@ -950,7 +961,7 @@ function loadSettings(section = $("#settingsTabs .active").data("section"), forc
                 const values = await readOptions(section === "capture" ? "meter" : "ADE9000",
                     section === "capture" ? getMeterOptionKeys() : getCalibrationKeys());
                 if (values.error) throw new Error(values.error);
-                if (section === "capture") fillMeterOptions(values);
+                if (section === "capture") { fillMeterOptions(values); await loadWaveConfig(); }
                 else fillCalibrationOptions(values);
                 $("#" + section + "Fields").prop("disabled", false);
                 $(section === "capture" ? "#btnSaveMeterOptions" : "#btnSaveCalibration").prop("disabled", false);
@@ -1006,7 +1017,7 @@ function validateBackupSection(section, values) {
     if (unknownKeys.length) throw new Error("Contiene campos no reconocidos: " + unknownKeys.join(", ") + ".");
     if (keys.some((key) => values[key] === null || !["string", "number", "boolean"].includes(typeof values[key])))
         throw new Error("Contiene un valor con formato inválido.");
-    if (section === "grid" && !backupGridKeys.filter((key) => !key.startsWith("neutral")).every((key) => Object.prototype.hasOwnProperty.call(values, key)))
+    if (section === "grid" && !backupGridKeys.every((key) => Object.prototype.hasOwnProperty.call(values, key)))
         throw new Error("Faltan límites o tiempos de red.");
     if (section === "history" && (!backupHistoryKeys.every((key) => Object.prototype.hasOwnProperty.call(values, key)) ||
         ![true, false, 0, 1, "true", "false", "0", "1"].includes(values.enabled) ||
@@ -1015,6 +1026,9 @@ function validateBackupSection(section, values) {
         throw new Error("La configuración histórica no es válida.");
     if (section === "energy" && keys.some((key) => !Number.isFinite(Number(values[key]))))
         throw new Error("Los totalizadores deben ser números finitos.");
+    if (section === "capture" && keys.some((key) => ["dipMs", "swellMs", "ocMs"].includes(key) &&
+        (!Number.isInteger(Number(values[key])) || Number(values[key]) < 10 || Number(values[key]) > 2000 || Number(values[key]) % 10)))
+        throw new Error("Confirmaciones de captura: 10 a 2000 ms, en pasos de 10 ms.");
     if (section === "grid" && keys.some((key) => !Number.isFinite(Number(values[key]))))
         throw new Error("Los ajustes de red deben ser numéricos.");
     if (section === "calibration" && keys.some((key) => ["neutralRms", "neutralFast"].includes(key) ?
@@ -1040,12 +1054,11 @@ async function readBackupSection(section) {
         const response = await readOptions(namespace, keys);
         const missingKeys = keys.filter((key) => !Object.prototype.hasOwnProperty.call(response, key) || response[key] === "key no existe");
         const invalidKeys = keys.filter((key) => response[key] === "invalid type");
-        defaultsUsed = section === "capture" ? missingKeys.filter((key) => Object.prototype.hasOwnProperty.call(backupCaptureDefaults, key)) : [];
-        const unresolvedKeys = missingKeys.filter((key) => !defaultsUsed.includes(key));
+        const unresolvedKeys = missingKeys;
         if (invalidKeys.length || unresolvedKeys.length)
             throw new Error("Opciones ausentes o inválidas: " + [...unresolvedKeys, ...invalidKeys].join(", ") + ".");
         values = Object.fromEntries(keys.map((key) => {
-            const value = defaultsUsed.includes(key) ? backupCaptureDefaults[key] : response[key];
+            const value = response[key];
             return [key, section === "calibration" && !["neutralRms", "neutralFast"].includes(key) ? toHex32(value) : value];
         }));
     } else if (section === "grid") {
@@ -1081,8 +1094,7 @@ async function exportSettingsBackup() {
             const row = $("<li>").text(label + ": leyendo...").appendTo(status);
             const result = await readBackupSection(key);
             sections[key] = result.values;
-            const fallbackNames = result.defaultsUsed.map((field) => field === "eventPrevSamples" ? "muestras previas (100)" : field === "eventPostSamples" ? "muestras posteriores (100)" : "muestras máximas (300)");
-            row.text(label + ": lista." + (fallbackNames.length ? " Se usaron valores predeterminados no guardados: " + fallbackNames.join(", ") + "." : ""));
+            row.text(label + ": lista.");
         }
         const backup = {format: "pm9000-config", version: 1, exportedAt: new Date().toISOString(), sections};
         const blobUrl = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], {type: "application/json"}));
@@ -1193,7 +1205,7 @@ function fillMeterOptions(values) {
         group.fields.forEach((field) => {
             const input = $("#" + getOptionInputId("meter", field.key));
             if (field.type == "bool") input.prop("checked", Number(values[field.key]) != 0);
-            else input.val(values[field.key]);
+            else input.val(field.scale ? Number(values[field.key]) * field.scale : values[field.key]);
         });
     });
 }
@@ -1208,9 +1220,11 @@ function fillCalibrationOptions(values) {
 
 // Guarda las opciones del medidor y las aplica.
 function saveMeterOptions() {
+    const values = collectMeterOptionValues();
+    if (!values) return;
     setSettingsStatus("Guardando opciones de captura...", false, "capture");
     $("#btnSaveMeterOptions, #btnLoadSettings, #captureFields").prop("disabled", true);
-    writeOptions("meter", collectMeterOptionValues())
+    writeOptions("meter", values)
         .then(() => $.ajax({type: "POST", url: board.IP + "/options/reload", timeout: Math.max(board.timeout, 3000)}))
         .done(() => {
             setSettingsStatus("Opciones de captura guardadas y aplicadas.", false, "capture");
@@ -1245,13 +1259,20 @@ function restoreDefaultCalibration() {
 // Recolecta los valores de opciones del medidor.
 function collectMeterOptionValues() {
     let values = {};
+    let valid = true;
     meterOptionGroups.forEach((group) => {
         group.fields.forEach((field) => {
             const input = $("#" + getOptionInputId("meter", field.key));
-            values[field.key] = field.type == "bool" ? (input.prop("checked") ? "1" : "0") : input.val();
+            const value = field.scale ? Number(input.val()) / field.scale : input.val();
+            if (field.unit === "ms" && (!Number.isInteger(Number(value)) || value < 10 || value > 2000 || value % 10)) valid = false;
+            if (field.unit === "V" && (input.val().trim() === "" || !Number.isFinite(Number(value)) || value < 0 || value > 500)) valid = false;
+            if (field.unit === "A" && (input.val().trim() === "" || !Number.isFinite(Number(value)) || value < 0 || value > 163.82)) valid = false;
+            values[field.key] = field.type == "bool" ? (input.prop("checked") ? "1" : "0") : value;
         });
     });
-    return values;
+    if (Number(values.ocHyst) >= Number(values.ocCurrent) || Number(values.ocCurrent) <= 0) valid = false;
+    if (!valid) setSettingsStatus("Revise los umbrales (0–500 V / 0–163,82 A) y los tiempos (10–2000 ms, pasos de 10 ms).", true, "capture");
+    return valid ? values : null;
 }
 
 // Recolecta los valores de calibración.
@@ -1288,220 +1309,6 @@ function setSettingsStatus(message, isError = false, section = $("#settingsTabs 
     $("#settings_" + section + " .settingsStatus").text(message).toggleClass("text-danger", isError).toggleClass("text-muted", !isError);
 }
 
-// Inicializa el grafico de eventos cuando sus librerias estan disponibles.
-function initEventChart() {
-    if (typeof Scope == "undefined" || typeof CanvasJS == "undefined") {
-        showEventError("No se pudo cargar el modulo de eventos.");
-        return false;
-    }
-    Scope.stop();
-    Scope.begin("eventChartContainer", null, "event");
-    return true;
-}
-
-function meterLoadEventsList() {
-    if (!initEventChart()) return;
-    $("#eventList").html('<div class="text-muted p-2">Cargando eventos...</div>');
-    board.loadNodeFileList(function (res) {
-        console.log("Lista de archivos cargada!");
-        res = parseNodeFileList(res);
-        if (!Array.isArray(res)) {
-            showEventError("Node-RED no devolvió una lista de eventos válida.");
-            return;
-        }
-
-        let events = [];
-        res.forEach((path) => {
-            //Path: /share/PowerMeterLogs/ACevent_1970-7-21_13-29-36.csv
-            let data = path.replaceAll("/share/PowerMeterLogs/", "");
-            let fase = "",
-                type = "",
-                time,
-                format = "csv";
-            if (data.endsWith(".json")) {
-                data = data.split(".");
-                time = data[0];
-                fase = data[1];
-                type = data[2];
-                format = "json";
-            } else if (data.endsWith(".csv")) {
-                data = data.replaceAll("ACevent_", "");
-                time = data.split(".")[0];
-            }
-            else 
-                return; //No es un archivo de evento válido (se rompía con archivos que no eran .json o .csv)
-
-            let [datePart, timePart] = time.split(".")[0].split("_");
-            if (!datePart || !timePart) return;
-            let [year, month, day] = datePart.split("-").map(Number); // "7" → 7
-            let [hours, minutes, seconds] = timePart.split("-").map(Number);
-            const date = new Date(year, month - 1, day, hours, minutes, seconds);
-            if (isNaN(date.getTime())) return;
-
-            events.push({path: path, date: date, phase: fase, type: type});
-        });
-        events.sort((a, b) => b.date - a.date);
-
-        if (events.length == 0) {
-            showEventError("No se encontraron archivos de eventos válidos.");
-            return;
-        }
-
-        let list = "";
-        events.forEach((event) => {
-            let detail = event.phase.length > 0 ? " | " + event.phase : "";
-            if (detail.length > 0 && event.type.length > 0) detail += " | ";
-            detail += event.type;
-            list += '<a href="' + event.path + '" class="list-group-item">' + event.date.toLocaleString() + detail + "</a>";
-        });
-
-        $("#eventList").html("<ul class='list-group'>" + list + "</ul>");
-
-        $("#eventList").off("click", ".list-group-item");
-        $("#eventList").on("click", ".list-group-item", function (e) {
-            e.preventDefault();
-            const path = $(this).attr("href"); // Si el href tenía la ruta completa
-            board.loadNodeFile(
-                path,
-                function (res) {
-                    try {
-                        if (typeof Scope == "undefined" || !Scope.chart) throw new Error("gráfico no inicializado");
-                        let event = meterParseEventFile(res);
-                        Scope.loadEventData(event);
-                    }
-                    catch (error) {
-                        showEventError("No se pudo interpretar el archivo de evento: " + error.message);
-                    }
-                },
-                function () {
-                    showEventError("Fallo al leer el archivo de evento.");
-                }
-            );
-        });
-    }, function (error) {
-        showEventError("No se pudo conectar con Node-RED para cargar la lista de eventos." + getAjaxErrorText(error));
-    });
-}
-
-// Actualiza los eventos persistidos en Node-RED y los eventos temporales de RAM.
-function refreshEventLists() {
-    loadRamEventsList();
-    meterLoadEventsList();
-}
-
-// Genera un evento virtual en el firmware para probar el flujo Manager.
-function createVirtualEvent() {
-    $("#eventRamStatus").text("Iniciando captura de evento...").removeClass("text-danger");
-    $.ajax({type: "POST", url: board.IP + "/events/test", timeout: board.timeout})
-        .done((event) => {
-            renderRamEventStatus("Captura iniciada. Esperando cierre...");
-            setTimeout(loadRamEventsList, 1800);
-        })
-        .fail((error) => {
-            renderRamEventStatus("No se pudo generar el evento virtual." + getAjaxErrorText(error), true);
-        });
-}
-
-// Genera buffers sinteticos sin capturar el ADE; sin parametros.
-function createRampTestEvent() {
-    $("#eventRampBtn").prop("disabled", true);
-    renderRamEventStatus("Generando rampa de prueba en RAM...");
-    $.ajax({type: "POST", url: board.IP + "/events/test", data: {pattern: "ramp"}, cache: false, timeout: board.timeout})
-        .done((data) => {
-            renderRamEventStatus("Rampa generada: " + data.eventId);
-            setTimeout(loadRamEventsList, 500);
-        })
-        .fail((error) => {
-            const reason = error.responseJSON && error.responseJSON.reason;
-            renderRamEventStatus("No se pudo generar la rampa." + (reason ? " " + reason : getAjaxErrorText(error)), true);
-        })
-        .always(() => { $("#eventRampBtn").prop("disabled", false); });
-}
-
-// Carga la lista de eventos retenidos en RAM por el firmware.
-function loadRamEventsList() {
-    $("#eventRamStatus").text("Cargando eventos RAM...").removeClass("text-danger");
-    $.ajax({type: "GET", url: board.IP + "/events", timeout: board.timeout})
-        .done((data) => {
-            renderRamEventsList(data);
-        })
-        .fail((error) => {
-            renderRamEventStatus("No se pudo leer /events." + getAjaxErrorText(error), true);
-        });
-}
-
-// Muestra un estado corto del bloque de eventos RAM.
-// message: texto a mostrar. isError: indica si debe mostrarse como error.
-function renderRamEventStatus(message, isError = false) {
-    $("#eventRamStatus").text(message).toggleClass("text-danger", isError).toggleClass("text-muted", !isError);
-}
-
-// Renderiza los eventos RAM disponibles para descarga local.
-// data: respuesta de /events.
-function renderRamEventsList(data) {
-    if (!data || !Array.isArray(data.events)) {
-        renderRamEventStatus("La placa no devolvio una lista valida.", true);
-        return;
-    }
-    renderRamEventStatus(data.events.length + " evento(s) RAM disponible(s).");
-    if (data.events.length == 0) {
-        $("#eventRamList").html('<div class="small text-muted">No hay eventos RAM.</div>');
-        return;
-    }
-
-    let html = '<div class="list-group small">';
-    data.events.forEach((event) => {
-        const id = escapeHtml(event.eventId || "");
-        const fastRms = event.fastRms || {};
-        const wave = event.wave || {};
-        const links = event.links || {};
-        const fastRmsUrl = links.fastRms ? board.IP + links.fastRms : "";
-        const waveUrl = links.wave ? board.IP + links.wave : "";
-        html += '<div class="list-group-item p-2">';
-        html += '<div class="fw-semibold">' + id + " - " + escapeHtml(event.type || "evento") + "</div>";
-        html += '<div>Fast RMS: ' + (fastRms.available ? "si" : "no") + (fastRms.available ? " (" + (fastRms.sampleCount || 0) + " muestras)" : " (" + escapeHtml(fastRms.reason || "sin detalle") + ")") + "</div>";
-        html += '<div>Wave: ' + (wave.available ? "si" : "no") + (wave.available ? " (" + (wave.samplesPerChannel || 0) + " muestras/canal)" : " (" + escapeHtml(wave.reason || "sin detalle") + ")") + "</div>";
-        html += '<div class="d-flex flex-wrap gap-1 mt-1">';
-        if (fastRms.available && fastRmsUrl) html += '<a class="btn btn-sm btn-outline-primary py-0" href="' + escapeHtml(fastRmsUrl) + '" target="_blank">Fast RMS</a>';
-        if (wave.available && waveUrl) html += '<a class="btn btn-sm btn-outline-primary py-0" href="' + escapeHtml(waveUrl) + '" target="_blank">Wave</a>';
-        html += '<button class="btn btn-sm btn-outline-danger py-0 event-clear-btn" data-event-id="' + id + '">Borrar</button>';
-        html += "</div></div>";
-    });
-    html += "</div>";
-    $("#eventRamList").html(html);
-    $("#eventRamList").off("click", ".event-clear-btn");
-    $("#eventRamList").on("click", ".event-clear-btn", function () {
-        clearRamEvent($(this).data("event-id"));
-    });
-}
-
-// Borra de RAM un evento descargado o de prueba.
-// eventId: id del evento a borrar.
-function clearRamEvent(eventId) {
-    if (!eventId) return;
-    renderRamEventStatus("Borrando evento " + eventId + "...");
-    $.ajax({type: "POST", url: board.IP + "/events/clear", data: {eventId}, timeout: board.timeout})
-        .done(() => {
-            renderRamEventStatus("Evento borrado: " + eventId);
-            loadRamEventsList();
-        })
-        .fail((error) => {
-            renderRamEventStatus("No se pudo borrar el evento." + getAjaxErrorText(error), true);
-        });
-}
-
-// Convierte la respuesta de Node-RED en una lista de archivos.
-// value: respuesta recibida desde Node-RED.
-function parseNodeFileList(value) {
-    if (Array.isArray(value)) return value;
-    if (typeof value != "string") return value;
-    try {
-        return JSON.parse(value);
-    } catch (error) {
-        return value;
-    }
-}
-
 // Devuelve un detalle corto de error Ajax para mostrar al usuario.
 // error: objeto de error recibido desde jQuery.
 function getAjaxErrorText(error) {
@@ -1509,37 +1316,10 @@ function getAjaxErrorText(error) {
     return " Código: " + error.status + ".";
 }
 
-// Muestra un error en la pestaña de eventos.
-// message: texto que se muestra al usuario.
-function showEventError(message) {
-    $("#eventList").html('<div class="alert alert-warning m-2">' + escapeHtml(message) + "</div>");
-    $("#eventChartContainer").html('<div class="text-muted p-3">Sin evento cargado.</div>');
-}
-
 // Escapa texto para insertarlo como HTML seguro.
 // text: valor a convertir en texto seguro.
 function escapeHtml(text) {
     return String(text).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char]));
-}
-
-function meterParseEventFile(data) {
-    data = JSON.parse(data);
-    if (!data || !Array.isArray(data.datos)) throw new Error("formato inválido");
-    let resp = {};
-    resp.eventInfo = data.eventInfo || {};
-    resp.waves = {t: [], vr: [], vs: [], vt: [], ir: [], is: [], it: [], in: []};
-
-    data.datos.forEach((s) => {
-        resp.waves.t.push(s[0]);
-        resp.waves.vr.push(s[1]);
-        resp.waves.vs.push(s[2]);
-        resp.waves.vt.push(s[3]);
-        resp.waves.ir.push(s[4]);
-        resp.waves.is.push(s[5]);
-        resp.waves.it.push(s[6]);
-        resp.waves.in.push(s[7]);
-    });
-    return resp;
 }
 
 // Formatea la antigüedad de un estado; ageMs es el tiempo transcurrido en milisegundos.

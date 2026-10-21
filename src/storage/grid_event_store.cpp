@@ -1,5 +1,6 @@
 #include "grid_event_store.h"
 #include "store_format_guard.h"
+#include "wave_event_store.h"
 #include "../manager_api.h"
 #include "../grid_events.h"
 #include <algorithm>
@@ -9,7 +10,7 @@
 
 static GridEventStore* mountedGridEventStore = nullptr;
 static constexpr uintptr_t eraseCompletionContext = GridEventFormat::maxPagesPerEvent;
-static volatile bool gridTestRequested = false;
+static std::atomic<uint8_t> gridTestRequested{0};
 constexpr uint32_t GridEventStore::captureArmMs;
 
 GridEventStore::GridEventStore(NandPartition& gridPartition) : partition(gridPartition) {}
@@ -32,6 +33,8 @@ bool GridEventStore::begin()
 {
 	if (!partition.isEnabled()) return false;
 	if (capture.pages) free(capture.pages);
+	capture = Capture{};
+	storeMetrics = GridEventStoreMetrics{};
 	if (!completionQueue)
 		completionQueue = xQueueCreateStatic(GridEventFormat::maxPagesPerEvent + 1,
 			sizeof(NandIoResult), completionQueueData, &completionQueueStorage);
@@ -42,6 +45,9 @@ bool GridEventStore::begin()
 	if (!scanMutex) scanMutex = xSemaphoreCreateMutex();
 	if (!completionQueue || !recoveryQueue || !scanMutex || !recoverCursor()) return false;
 	for (auto& candidate : candidates) candidate = Candidate{};
+	for (auto& point : points) point = pointTracker{};
+	deferredRead = deferredCount = 0;
+	memset(currentStartedMs, 0, sizeof(currentStartedMs));
 	neutralState = phaseState{};
 	neutralPreviousVoltage = NAN;
 	capture = Capture{};
@@ -49,7 +55,7 @@ bool GridEventStore::begin()
 	storeMetrics.captureActive = false;
 	storeMetrics.rootPending = false;
 	storeMetrics.nextEventId = nextEventId;
-	gridTestRequested = false;
+	gridTestRequested = 0;
 	mountedGridEventStore = this;
 	return true;
 }
@@ -61,22 +67,38 @@ void GridEventStore::observe(const phaseState& r, const phaseState& s, const pha
 	StoreFormatGuard guard(formatPaused, activeCalls);
 	if (!guard) return;
 	poll();
-	if (gridTestRequested) {
-		gridTestRequested = false;
-		Candidate test;
-		test.active = true;
-		test.subject = GridEventFormat::Subject(esp_random() % 3U);
-		test.previousState = uint8_t(phaseCondition::normal);
-	const uint8_t states[] = { uint8_t(phaseCondition::undervoltage), uint8_t(phaseCondition::overvoltage), uint8_t(phaseCondition::phaseLoss) };
-		test.currentState = states[esp_random() % 3U];
-		test.startedMs = sampleMs - captureArmMs;
-		test.previousVoltage = 230.0f;
-		test.currentVoltage = test.currentState == uint8_t(phaseCondition::phaseLoss) ? 0.0f :
-		test.currentState == uint8_t(phaseCondition::undervoltage) ? 170.0f : 260.0f;
-		snapshotSettings(test.settings, settings);
-		snapshotMeter(test.meter, meter);
-		armCapture(test, sampleMs);
-		confirmCandidate(test, sampleMs - 1000U, sampleMs);
+	bool testIdle = !capture.active;
+	for (const auto& point : points) testIdle &= !point.active;
+	if (gridTestRequested.load() && testIdle) {
+		const uint8_t testType = gridTestRequested.exchange(0);
+		if (testType == 1 || testType == 5) {
+			Candidate test;
+			test.active = true;
+			test.subject = GridEventFormat::Subject(esp_random() % 3U);
+			test.previousState = uint8_t(phaseCondition::normal);
+			const uint8_t states[] = { uint8_t(phaseCondition::undervoltage), uint8_t(phaseCondition::overvoltage), uint8_t(phaseCondition::phaseLoss) };
+			test.currentState = states[esp_random() % 3U];
+			test.sourceFlags = GridEventFormat::synthetic;
+			test.startedMs = sampleMs - captureArmMs;
+			test.previousVoltage = 230.0f;
+			test.currentVoltage = test.currentState == uint8_t(phaseCondition::phaseLoss) ? 0.0f :
+				test.currentState == uint8_t(phaseCondition::undervoltage) ? 170.0f : 260.0f;
+			snapshotSettings(test.settings, settings);
+			test.capturePages = settings.capturePages;
+			snapshotMeter(test.meter, meter);
+			armCapture(test, sampleMs);
+			confirmCandidate(test, sampleMs - 1000U, sampleMs);
+		}
+		if (testType != 1) {
+			eventCaptureConfig config;
+			meterGetEventCaptureConfig(config);
+			const uint8_t point = testType == 3 ? 3 : testType == 4 ? 6 : 0;
+			const float value = point == 6 ? meter.phaseR.FastIrms : meter.phaseR.FastVrms;
+			// Inyecta solo descriptores artificiales; las muestras FAST siguen siendo reales.
+			observePoint(point, true, value, meter, config, settings, sampleMs);
+			observePoint(point, false, value, meter, config, settings, sampleMs);
+			if (capture.active) capture.root.timeStatus |= GridEventFormat::synthetic;
+		}
 	}
 	const phaseState* phases[] = { &r, &s, &t };
 	const float voltages[] = { vr, vs, vt };
@@ -135,6 +157,7 @@ void GridEventStore::startStartupCapture(const phaseState* phases[3], gridCondit
 	candidate.sourceFlags = reason == ESP_RST_BROWNOUT ? GridEventFormat::startupBrownout :
 		reason == ESP_RST_POWERON ? GridEventFormat::startupPowerOn : GridEventFormat::startupRecovered;
 	snapshotSettings(candidate.settings, settings);
+	candidate.capturePages = settings.capturePages;
 	snapshotMeter(candidate.meter, meter);
 	armCapture(candidate, sampleMs);
 	confirmCandidate(candidate, sampleMs, sampleMs);
@@ -202,7 +225,15 @@ void GridEventStore::poll()
 			blockHasData[currentBlock] = true;
 		}
 	}
-	if (!capture.active) return;
+	if (!capture.active) {
+		if (deferredCount) {
+			const deferredRecord record = deferred[deferredRead];
+			deferredRead = (deferredRead + 1U) % 8U;
+			--deferredCount;
+			confirmCandidate(record.candidate, record.previousStartedMs, millis());
+		}
+		return;
+	}
 	if (capture.failed) {
 		bool requestPending = capture.erasePending;
 		for (uint8_t page = 0; page < capture.pageCount; ++page) requestPending |= capture.pagePending[page];
@@ -211,27 +242,40 @@ void GridEventStore::poll()
 	}
 	storeMetrics.captureActive = true;
 	storeMetrics.rootPending = capture.rootAssigned && !capture.rootWritten;
+	// La raiz de estado es inmutable; una raiz puntual necesita su duracion y extremo finales.
+	const bool windowEnded = int32_t(millis() - capture.endMs) >= 0;
+	bool waiting = hasPendingCandidatesInWindow();
+	for (const auto& point : points)
+		waiting |= point.active && !point.sustained && point.captured && point.captureId == capture.eventId;
+	const bool canClose = windowEnded || (!waiting && int32_t(millis() - capture.closeAfterMs) >= 0);
+	if (!capture.rootAssigned) {
+		if (canClose || !waiting) { limitPoints(); finishCapture(false); }
+		return;
+	}
+	if (GridEventFormat::isPointEvent(capture.root.subjectAndStates) && !canClose) return;
+	if (canClose && !capture.rootSubmitted) {
+		uint8_t usedPages = GridEventFormat::minPagesPerEvent;
+		for (uint8_t page = 0; page + 1 < capture.pageCount; ++page)
+			if (capture.continuationSampleCount[page] || capture.transitionCountPerPage[page]) usedPages = std::max<uint8_t>(usedPages, page + 2);
+		capture.pageCount = usedPages;
+	}
 	if (capture.rootAssigned && !capture.rootSubmitted && ensureWritableBlock()) {
 		prepareRootPage();
 		capture.rootSubmitted = submitPage(0);
 	}
 	if (!capture.rootWritten) return;
-	const bool windowEnded = int32_t(millis() - capture.endMs) >= 0;
 	bool hasCompletedPage = false;
 	for (uint8_t page = 1; page < capture.pageCount; ++page)
-		hasCompletedPage |= (windowEnded || capture.continuationSampleCount[page - 1] >= GridEventFormat::continuationSamples) &&
-			!capture.pagePending[page] && !capture.pageWritten[page] && !hasPendingCandidatesInPage(page - 1U);
+		hasCompletedPage |= (canClose || (page + 1 < capture.pageCount && capture.continuationSampleCount[page - 1] >= GridEventFormat::continuationSamples)) &&
+			!capture.pagePending[page] && !capture.pageWritten[page] && (canClose || !hasPendingCandidatesInPage(page - 1U));
 	if (hasCompletedPage) {
 		prepareContinuationPages();
 		for (uint8_t page = 1; page < capture.pageCount; ++page)
-			if ((windowEnded || capture.continuationSampleCount[page - 1] >= GridEventFormat::continuationSamples) &&
-				!hasPendingCandidatesInPage(page - 1U))
+			if ((canClose || (page + 1 < capture.pageCount && capture.continuationSampleCount[page - 1] >= GridEventFormat::continuationSamples)) &&
+				(canClose || !hasPendingCandidatesInPage(page - 1U)))
 				submitPage(page);
 	}
-	bool samplesComplete = true;
-	for (uint8_t page = 0; page + 1 < capture.pageCount; ++page)
-		samplesComplete &= capture.continuationSampleCount[page] >= GridEventFormat::continuationSamples;
-	if ((!windowEnded && !samplesComplete) || hasPendingCandidatesInWindow()) return;
+	if (!canClose) return;
 	bool pagesWritten = true;
 	for (uint8_t page = 1; page < capture.pageCount; ++page) pagesWritten &= capture.pageWritten[page];
 	if (pagesWritten) finishCapture(true);
@@ -297,6 +341,7 @@ void GridEventStore::observePhase(uint8_t index, const phaseState& phase, float 
 			candidate.previousVoltage = observedVoltages[index];
 			candidate.currentVoltage = voltage;
 			snapshotSettings(candidate.settings, settings);
+			candidate.capturePages = settings.capturePages;
 			snapshotMeter(candidate.meter, meter);
 		}
 		confirmCandidate(candidate, observedStartedMs[index], sampleMs);
@@ -328,6 +373,7 @@ void GridEventStore::discardCandidate(uint8_t index)
 	candidates[index] = Candidate{};
 	if (!capture.active || capture.rootAssigned) return;
 	for (const auto& candidate : candidates) if (candidate.active) return;
+	for (const auto& point : points) if (point.active && !point.sustained) return;
 	++storeMetrics.discardedCandidates;
 	finishCapture(false);
 }
@@ -357,14 +403,12 @@ void GridEventStore::observeNeutral(const meterValues& meter, const gridSettings
 		candidate.previousState = uint8_t(previous);
 		candidate.currentState = uint8_t(neutralState.pending);
 		candidate.startedMs = neutralState.pendingSinceMs;
+		candidate.startedUs = meterFastTimeUs(candidate.startedMs);
+		waveCaptureTrigger(candidate.startedUs);
 		candidate.previousVoltage = neutralPreviousVoltage;
 		candidate.currentVoltage = volts;
 		snapshotSettings(candidate.settings, settings);
-		// En raices de neutro estos campos describen su umbral y tiempos, sin agrandar el formato.
-		candidate.settings.noVoltage = config.highVoltage;
-		candidate.settings.hysteresis = config.hysteresis;
-		candidate.settings.voltageConfirmMs = config.confirmMs;
-		candidate.settings.recoveryConfirmMs = config.recoveryMs;
+		candidate.capturePages = settings.capturePages;
 		snapshotMeter(candidate.meter, meter);
 	}
 	if (changed && candidate.active) {
@@ -403,9 +447,12 @@ void GridEventStore::startCandidate(uint8_t index, const phaseState& phase, floa
 	candidate.previousState = observedStates[index];
 	candidate.currentState = uint8_t(phase.pending);
 	candidate.startedMs = phase.pendingSinceMs;
+	candidate.startedUs = meterFastTimeUs(candidate.startedMs);
+	waveCaptureTrigger(candidate.startedUs);
 	candidate.previousVoltage = observedVoltages[index];
 	candidate.currentVoltage = voltage;
 	snapshotSettings(candidate.settings, settings);
+	candidate.capturePages = settings.capturePages;
 	snapshotMeter(candidate.meter, meter);
 }
 
@@ -415,7 +462,7 @@ void GridEventStore::armCapture(const Candidate& candidate, uint32_t sampleMs)
 	if (capture.active) return;
 	capture = Capture{};
 	capture.pageCount = std::max<uint8_t>(GridEventFormat::minPagesPerEvent,
-		std::min<uint8_t>(GridEventFormat::maxPagesPerEvent, candidate.settings.capturePages));
+		std::min<uint8_t>(GridEventFormat::maxPagesPerEvent, candidate.capturePages));
 	capture.pages = static_cast<uint8_t*>(malloc(size_t(capture.pageCount) * GridEventFormat::pageSize));
 	if (!capture.pages) {
 		++storeMetrics.failedEvents;
@@ -423,9 +470,15 @@ void GridEventStore::armCapture(const Candidate& candidate, uint32_t sampleMs)
 	}
 	memset(capture.pages, 0xFF, size_t(capture.pageCount) * GridEventFormat::pageSize);
 	capture.active = true;
+	capture.eventId = nextEventId;
+	capture.settings = candidate.settings;
+	capture.meter = candidate.meter;
 	capture.startedMs = candidate.startedMs;
+	capture.startedUs = candidate.startedUs ? candidate.startedUs : meterFastTimeUs(candidate.startedMs);
+	if (candidate.sourceFlags) waveCaptureTrigger(capture.startedUs);
 	capture.endMs = candidate.startedMs + uint32_t(GridEventFormat::continuationSamples) *
 		uint32_t(capture.pageCount - 1U) * 10U;
+	capture.closeAfterMs = capture.endMs;
 	copyFastRange(candidate.startedMs - uint32_t(GridEventFormat::preTriggerSamples) * 10U, candidate.startedMs - 1U, true);
 	copyFastRange(candidate.startedMs, sampleMs, false);
 	storeMetrics.captureActive = true;
@@ -434,38 +487,50 @@ void GridEventStore::armCapture(const Candidate& candidate, uint32_t sampleMs)
 // Usa una transicion confirmada como raiz del incidente o como entrada secundaria de su linea de tiempo.
 void GridEventStore::confirmCandidate(const Candidate& candidate, uint32_t previousStartedMs, uint32_t sampleMs)
 {
+	const uint32_t recordEnd = candidate.word && GridEventFormat::isPointEvent(candidate.word) ?
+		candidate.startedMs + candidate.duration10Ms * 10U : candidate.startedMs;
+	if (capture.active && (int32_t(candidate.startedMs - capture.endMs) > 0 ||
+		int32_t(candidate.startedMs - capture.startedMs) < 0 || int32_t(recordEnd - capture.endMs) > 0)) {
+		if (deferredCount < 8) {
+			deferredRecord& record = deferred[(deferredRead + deferredCount++) % 8U];
+			record.candidate = candidate; record.previousStartedMs = previousStartedMs;
+		} else { ++storeMetrics.droppedRecords; capture.root.timeStatus |= GridEventFormat::recordsDropped; }
+		return;
+	}
 	if (!capture.active) armCapture(candidate, sampleMs);
 	if (!capture.active) return;
+	const bool first = !capture.rootAssigned;
+	// Los estados conservan toda la ventana para incluir retornos y nuevos cambios.
+	const bool point = candidate.word && GridEventFormat::isPointEvent(candidate.word);
+	const uint32_t closeAt = !point || int32_t(recordEnd + eventPostMs - capture.endMs) > 0 ?
+		capture.endMs : recordEnd + eventPostMs;
+	if (first || int32_t(closeAt - capture.closeAfterMs) > 0) capture.closeAfterMs = closeAt;
+	if (!candidate.word && uint8_t(candidate.subject) < 3 && candidate.currentState != uint8_t(phaseCondition::normal)) {
+		points[uint8_t(candidate.subject)].sustained = true;
+		points[uint8_t(candidate.subject) + 3].sustained = true;
+	}
 	if (!capture.rootAssigned) {
 		capture.rootAssigned = true;
 		capture.eventId = nextEventId;
 		capture.rootStartedMs = candidate.startedMs;
-		capture.settings = candidate.settings;
-		capture.meter = candidate.meter;
+		capture.rootStartedUs = candidate.startedUs ? candidate.startedUs : meterFastTimeUs(candidate.startedMs);
 		capture.root = GridEventFormat::ListHeader{};
 		capture.root.formatVersion = GridEventFormat::version;
 		capture.root.timeStatus = candidate.sourceFlags | GridEventFormat::packedFastRms;
+		if (capture.rootSampleCount < GridEventFormat::preTriggerSamples) capture.root.timeStatus |= GridEventFormat::preTriggerMissing;
 		capture.root.eventId = capture.eventId;
-		capture.root.subjectAndStates = GridEventFormat::packSubjectAndStates(candidate.subject, candidate.previousState, candidate.currentState);
-		capture.root.previousStateDuration10Ms = encodeDuration10Ms(previousStartedMs, candidate.startedMs);
+		capture.root.subjectAndStates = candidate.word ? candidate.word : GridEventFormat::packSubjectAndStates(candidate.subject, candidate.previousState, candidate.currentState);
+		capture.root.previousStateDuration10Ms = candidate.word && GridEventFormat::isPointEvent(candidate.word) ?
+			candidate.duration10Ms : encodeDuration10Ms(previousStartedMs, candidate.startedMs);
 		capture.root.previousVoltage = encodeVoltage(candidate.previousVoltage);
 		capture.root.currentVoltage = encodeVoltage(candidate.currentVoltage);
-		struct timeval now = {};
-		gettimeofday(&now, nullptr);
-		uint64_t timestamp = managerNowMs();
-		if (timestamp) timestamp -= uint32_t(sampleMs - candidate.startedMs);
-		else {
-			const uint32_t elapsed = uint32_t(sampleMs - candidate.startedMs);
-			const uint64_t localNow = uint64_t(now.tv_sec) * 1000ULL + now.tv_usec / 1000U;
-			timestamp = localNow > elapsed ? localNow - elapsed : uint64_t(estimatedEpoch) * 1000ULL;
+		uint64_t timestamp = meterUnixTimeUs(capture.rootStartedUs);
+		if (!timestamp) {
+			timestamp = uint64_t(estimatedEpoch) * 1000000ULL + capture.rootStartedUs;
 			capture.root.timeStatus |= GridEventFormat::timestampEstimated;
 		}
-		if (timestamp / 1000ULL < estimatedEpoch) {
-			timestamp = uint64_t(estimatedEpoch) * 1000ULL + candidate.startedMs;
-			capture.root.timeStatus |= GridEventFormat::timestampEstimated;
-		}
-		capture.root.unixSeconds = uint32_t(timestamp / 1000ULL);
-		capture.root.milliseconds = uint16_t(timestamp % 1000ULL);
+		capture.root.unixSeconds = uint32_t(timestamp / 1000000ULL);
+		capture.root.fraction100Us = uint16_t(timestamp % 1000000ULL / 100ULL);
 		++storeMetrics.acceptedEvents;
 	}
 	else addTransition(candidate, previousStartedMs);
@@ -484,6 +549,7 @@ void GridEventStore::confirmGrid(gridCondition current, uint32_t previousStarted
 	candidate.previousVoltage = NAN;
 	candidate.currentVoltage = NAN;
 	snapshotSettings(candidate.settings, settings);
+	candidate.capturePages = settings.capturePages;
 	snapshotMeter(candidate.meter, meter);
 	confirmCandidate(candidate, previousStartedMs, sampleMs);
 }
@@ -491,22 +557,29 @@ void GridEventStore::confirmGrid(gridCondition current, uint32_t previousStarted
 // Copia un intervalo del anillo Fast sin reservar buffers grandes sobre la pila.
 void GridEventStore::copyFastRange(uint32_t fromMs, uint32_t toMs, bool preTrigger)
 {
-	fastRmsRingSample sample;
+	fastRmsRingSample batch[8];
 	uint32_t cursor = fromMs;
-	while (meterCopyFastSamples(cursor, toMs, &sample, 1)) {
-		if (preTrigger) {
-			if (capture.rootSampleCount >= GridEventFormat::preTriggerSamples) break;
-			const size_t offset = GridEventFormat::rootSampleOffset + size_t(capture.rootSampleCount) * sizeof(fastRMSData_t);
-			memcpy(capture.pages + offset, &sample.data, sizeof(sample.data));
-			if (!capture.firstSampleKnown) {
-				capture.firstSampleKnown = true;
-				capture.firstSampleMs = sample.sampleMs;
+	while (true) {
+		const uint16_t count = meterCopyFastSamples(cursor, toMs, batch, 8);
+		if (!count) return;
+		for (uint16_t index = 0; index < count; ++index) {
+			const fastRmsRingSample& sample = batch[index];
+			if (preTrigger) {
+				if (capture.rootSampleCount >= GridEventFormat::preTriggerSamples) return;
+				const size_t offset = GridEventFormat::rootSampleOffset + size_t(capture.rootSampleCount) * sizeof(fastRMSData_t);
+				memcpy(capture.pages + offset, &sample.data, sizeof(sample.data));
+				if (!capture.firstSampleKnown) {
+					capture.firstSampleKnown = true;
+					capture.firstSampleMs = sample.sampleMs;
+					capture.firstSampleUs = sample.sampleUs;
+				}
+				++capture.rootSampleCount;
 			}
-			++capture.rootSampleCount;
+			else appendPostSample(sample.data, sample.sampleMs);
 		}
-		else appendPostSample(sample.data, sample.sampleMs);
-		if (sample.sampleMs == UINT32_MAX) break;
-		cursor = sample.sampleMs + 1U;
+		const uint32_t lastMs = batch[count - 1].sampleMs;
+		if (int32_t(toMs - lastMs) <= 0) return;
+		cursor = lastMs + 1U;
 	}
 }
 
@@ -515,7 +588,8 @@ void GridEventStore::appendPostSample(const fastRMSData_t& sample, uint32_t samp
 {
 	if (int32_t(sampleMs - capture.startedMs) < 0 || int32_t(capture.endMs - sampleMs) < 0) return;
 	for (uint8_t page = 0; page + 1 < capture.pageCount; ++page) {
-		if (capture.continuationSampleCount[page] >= GridEventFormat::continuationSamples) continue;
+		if (capture.continuationSampleCount[page] >= GridEventFormat::continuationSamples ||
+			capture.pagePending[page + 1] || capture.pageWritten[page + 1]) continue;
 		const size_t offset = GridEventFormat::continuationSampleOffset +
 			size_t(capture.continuationSampleCount[page]) * sizeof(fastRMSData_t);
 		memcpy(capture.pages + size_t(page + 1) * GridEventFormat::pageSize + offset, &sample, sizeof(sample));
@@ -527,37 +601,190 @@ void GridEventStore::appendPostSample(const fastRMSData_t& sample, uint32_t samp
 // Agrega una transicion distinta de la raiz dentro de la ventana temporal retenida.
 void GridEventStore::addTransition(const Candidate& candidate, uint32_t previousStartedMs)
 {
-	if (capture.transitionCount >= GridEventFormat::maxTransitions ||
-		int32_t(candidate.startedMs - capture.startedMs) < 0 || int32_t(capture.endMs - candidate.startedMs) < 0) return;
-	const uint8_t page = std::min<uint32_t>(uint32_t(candidate.startedMs - capture.startedMs) /
-		(uint32_t(GridEventFormat::continuationSamples) * 10U), capture.pageCount - 2U);
-	if (capture.transitionCountPerPage[page] >= GridEventFormat::transitionsPerPage ||
-		capture.pagePending[page + 1] || capture.pageWritten[page + 1]) return;
+	if (int32_t(candidate.startedMs - capture.startedMs) < 0 || int32_t(capture.endMs - candidate.startedMs) < 0) return;
 	int32_t offset = int32_t(candidate.startedMs - capture.rootStartedMs);
 	offset = std::max<int32_t>(INT16_MIN, std::min<int32_t>(INT16_MAX, offset));
-	GridEventFormat::Transition& transition = capture.transitions[page * GridEventFormat::transitionsPerPage +
-		capture.transitionCountPerPage[page]++];
-	++capture.transitionCount;
+	GridEventFormat::Transition transition = {};
 	transition.offsetMs = int16_t(offset);
-	transition.previousStateDuration10Ms = encodeDuration10Ms(previousStartedMs, candidate.startedMs);
-	transition.subjectAndStates = GridEventFormat::packSubjectAndStates(candidate.subject, candidate.previousState, candidate.currentState);
+	transition.previousStateDuration10Ms = candidate.word && GridEventFormat::isPointEvent(candidate.word) ? candidate.duration10Ms : encodeDuration10Ms(previousStartedMs, candidate.startedMs);
+	transition.subjectAndStates = candidate.word ? candidate.word : GridEventFormat::packSubjectAndStates(candidate.subject, candidate.previousState, candidate.currentState);
 	transition.previousVoltage = encodeVoltage(candidate.previousVoltage);
 	transition.currentVoltage = encodeVoltage(candidate.currentVoltage);
+	appendRecord(transition);
 }
 
-// Copia la configuracion Grid actual a una representacion fija y autocontenida.
+// Agrega record en la primera continuacion libre; un desborde queda visible en cabecera y metricas.
+bool GridEventStore::appendRecord(const GridEventFormat::Transition& record)
+{
+	for (uint8_t page = 0; page + 1 < capture.pageCount; ++page) {
+		uint8_t& count = capture.transitionCountPerPage[page];
+		if (count >= GridEventFormat::transitionsPerPage || capture.pagePending[page + 1] || capture.pageWritten[page + 1]) continue;
+		capture.transitions[page * GridEventFormat::transitionsPerPage + count++] = record;
+		++capture.transitionCount;
+		return true;
+	}
+	++storeMetrics.droppedRecords;
+	capture.root.timeStatus |= GridEventFormat::recordsDropped;
+	return false;
+}
+
+// Integra los detectores FAST; meter/settings y sampleMs corresponden al mismo turno, sin UART ni NVS.
+void GridEventStore::observeEvents(const meterValues& meter, const gridSettings& settings, uint32_t sampleMs)
+{
+	StoreFormatGuard guard(formatPaused, activeCalls);
+	if (!guard || !gridEventsReadyForStorage()) return;
+	poll();
+	eventCaptureConfig config;
+	meterGetEventCaptureConfig(config);
+	const phaseValues* phases[] = { &meter.phaseR, &meter.phaseS, &meter.phaseT, &meter.neutral };
+	for (uint8_t phase = 0; phase < 3; ++phase) {
+		observePoint(phase, phases[phase]->voltageDip.active, phases[phase]->voltageDip.value,
+			meter, config, settings, sampleMs, phases[phase]->voltageDip.fastStartedMs, phases[phase]->voltageDip.fastEndedMs);
+		observePoint(phase + 3, phases[phase]->voltageSwell.active, phases[phase]->voltageSwell.value,
+			meter, config, settings, sampleMs, phases[phase]->voltageSwell.fastStartedMs, phases[phase]->voltageSwell.fastEndedMs);
+	}
+	for (uint8_t phase = 0; phase < 4; ++phase)
+		observePoint(phase + 6, phases[phase]->overCurrent.active, phases[phase]->overCurrent.value,
+			meter, config, settings, sampleMs, phases[phase]->overCurrent.fastStartedMs, phases[phase]->overCurrent.fastEndedMs);
+}
+
+// Conserva la condicion index; detectedMs es el inicio observado o UINT32_MAX para una prueba sintetica.
+void GridEventStore::observePoint(uint8_t index, bool active, float value, const meterValues& meter,
+	const eventCaptureConfig& config, const gridSettings& settings, uint32_t sampleMs, uint32_t detectedMs, uint32_t recoveredMs)
+{
+	pointTracker& point = points[index];
+	const uint8_t phase = index < 3 ? index : index < 6 ? index - 3 : index - 6;
+	const phaseValues* phases[] = { &meter.phaseR, &meter.phaseS, &meter.phaseT, &meter.neutral };
+	if (!active) {
+		if (point.active) {
+			const bool invalidEnd = recoveredMs != UINT32_MAX &&
+				(int32_t(recoveredMs - point.startedMs) < 0 || int32_t(sampleMs - recoveredMs) < 0);
+			const uint32_t ended = recoveredMs == UINT32_MAX || invalidEnd ? sampleMs : recoveredMs;
+			if (point.sustained && index >= 6) {
+				Candidate end = point.origin;
+				end.startedMs = ended;
+				end.word = GridEventFormat::packCurrentState(GridEventFormat::Subject(phase), false);
+				end.previousVoltage = point.extremeValue;
+				end.currentVoltage = phases[phase]->FastIrms;
+				snapshotSettings(end.settings, settings); snapshotMeter(end.meter, meter);
+				confirmCandidate(end, point.startedMs, sampleMs);
+				currentStartedMs[phase] = ended;
+			} else if (!point.sustained && point.savePoint) finishPoint(index, ended, invalidEnd);
+		}
+		point = pointTracker{};
+		return;
+	}
+	const auto type = index < 3 ? GridEventFormat::pointType::dip :
+		index < 6 ? GridEventFormat::pointType::swell : GridEventFormat::pointType::overCurrent;
+	if (point.active) {
+		if (isfinite(value) && (!isfinite(point.extremeValue) ||
+			(type == GridEventFormat::pointType::dip ? value < point.extremeValue : value > point.extremeValue)))
+			point.extremeValue = value;
+		if (index >= 6 && !point.sustained && recoveredMs == UINT32_MAX &&
+			isfinite(phases[phase]->FastIrms) && uint32_t(sampleMs - point.startedMs) >= eventPointLimitMs()) {
+			Candidate start = point.origin;
+			start.word = GridEventFormat::packCurrentState(GridEventFormat::Subject(phase), true);
+			start.currentVoltage = point.extremeValue;
+			confirmCandidate(start, currentStartedMs[phase], sampleMs);
+			point.sustained = true;
+		}
+		if (!point.sustained && !capture.active && uint32_t(sampleMs - point.startedMs) <= eventPointLimitMs()) armCapture(point.origin, sampleMs);
+		if (!point.sustained && capture.active && int32_t(point.startedMs - capture.startedMs) >= 0 &&
+			int32_t(capture.endMs - point.startedMs) >= 0) { point.captured = true; point.captureId = capture.eventId; }
+		return;
+	}
+	point.active = true;
+	point.savePoint = index < 3 ? config.dipEnabled : index < 6 ? config.swellEnabled : config.overCurrentEnabled;
+	if (phase < 3 && index < 6 && phases[phase]->gridState.state != phaseCondition::normal &&
+		phases[phase]->gridState.state != phaseCondition::unknown) point.sustained = true;
+	point.previousValue = type == GridEventFormat::pointType::overCurrent ? phases[phase]->Irms : phases[phase]->Vrms;
+	point.extremeValue = value;
+	point.startedMs = detectedMs != UINT32_MAX ? detectedMs : sampleMs - (type == GridEventFormat::pointType::dip ? config.dipConfirmMs :
+		type == GridEventFormat::pointType::swell ? config.swellConfirmMs : config.overCurrentConfirmMs);
+	Candidate& candidate = point.origin;
+	candidate.active = true;
+	candidate.subject = GridEventFormat::Subject(phase);
+	candidate.startedMs = point.startedMs;
+	candidate.startedUs = meterFastTimeUs(point.startedMs);
+	candidate.previousVoltage = point.previousValue;
+	candidate.currentVoltage = point.extremeValue;
+	snapshotSettings(candidate.settings, settings);
+	candidate.capturePages = settings.capturePages;
+	snapshotMeter(candidate.meter, meter);
+	if (!capture.active && !point.sustained) armCapture(candidate, sampleMs);
+	if (!capture.active) return;
+	point.captureId = capture.eventId;
+	point.captured = true;
+}
+
+// Guarda el evento terminado o limitado; endedMs siempre se recorta a la ventana de la captura.
+void GridEventStore::finishPoint(uint8_t index, uint32_t endedMs, bool limited)
+{
+	pointTracker& point = points[index];
+	point.captured = false;
+	limited |= point.clipped || uint32_t(endedMs - point.startedMs) > eventPointLimitMs();
+	const auto type = index < 3 ? GridEventFormat::pointType::dip :
+		index < 6 ? GridEventFormat::pointType::swell : GridEventFormat::pointType::overCurrent;
+	const uint8_t phase = index < 3 ? index : index < 6 ? index - 3 : index - 6;
+	const uint16_t word = GridEventFormat::packPointEvent(GridEventFormat::Subject(phase), type, limited);
+	const uint32_t duration = encodeDuration10Ms(point.startedMs, endedMs);
+	Candidate candidate = point.origin;
+	candidate.word = word; candidate.duration10Ms = duration;
+	candidate.currentVoltage = point.extremeValue;
+	confirmCandidate(candidate, point.startedMs, millis());
+	if (limited) ++storeMetrics.limitedPoints;
+	else ++storeMetrics.completedPoints;
+}
+
+// Recorta solo los eventos asociados a esta captura, sin rearmarlos hasta que desaparezca la condicion.
+void GridEventStore::limitPoints()
+{
+	for (uint8_t index = 0; index < 10; ++index)
+		if (points[index].captured && points[index].captureId == capture.eventId)
+			points[index].captured = false;
+}
+
+// Cuantiza value en unidades step; flags informa redondeo o saturacion y maximum limita el campo.
+static uint16_t encodeSetting(float value, float step, uint16_t maximum, uint8_t& flags)
+{
+	if (!isfinite(value) || value < 0) { flags |= 0x40; return 0; }
+	const float units = value / step;
+	if (units > maximum) { flags |= 0x40; return maximum; }
+	const uint16_t encoded = uint16_t(lroundf(units));
+	if (fabsf(value - encoded * step) > 0.0001f) flags |= 0x20;
+	return encoded;
+}
+
+// Copia estados y detectores ADE en 48 bytes; settings contiene la configuracion Grid efectiva.
 void GridEventStore::snapshotSettings(GridEventFormat::SettingsSnapshot& dest, const gridSettings& settings)
 {
+	dest = GridEventFormat::SettingsSnapshot{};
+	eventCaptureConfig config;
+	meterGetEventCaptureConfig(config);
+	dest.flags = (config.dipEnabled ? 1U : 0U) | (config.swellEnabled ? 2U : 0U) |
+		(config.overCurrentEnabled ? 4U : 0U) | (settings.neutral.enabled ? 8U : 0U);
 	for (uint8_t index = 0; index < 3; ++index) {
-		dest.lowVoltage[index] = settings.phases[index].lowVoltage;
-		dest.highVoltage[index] = settings.phases[index].highVoltage;
+		dest.lowVoltage[index] = encodeSetting(settings.phases[index].lowVoltage, 0.1f, UINT16_MAX, dest.flags);
+		dest.highVoltage[index] = encodeSetting(settings.phases[index].highVoltage, 0.1f, UINT16_MAX, dest.flags);
 	}
-	dest.noVoltage = settings.noVoltage;
-	dest.hysteresis = settings.hysteresis;
-	dest.lossConfirmMs = settings.lossConfirmMs;
-	dest.voltageConfirmMs = settings.voltageConfirmMs;
-	dest.recoveryConfirmMs = settings.recoveryConfirmMs;
-	dest.capturePages = settings.capturePages;
+	dest.noVoltage = encodeSetting(settings.noVoltage, 0.1f, UINT16_MAX, dest.flags);
+	dest.hysteresis = encodeSetting(settings.hysteresis, 0.1f, UINT16_MAX, dest.flags);
+	dest.lossConfirm10Ms = encodeSetting(settings.lossConfirmMs, 10, UINT16_MAX, dest.flags);
+	dest.pointLimit10Ms = eventPointLimitMs() / 10U;
+	dest.recoveryConfirm10Ms = encodeSetting(settings.recoveryConfirmMs, 10, UINT16_MAX, dest.flags);
+	dest.overCurrent = encodeSetting(config.overCurrent, 0.1f, UINT16_MAX, dest.flags);
+	dest.currentHysteresis = encodeSetting(config.currentHysteresis, 0.01f, UINT16_MAX, dest.flags);
+	dest.dipConfirm10Ms = uint8_t(encodeSetting(config.dipConfirmMs, 10, UINT8_MAX, dest.flags));
+	dest.swellConfirm10Ms = uint8_t(encodeSetting(config.swellConfirmMs, 10, UINT8_MAX, dest.flags));
+	dest.neutralHigh = encodeSetting(settings.neutral.highVoltage, 0.1f, UINT16_MAX, dest.flags);
+	dest.neutralHysteresis = encodeSetting(settings.neutral.hysteresis, 0.1f, UINT16_MAX, dest.flags);
+	dest.neutralConfirm10Ms = encodeSetting(settings.neutral.confirmMs, 10, UINT16_MAX, dest.flags);
+	dest.neutralRecovery10Ms = encodeSetting(settings.neutral.recoveryMs, 10, UINT16_MAX, dest.flags);
+	dest.overCurrentConfirm10Ms = uint8_t(encodeSetting(config.overCurrentConfirmMs, 10, UINT8_MAX, dest.flags));
+	dest.preSamples = eventPreSamples;
+	dest.postSamples = eventPostMs / 10U;
+	dest.capturePages = eventCapturePages;
+	dest.window10Ms = eventPreSamples + (eventCapturePages - 1U) * eventContinuationSamples;
 }
 
 // Copia las mediciones y contadores que contextualizan el inicio del evento.
@@ -591,7 +818,7 @@ void GridEventStore::prepareRootPage()
 {
 	capture.root.sampleCount = capture.rootSampleCount;
 	capture.root.pageCount = capture.pageCount;
-	capture.root.firstSampleOffsetMs = capture.firstSampleKnown ? int32_t(capture.firstSampleMs - capture.rootStartedMs) : 0;
+	capture.root.firstSampleOffsetUs = capture.firstSampleKnown ? int32_t(capture.firstSampleUs - capture.rootStartedUs) : 0;
 	capture.root.headerCrc16 = GridEventFormat::crc16(reinterpret_cast<const uint8_t*>(&capture.root),
 		offsetof(GridEventFormat::ListHeader, headerCrc16));
 	memcpy(capture.pages, &capture.root, sizeof(capture.root));
@@ -619,7 +846,8 @@ void GridEventStore::prepareContinuationPages()
 		header.pageIndex = page + 1;
 		header.pageCount = capture.pageCount;
 		header.sampleCount = capture.continuationSampleCount[page];
-		header.transitionCount = count;
+		// La ultima pagina conserva el aviso de desborde aunque la raiz ya este en NAND.
+		header.transitionCount = count | ((capture.root.timeStatus & GridEventFormat::recordsDropped) ? 0x80U : 0U);
 		memcpy(pageData, &header, sizeof(header));
 		if (count) memcpy(pageData + sizeof(header), capture.transitions + first,
 			size_t(count) * sizeof(GridEventFormat::Transition));
@@ -684,7 +912,11 @@ bool GridEventStore::hasPendingCandidatesInPage(uint8_t continuationPage) const
 // Libera la captura y avanza el cursor; un fallo abandona el resto del bloque dudoso.
 void GridEventStore::finishCapture(bool success)
 {
+	limitPoints();
 	if (success && capture.rootAssigned) {
+		waveCaptureConfirm(capture.eventId, capture.startedUs, capture.startedUs +
+			uint64_t(uint32_t(capture.closeAfterMs - capture.startedMs)) * 1000ULL, capture.rootStartedUs,
+			uint64_t(capture.root.unixSeconds) * 1000000ULL + capture.root.fraction100Us * 100ULL);
 		nextEventId = capture.eventId + 1U;
 		currentPage += capture.pageCount;
 		if (currentPage >= WinbondSpiNand::pagesPerBlock) {
@@ -714,7 +946,8 @@ bool GridEventStore::recoverCursor()
 {
 	NandPartitionInfo info;
 	partition.getInfo(info);
-	if (!info.enabled || info.blockCount > 64) return false;
+	// Durante el formato, la vista publica sigue bloqueada; el propietario puede recuperar el cursor.
+	if (!partition.isEnabled() || info.blockCount > 64) return false;
 	memset(blockHasData, 0, sizeof(blockHasData));
 	bool found = false;
 	uint32_t latestId = 0;
@@ -830,7 +1063,8 @@ bool GridEventStore::readHeader(uint16_t block, uint8_t page, GridEventFormat::L
 	for (uint8_t byte : headerBuffer) if (byte != 0xFF) { erased = false; break; }
 	memcpy(&header, headerBuffer, sizeof(header));
 	valid = !erased && header.formatVersion == GridEventFormat::version && header.eventId &&
-		header.sampleCount <= ((header.timeStatus & GridEventFormat::retiredNeutralFormat) ? 100 : GridEventFormat::preTriggerSamples) &&
+		(header.timeStatus & GridEventFormat::packedFastRms) &&
+		header.sampleCount <= GridEventFormat::preTriggerSamples &&
 		header.pageCount >= GridEventFormat::minPagesPerEvent &&
 		header.pageCount <= GridEventFormat::maxPagesPerEvent &&
 		uint16_t(page) + header.pageCount <= WinbondSpiNand::pagesPerBlock &&
@@ -874,8 +1108,16 @@ void gridEventStorePushFastSample(const fastRMSData_t& sample, uint32_t sampleMs
 	if (mountedGridEventStore) mountedGridEventStore->pushFastSample(sample, sampleMs);
 }
 
-// Marca una captura artificial que sera creada por MeterTask en su siguiente ciclo.
-void gridEventStoreRequestTest()
+// Entrega los detectores al Store montado; se llama solo desde el turno FAST de MeterTask.
+void gridEventStoreObserveEvents(const meterValues& meter, const gridSettings& settings, uint32_t sampleMs)
 {
-	gridTestRequested = true;
+	if (mountedGridEventStore) mountedGridEventStore->observeEvents(meter, settings, sampleMs);
+}
+
+// Marca una captura artificial que sera creada por MeterTask en su siguiente ciclo.
+bool gridEventStoreRequestTest(uint8_t type)
+{
+	if (!mountedGridEventStore || type < 1 || type > 5) return false;
+	uint8_t expected = 0;
+	return gridTestRequested.compare_exchange_strong(expected, type);
 }

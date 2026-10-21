@@ -43,7 +43,7 @@ function resetPageScroll() {
 // Muestra una seccion principal de la app sin recargar la pagina.
 // pageId: id de la seccion a mostrar.
 function showAppPage(pageId) {
-    const titles = {home: "Resumen", allMeasures: "Mediciones", history: "Histórico", events: "Eventos", logs: "Logs", gridEvents: "Red", scopePage: "Osciloscopio", settings: "Configuración"};
+    const titles = {home: "Resumen", allMeasures: "Mediciones", history: "Histórico", logs: "Logs", gridEvents: "Eventos", scopePage: "Osciloscopio", settings: "Configuración"};
     if (!Object.prototype.hasOwnProperty.call(titles, pageId)) pageId = "home";
     const samePage = showAppPage.current === pageId;
     const initialPage = showAppPage.current == null;
@@ -78,10 +78,6 @@ function showAppPage(pageId) {
         if (pageId === "settings") loadSettings();
         if (pageId === "history") loadHistoryViewer();
 		if (pageId === "gridEvents") loadGridEventsViewer();
-        if (pageId === "events") {
-            loadRamEventsList();
-            meterLoadEventsList();
-        }
     }
 }
 

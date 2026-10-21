@@ -11,10 +11,11 @@ bool NandReadSession::begin(NandPartition& partition, size_t totalBytes)
 }
 
 // Prepara una lectura contigua de paginas NAND desde una ubicacion relativa concreta.
-bool NandReadSession::begin(NandPartition& partition, uint16_t block, uint8_t page, uint32_t pageCount)
+bool NandReadSession::begin(NandPartition& partition, uint16_t block, uint8_t page, uint32_t pageCount, void (*finished)())
 {
 	const size_t totalBytes = size_t(pageCount) * pageSize;
-	if (active || !partition.isEnabled() || !totalBytes) return false;
+	if (isActive() || !partition.isEnabled() || !totalBytes) return false;
+	onReadFinished = finished;
 	freeQueue = xQueueCreateStatic(bufferCount, sizeof(uint8_t), freeQueueData, &freeQueueStorage);
 	readyQueue = xQueueCreateStatic(bufferCount, sizeof(uint8_t), readyQueueData, &readyQueueStorage);
 	completionQueue = xQueueCreateStatic(1, sizeof(NandIoResult), completionQueueData, &completionQueueStorage);
@@ -78,7 +79,9 @@ void NandReadSession::readTaskLoop()
 			StoragePriority::low, completionQueue)) {
 			producerFailed = true; break;
 		}
-		if (xQueueReceive(completionQueue, &result, pdMS_TO_TICKS(500)) != pdPASS || !result.success) {
+		// Un timeout de consumidor no permite reciclar el buffer mientras NAND lo esta usando.
+		while (xQueueReceive(completionQueue, &result, pdMS_TO_TICKS(100)) != pdPASS) vTaskDelay(1);
+		if (!result.success) {
 			producerFailed = true; break;
 		}
 		produced += length;
@@ -87,5 +90,6 @@ void NandReadSession::readTaskLoop()
 		}
 	}
 	if (produced < total) active = false;
+	if (onReadFinished) { onReadFinished(); onReadFinished = nullptr; }
 	taskHandle = nullptr;
 }

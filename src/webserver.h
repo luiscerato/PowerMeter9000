@@ -4,7 +4,6 @@
 
 extern  AsyncWebServer server;
 extern  AsyncWebSocket scopeWS;
-extern  AsyncWebSocket acEventsWS;
 extern  AsyncWebSocket remoteScreen;
 
 
@@ -15,9 +14,7 @@ AsyncWebSocket* webServerGetMeterWS();
 
 
 
-void webServerSetAcEvents(WSeventFunctionCallback func);
 
-AsyncWebSocket* webServerGetAcWS();
 
 // Limpia clientes WebSocket desconectados para liberar las colas de envio.
 void webServerCleanupClients();

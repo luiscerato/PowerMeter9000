@@ -24,13 +24,13 @@ constexpr bool transitions() {
     if (phase.state != phaseCondition::phaseLoss || phase.changedAtMs != 260) return false;
     feed(phase, 24, 520, 1000);
     if (phase.state != phaseCondition::phaseLoss) return false;
-    feed(phase, 100, 1010, 6000);
+    feed(phase, 100, 1010, 4700);
     if (phase.state != phaseCondition::phaseLoss) return false;
-    feed(phase, 100, 6010, 6010);
+    feed(phase, 100, 4710, 4710);
     if (phase.state != phaseCondition::undervoltage || phase.changedAtMs != 1010) return false;
-    feed(phase, 189, 6020, 6500);
+    feed(phase, 189, 4720, 5200);
     if (phase.state != phaseCondition::undervoltage) return false;
-    feed(phase, 220, 6510, 6760);
+    feed(phase, 220, 5210, 5460);
     return phase.state == phaseCondition::normal;
 }
 // Verifica que un hueco o lectura invalida reinicie la confirmacion; sin parametros.

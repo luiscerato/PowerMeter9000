@@ -1,5 +1,8 @@
 # Power Meter ADE9000 - eventos locales v1
 
+> Referencia historica del camino RAM/Manager retirado el 2026-10-19.
+> Estado actual y pendientes: [EVENT_CAPTURE_CLEANUP.md](EVENT_CAPTURE_CLEANUP.md).
+
 Este documento define el contrato actual entre el firmware y Power Meter Manager.
 La implementacion es local por HTTP y MQTT y no realiza HTTP POST. Los artefactos
 Fast RMS/Wave y sus colas viven solamente en RAM y se pierden al reiniciar. Los
