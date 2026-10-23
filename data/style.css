@@ -67,10 +67,40 @@ body {
 .storageTable > :not(caption) > * > * { padding: 6px; }
 .settingsGroup h3, .optionGroup legend { float: none; width: auto; color: #263536; font-size: 15px; font-weight: 600; margin: 0 0 10px; }
 .settingsFieldsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
+.settingsOptionDescription { grid-column: 1 / -1; margin: 0 0 4px; }
 .settingsField { display: grid; grid-template-columns: minmax(0, 1fr) minmax(92px, 34%); align-items: center; gap: 10px; margin-bottom: 7px; }
 .settingsField:last-child { margin-bottom: 0; }
 .settingsFieldStack { display: block; margin: 0; }
 .settingsFieldStack label { display: block; min-height: 18px; margin-bottom: 3px; }
+#settings_capture .settingsFieldStack { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 6px; }
+#settings_capture .settingsFieldStack label { min-height: 0; margin: 0; }
+#settings_capture .settingsFieldsGrid { grid-template-columns: 1fr; gap: 6px; }
+#settings_capture .settingsGroup { padding: 9px; }
+.waveConfigToolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; font-size: 13px; }
+.waveConfigToolbar select { width: 96px; }
+.wavePreControl { display: flex; align-items: center; gap: 6px; }
+.wavePreControl label, .waveConfigToolbar .form-check { white-space: nowrap; }
+.waveConfigMetrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 3px 18px; margin: 8px 0; }
+.waveConfigMetrics > div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; border-bottom: 1px solid #e1e5e5; }
+.waveConfigMetrics dt { font-weight: 400; }
+.waveConfigMetrics dd { margin: 0; font-variant-numeric: tabular-nums; }
+.waveMetricsNote { grid-column: 1 / -1; color: #687171; }
+#eventSettingsHelpBody { font-size: 14px; line-height: 1.5; }
+#eventSettingsHelpBody p:last-child { margin-bottom: 0; }
+.settingsIconButton { width: 29px; height: 29px; padding: 4px; display: inline-flex; align-items: center; justify-content: center; }
+.settingsSectionHeader.settingsCompactHeader { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; align-items: center; }
+.settingsCompactHeader > div:first-child { display: contents; }
+.settingsCompactHeader h2 { grid-column: 1; font-size: 16px; }
+.settingsCompactHeader p { grid-column: 1 / -1; grid-row: 2; }
+.settingsCompactHeader .settingsActions { grid-column: 2; grid-row: 1; flex-wrap: nowrap; margin: 0; }
+.settingsPointTable { table-layout: fixed; width: 100%; font-size: 13px; margin-bottom: 6px; }
+.settingsPointTable th:first-child { width: 38%; font-weight: 500; }
+.settingsPointTable td, .settingsPointTable th { padding: 5px 3px; }
+.settingsPointTable td:not(:first-child), .settingsPointTable th:not(:first-child) { text-align: center; }
+.settingsPointTable th:last-child { width: 82px; }
+.settingsPointTable input[type=number] { padding: 3px 5px; }
+.settingsCurrentLimits { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.settingsCurrentLimits > div { flex: 1 1 280px; }
 .settingsSwitch { grid-column: 1 / -1; margin: 2px 0; }
 .historyCapacityInfo { margin-top: 8px; color: #075a60; font-weight: 600; }
 .historyBaseInfo { margin-top: 8px; line-height: 1.4; }
@@ -344,6 +374,9 @@ input[type=range][orient=vertical] {
 }
 
 .gridEventInfo { min-width: 0; }
+.gridChartNavTools { position: relative; z-index: 1; }
+.gridChartNavTools .btn { min-height: 38px; touch-action: manipulation; }
+.gridChartNavTools label { min-height: 38px; padding: 0 4px; }
 .gridEventInfo summary { cursor: pointer; }
 .gridEventInfo .table { font-size: 12px; }
 .gridEventInfo .table > :not(caption) > * > * { padding: 3px 5px; }
@@ -360,6 +393,68 @@ input[type=range][orient=vertical] {
 #gridEventTransitions .badge { font-size: 10px; }
 
 .logsViewer { padding: 12px; }
+.eventHistoryRangeScroll { max-width: 100%; overflow-x: auto; padding-bottom: 5px; }
+.eventHistoryControls { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; width: 100%; min-width: max-content; }
+.eventHistoryControls label { display: flex; align-items: center; gap: 6px; font-size: 12px; flex: 1 0 265px; white-space: nowrap; }
+.eventHistoryControls input { width: 220px; min-width: 220px; font-size: 12px; }
+.eventHistoryControls select { flex: 0 0 160px; width: 160px; }
+.eventHistoryControls .btn { flex-shrink: 0; white-space: nowrap; }
+.eventHistoryLaneFilter { width: auto; max-width: 100%; }
+.eventHistoryTooltip .tooltip-inner { white-space: pre-line; text-align: left; max-width: 320px; font-size: 12px; }
+.eventHistoryPreviewChart { height: 220px; width: 100%; margin: 8px 0 16px; }
+#eventHistoryPreviewExpand { flex: 0 0 34px; height: 32px; padding: 2px; font-size: 22px; line-height: 1; }
+#eventHistoryPreview .modal-title { min-width: 0; overflow-wrap: anywhere; }
+#eventHistoryPreview .modal-header .btn-close { margin-left: 0; }
+#eventHistoryPreview .modal-fullscreen .eventHistoryPreviewChart { height: clamp(220px, 34vh, 480px); }
+.eventHistorySignals { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; max-width: 100%; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.eventHistorySignals > .btn-group { flex: 0 0 auto; }
+.eventHistorySignals .btn { font-size: 11px; padding: 3px 5px; min-width: 26px; min-height: 28px; white-space: nowrap; }
+.eventHistorySignalLabel { display: inline-flex; align-items: center; padding-right: 5px; font-size: 11px; white-space: nowrap; }
+#eventHistoryPreviewSignalStatus:empty { display: none; }
+.eventHistorySignals .signalPartial { background: #e3f1f3; color: #165f6c; border-color: #46838b; }
+.eventHistoryProgress { display: block; width: 100%; height: 6px; margin-bottom: 18px; accent-color: #16859b; }
+.eventHistoryLane { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; align-items: center; min-height: 38px; font-size: 12px; }
+.eventHistoryLanePlot { min-width: 0; padding: 4px 0; }
+.eventHistoryLaneLabel { align-self: end; padding-bottom: 7px; }
+.eventHistoryPoints { position: relative; }
+.eventHistoryLanePlot:focus-within { position: relative; z-index: 3; }
+.eventHistoryPointGroup { position: absolute; top: 0; height: 14px; }
+.eventHistoryPoint { position: relative; display: block; width: 100%; height: 14px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.eventHistoryPoint::after { content: ""; position: absolute; bottom: 1px; left: var(--event-arrow-x); transform: translateX(-50%); width: 10px; height: 7px; background: var(--event-marker-fill); clip-path: polygon(0 0,100% 0,50% 100%); }
+.eventHistoryPoint:hover, .eventHistoryPoint:focus-visible, .eventHistoryPoint[aria-pressed="true"] { outline: 1px dotted #555; outline-offset: 0; }
+.eventHistoryPointMenu { max-height: 240px; max-width: min(340px,90vw); overflow-y: auto; font-size: 12px; }
+.eventHistoryPointMenu .dropdown-item { white-space: normal; }
+.eventHistoryTrack { position: relative; height: 24px; background: #f0f2f3; border-radius: 3px; overflow: hidden; }
+.eventHistoryTrack button { position: absolute; top: 0; height: 100%; min-width: 6px; border: 0; border-radius: 2px; padding: 0; cursor: pointer; }
+.eventHistoryTrack button.uncertain { background-image: repeating-linear-gradient(120deg, transparent 0 5px, #ffffff80 5px 8px); }
+.eventHistoryTrack button:hover, .eventHistoryTrack button[aria-pressed="true"], .eventHistoryTrack button:focus-visible { outline: 2px solid #222; outline-offset: -2px; z-index: 1; }
+.eventHistoryAxis { display: flex; justify-content: space-between; gap: 6px; margin: 8px 0 12px 120px; font-size: 11px; }
+.eventHistoryLegend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11px; }
+.eventHistoryLegend span::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 4px; background: #b9ddcb; }
+.eventHistoryLegend span:nth-child(2)::before { background: #c58b16; }
+.eventHistoryLegend span:nth-child(3)::before { background: #d63d48; }
+.eventHistoryLegend span:nth-child(4)::before { background: #c94d83; }
+.eventHistoryLegend .eventHistoryLegendPoint::before { width: 0; height: 0; background: none; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--event-color); }
+.eventHistoryLegend .eventHistoryLegendUnknown::before { background: #f0f2f3; border: 1px solid #bfc6ca; }
+.eventHistoryLegend .eventHistoryLegendPartial::before { background: repeating-linear-gradient(120deg, #aaa 0 2px, #fff 2px 4px); }
+.eventHistoryTable { font-size: 12px; }
+.eventHistoryTable td { vertical-align: middle; min-width: 100px; }
+.eventHistoryDetail { padding: 10px 0; border-top: 1px solid #dee2e6; border-bottom: 1px solid #dee2e6; }
+.eventStatistics { padding-top: 4px; }
+.eventStatisticsChartGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.eventStatisticsChartGrid > div { height: 330px; min-width: 0; }
+@media (max-width: 991px) { .eventStatisticsChartGrid { grid-template-columns: minmax(0, 1fr); } }
+.eventStatistics h2 { font-size: 18px; margin-bottom: 8px; }
+.eventStatisticsControls { display: flex; flex-wrap: wrap; gap: 8px; }
+.eventStatisticsControls label { flex: 0 1 240px; min-width: 0; font-size: 12px; }
+.eventStatisticsTable { font-size: 12px; }
+.eventStatisticsTable th, .eventStatisticsTable td { min-width: 115px; vertical-align: middle; }
+.eventStatisticsTable th:first-child { min-width: 155px; }
+.eventStatisticsTable tr > :first-child { position: sticky; left: 0; z-index: 1; background: #fff; }
+@media (max-width: 575px) {
+    .eventHistoryLane { grid-template-columns: 88px minmax(0, 1fr); gap: 6px; font-size: 11px; }
+    .eventHistoryAxis { margin-left: 94px; font-size: 10px; }
+}
 .logsToolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .logsActions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .logsFollow { display: inline-flex; align-items: center; gap: 6px; }

@@ -61,6 +61,7 @@ function initMeterUI() {
     initSettingsUI();
     initHistoryViewer();
 	initGridEventsViewer();
+    initEventHistory();
 	initLogsViewer();
 
 }
@@ -231,16 +232,18 @@ const calibrationGroups = [
 const meterOptionGroups = [
     {
         title: "Perturbaciones de voltaje (Dip / Swell)",
+        description: "Comparten los límites por fase de arriba: DIP por debajo del límite bajo y swell por encima del alto. Se guardan al recuperar la normalidad; la histéresis y el tiempo de recuperación también son compartidos.",
         namespace: "meter",
         fields: [
             {key: "dipEnabled", label: "Guardar DIP puntuales", type: "bool"},
-            {key: "dipMs", label: "Mínimo DIP", type: "int", unit: "ms"},
+            {key: "dipMs", label: "Confirmación DIP", type: "int", unit: "ms"},
             {key: "swellEnabled", label: "Guardar swell puntuales", type: "bool"},
-            {key: "swellMs", label: "Mínimo swell", type: "int", unit: "ms"},
+            {key: "swellMs", label: "Confirmación swell", type: "int", unit: "ms"},
         ],
     },
     {
         title: "Eventos de corriente",
+        description: "Umbral común para R/S/T/N. Los picos cortos se guardan al terminar; si la condición persiste pasa a alta corriente sostenida y se registra siempre.",
         namespace: "meter",
         fields: [
             {key: "overcurrent", label: "Guardar sobrecorrientes puntuales", type: "bool"},
@@ -256,6 +259,7 @@ const settingsBackupSections = [
     {key: "grid", label: "Estados de red"},
     {key: "history", label: "Registro histórico"},
     {key: "capture", label: "Captura de eventos"},
+    {key: "wave", label: "Oscilografías"},
     {key: "energy", label: "Contadores de energía"},
     {key: "calibration", label: "Calibración"},
 ];
@@ -280,7 +284,7 @@ function initSettingsUI() {
     $("#btnLoadCalibration").click(() => loadSettings("calibration", true));
     $("#btnSaveMeterOptions").click(saveMeterOptions);
     $("#waveConfigForm").on("submit", saveWaveConfig);
-    $("#waveConfigRefresh").on("click", loadWaveConfig);
+    $("#waveConfigRefresh").on("click", () => loadWaveConfig().catch(()=>{}));
     $("#btnSaveCalibration").click(saveCalibrationOptions);
     $("#btnRestoreCalibration").click(restoreDefaultCalibration);
     $("#gridSettingsForm").on("submit", saveGridSettings);
@@ -291,6 +295,8 @@ function initSettingsUI() {
     });
     $("#history_period").on("input", updateHistoryEstimate);
     $("#btnLoadGridSettings").on("click", () => loadSettings("grid", true));
+    $("#settings").on("click", ".eventSettingsHelpButton", function () { showEventSettingsHelp(this.dataset.help); });
+    $("#settings_capture").on("change", "#opt_meter_dipEnabled, #opt_meter_swellEnabled, #opt_meter_overcurrent", updatePointWaveControls);
     $("#btnLoadHistorySettings").on("click", () => loadSettings("history", true));
     $("#btnRefreshStorage").on("click", () => loadSettings("storage", true));
     $("#btnFormatStorage").on("click", startStorageFormat);
@@ -312,17 +318,17 @@ function initSettingsUI() {
 // Crea el HTML base de las opciones.
 function createSettingsHtml() {
     let html = '<div class="p-2"><ul class="nav nav-tabs" id="settingsTabs" role="tablist">';
-    const sections = [["grid", "Estados de red"], ["history", "Registro histórico"], ["storage", "Almacenamiento NAND"], ["capture", "Captura de eventos"], ["calibration", "Calibración"], ["backup", "Importar / exportar"]];
+    const sections = [["grid", "Eventos de red"], ["history", "Registro histórico"], ["storage", "Almacenamiento NAND"], ["calibration", "Calibración"], ["backup", "Importar / exportar"]];
     sections.forEach(([key, label], i) => {
         html += '<li class="nav-item" role="presentation"><button class="nav-link' + (i ? '' : ' active') + '" id="settingsTab_' + key + '" data-section="' + key + '" data-bs-toggle="tab" data-bs-target="#settings_' + key + '" type="button" role="tab" aria-controls="settings_' + key + '" aria-selected="' + !i + '">' + label + '</button></li>';
     });
     html += '</ul><div class="tab-content">';
-    const contents = [createGridSettingsHtml(), createHistorySettingsHtml(), createStorageSettingsHtml(), createMeterSettingsHtml(), createCalibrationSettingsHtml(), createSettingsBackupHtml()];
+    const contents = [createGridSettingsHtml() + createMeterSettingsHtml(), createHistorySettingsHtml(), createStorageSettingsHtml(), createCalibrationSettingsHtml(), createSettingsBackupHtml()];
     sections.forEach(([key], i) => {
         html += '<section class="tab-pane settingsPane' + (i ? '' : ' active') + '" id="settings_' + key + '" role="tabpanel" aria-labelledby="settingsTab_' + key + '">';
         html += contents[i] + '</section>';
     });
-    html += '</div></div>';
+    html += '</div></div><div class="modal fade" id="eventSettingsHelp" tabindex="-1" aria-labelledby="eventSettingsHelpTitle" aria-hidden="true"><div class="modal-dialog modal-dialog-centered modal-dialog-scrollable"><div class="modal-content"><div class="modal-header py-2"><h2 class="modal-title fs-6" id="eventSettingsHelpTitle"></h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar ayuda"></button></div><div class="modal-body small" id="eventSettingsHelpBody"></div></div></div></div>';
     return html;
 }
 
@@ -405,7 +411,7 @@ function renderStorageStatus(status, webFs) {
     const content = {
         metadata: "Mapa de particiones y bitmap de bloques defectuosos",
         history: (history.writtenPages || 0) + " páginas escritas desde el inicio",
-        waveEvents: "Oscilografias: un bloque de 128 KiB por captura",
+        waveEvents: "Oscilografias: 64 KiB por captura; dos por bloque NAND",
         gridEvents: ((Number(grid.recoveredEvents) || 0) + (Number(grid.acceptedEvents) || 0)) + " eventos conocidos",
         diagnostics: "Registros de diagnóstico",
         webFsA: storageWebFsLabel(webFs, "a"),
@@ -514,13 +520,12 @@ function startStorageFormat() {
 
 // Crea el formulario compacto de estados de red; sin parametros.
 function createGridSettingsHtml() {
-    const actions = '<button id="btnLoadGridSettings" type="button" class="btn btn-sm btn-outline-secondary">Recargar</button>' +
-        '<button type="submit" class="btn btn-sm btn-success">Guardar</button>';
+    const actions = createEventSettingsHelpButton("limits") + createSettingsIconButton("btnLoadGridSettings", "Recargar todo", false) + createSettingsIconButton("", "Guardar límites", true, "submit");
     let html = '<form id="gridSettingsForm" class="settingsSection">';
-    html += createSettingsHeaderHtml("Voltajes y estados", "Umbrales compartidos por DIP/swell y estados sostenidos. Los estados se guardan siempre.", actions);
+    html += createSettingsHeaderHtml("Estados de red y límites", "Umbrales de tensión por fase y sobrecorriente común a R/S/T. Los cambios de estado se guardan siempre; el registro de eventos puntuales se configura abajo.", actions);
     html += '<div id="gridSettingsStatus" class="settingsStatusLine small text-muted" role="status"></div>';
     html += '<fieldset id="gridSettingsFields" disabled><div class="settingsGroupGrid settingsGroupGridTwo">';
-    html += '<div class="settingsGroup"><h3>Límites por fase</h3><div class="table-responsive"><table class="table table-sm align-middle settingsTable"><thead><tr><th>Fase</th><th>Bajo voltaje (V)</th><th>Alto voltaje (V)</th></tr></thead><tbody>';
+    html += '<div class="settingsGroup"><h3>Límites por fase</h3><div class="table-responsive"><table class="table table-sm align-middle settingsTable"><thead><tr><th>Fase</th><th>Baja / DIP (V)</th><th>Alta / Swell (V)</th></tr></thead><tbody>';
     ["R", "S", "T"].forEach((phase) => {
         html += '<tr><th>' + phase + '</th>';
         ["low", "high"].forEach((limit) => {
@@ -528,8 +533,10 @@ function createGridSettingsHtml() {
         });
         html += '</tr>';
     });
-    html += '</tbody></table></div><button id="btnCopyGridLimits" type="button" class="btn btn-sm btn-outline-secondary">Copiar R a S/T</button></div>';
-    html += '<div class="settingsGroup"><h3>Confirmación</h3>';
+    html += '</tbody></table></div><button id="btnCopyGridLimits" type="button" class="btn btn-sm btn-outline-secondary">Copiar R a S/T</button><div class="settingsCurrentLimits border-top mt-2 pt-2">' +
+        '<div class="settingsField"><label for="opt_meter_ocCurrent">Sobrecorriente R/S/T (A)</label><input id="opt_meter_ocCurrent" name="ocCurrent" class="form-control form-control-sm optionInput" data-key="ocCurrent" data-type="float" type="number" required min="0.01" max="163.82" step="any"></div>' +
+        '<div class="settingsField"><label for="opt_meter_ocHyst">Histéresis de corriente (A)</label><input id="opt_meter_ocHyst" name="ocHyst" class="form-control form-control-sm optionInput" data-key="ocHyst" data-type="float" type="number" required min="0" max="163.81" step="any"></div></div></div>';
+    html += '<div class="settingsGroup"><h3>Sin tensión y recuperación</h3>';
     const fields = [
         ["noVoltage", "Sin tensión (V)", 1, 100, "0.01"],
         ["hysteresis", "Histéresis (V)", 0, 50, "0.01"],
@@ -775,7 +782,7 @@ function saveHistorySettings(event) {
 
 // Crea el encabezado comun de una seccion; title y description son textos, actions contiene sus botones.
 function createSettingsHeaderHtml(title, description, actions) {
-    return '<header class="settingsSectionHeader"><div><h2>' + title + '</h2><p>' + description +
+    return '<header class="settingsSectionHeader' + (actions.includes("settingsIconButton") ? " settingsCompactHeader" : "") + '"><div><h2>' + title + '</h2><p>' + description +
         '</p></div><div class="settingsActions">' + actions + '</div></header>';
 }
 
@@ -788,18 +795,117 @@ function fillGridSettings(values) {
     });
 }
 
-// Lee ajustes una sola vez por solicitud, sin consultas periodicas; sin parametros.
-function loadGridSettings() {
-    $("#gridSettingsFields").prop("disabled", true);
-    $("#gridSettingsStatus").text("Cargando...");
-    return $.ajax({url: board.IP + "/grid/config", cache: false, timeout: Math.max(board.timeout, 3000)})
-        .done((values) => {
-            fillGridSettings(values);
-            $("#gridSettingsFields").prop("disabled", false);
-            $("#gridSettingsStatus").text("Ajustes cargados.");
-        })
-        .fail(() => $("#gridSettingsStatus").text("No se pudieron cargar los ajustes de red."));
+let eventsConfig = null, eventsStatus = null, eventsLoad = null, eventsSaving = false;
+const eventGridFields = {lowR:"volt.lowR",lowS:"volt.lowS",lowT:"volt.lowT",highR:"volt.highR",highS:"volt.highS",highT:"volt.highT",
+    noVoltage:"volt.loss",hysteresis:"volt.hyst",lossConfirmMs:"time.loss",recoveryConfirmMs:"time.back",
+    neutralHigh:"neut.high",neutralHysteresis:"neut.hyst",neutralConfirmMs:"neut.wait",neutralRecoveryMs:"neut.back"};
+const eventPointFields = {dipEnabled:"rec.dip",swellEnabled:"rec.swell",overcurrent:"rec.oc",dipMs:"time.dip",swellMs:"time.swell",ocMs:"time.oc",ocCurrent:"curr.high",ocHyst:"curr.hyst"};
+
+// Consulta path con plazo; options aporta metodo/cuerpo y 204 representa estado sin cambios.
+async function requestEvents(path, options = {}) {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
+    try {
+        const response = await fetch(board.IP + path, {...options, cache:"no-store", signal:controller.signal});
+        if (response.status === 204) return null;
+        const value = await response.json();
+        if (!response.ok) {
+            const messages={rev_conflict:"La configuración cambió en otro cliente. Recargue antes de guardar.",
+                save_busy:"Ya hay un guardado pendiente en la placa. Espere y recargue.",invalid_config:"Los límites o tiempos de eventos son incompatibles."};
+            throw Error(messages[value.error] || value.error || "HTTP " + response.status);
+        }
+        return value;
+    } finally { clearTimeout(timer); }
 }
+
+// Lee la configuracion completa; force evita reutilizar el snapshot de esta vista.
+async function readEventsConfig(force = false) {
+    if (!eventsConfig || force) eventsConfig = await requestEvents("/events/config");
+    if (!["volt","time","neut","curr","rec","wave"].every(key=>eventsConfig[key]) || !Number.isInteger(eventsConfig.rev)) throw Error("Configuración de eventos incompleta.");
+    return eventsConfig;
+}
+
+// Consulta cambios respecto del ultimo seq; sin parametros y sin recargar los campos editables.
+async function readEventsStatus() {
+    const value = await requestEvents("/events/status" + (eventsStatus ? "?since=" + eventsStatus.seq : ""));
+    if (value) eventsStatus = value;
+    if (!eventsStatus) throw Error("No se pudo leer el estado de eventos.");
+    return eventsStatus;
+}
+
+// Convierte config agrupada a las claves usadas por los formularios; fields define el mapeo.
+function flattenEventFields(config, fields) {
+    return Object.fromEntries(Object.entries(fields).map(([key,path])=>{const [group,name]=path.split("."); return [key,config[group][name]];}));
+}
+
+// Convierte values del formulario en parametros cortos usando fields como mapeo.
+function mapEventFields(values, fields) {
+    return Object.fromEntries(Object.entries(fields).filter(([key])=>Object.hasOwn(values,key)).map(([key,path])=>[path,Number(values[key])]));
+}
+
+// Adapta config/status a la tabla Wave existente sin consultas adicionales.
+function eventWaveValues(config, status) {
+    const wave = status.wave;
+    return {preMs:config.wave.pre,saveEnabled:config.wave.on,pointMask:(config.wave.dip?1:0)|(config.wave.swell?2:0)|(config.wave.oc?4:0),
+        enabled:wave.on,capturing:status.busy,actualPreMs:wave.pre,reservedBytes:wave.ram,storedCaptures:wave.count,
+        occupiedSlots:wave.used,totalSlots:wave.slots,committed:wave.done,orphans:wave.orph,pendingLinks:wave.pending,
+        gaps:wave.gaps,droppedTriggers:wave.drop,failedWrites:wave.fail,erasedBlocks:wave.free};
+}
+
+// Carga los tres bloques con un GET de configuracion y uno de estado; comparte cargas simultaneas.
+async function loadUnifiedEventSettings() {
+    if (eventsLoad) return eventsLoad;
+    eventsLoad = (async () => {
+        $("#gridSettingsFields, #captureFields, #btnSaveMeterOptions, #gridSettingsForm button[type=submit], #waveConfigForm button[type=submit], #wavePreMs, #waveSaveEnabled").prop("disabled",true);
+        $("#waveConfigForm").data("loaded",false);
+        try {
+            const config = await readEventsConfig(true), status = await readEventsStatus();
+            const grid = flattenEventFields(config,eventGridFields);
+            grid.pointLimitMs = status.lim.point; grid.capturePages = status.lim.pages;
+            fillGridSettings(grid); fillMeterOptions(flattenEventFields(config,eventPointFields));
+            await loadWaveConfig(eventWaveValues(config,status));
+            $("#gridSettingsFields, #captureFields, #btnSaveMeterOptions, #gridSettingsForm button[type=submit]").prop("disabled",false);
+            updatePointWaveControls();
+            $("#gridSettingsStatus").text("Ajustes cargados."); setSettingsStatus("Opciones cargadas.",false,"capture");
+        } catch (error) {
+            eventsConfig = null;
+            $("#gridSettingsStatus").text("No se pudieron cargar los ajustes de red.");
+            $("#waveConfigStatus").text("No se pudo cargar la configuración. Recargue este bloque.");
+            setSettingsStatus("No se pudieron cargar las opciones de eventos. Recargue este bloque.",true,"capture");
+            throw error;
+        }
+    })();
+    try { return await eventsLoad; } finally { eventsLoad = null; }
+}
+
+// Envia values URL-encoded y espera la revision confirmada, sin otro POST de recarga.
+async function saveEventConfig(values) {
+    if (eventsSaving) throw Error("Ya hay un guardado en curso.");
+    eventsSaving = true;
+    $("#gridSettingsFields, #captureFields, #gridSettingsForm button, #waveConfigForm button, #wavePreMs, #waveSaveEnabled, #btnSaveMeterOptions, #btnLoadSettings").prop("disabled",true);
+    try {
+        if (!eventsConfig) throw Error("Recargue la configuración antes de guardar.");
+        const current = eventsConfig;
+        const body = new URLSearchParams({rev:current.rev,...values});
+        const queued = await requestEvents("/events/config",{method:"POST",body});
+        const deadline = Date.now()+30000;
+        while (Date.now()<deadline) {
+            const status = await readEventsStatus();
+            if (status.cfg === queued.rev) { await readEventsConfig(true); return; }
+            if (status.save.state === "fail" && status.save.rev === queued.rev) throw Error("Falló el guardado NVS; se conserva la configuración anterior.");
+            if (status.cfg !== current.rev) throw Error("La configuración cambió desde otro cliente. Recargue los ajustes.");
+            await new Promise(resolve=>setTimeout(resolve,300));
+        }
+        throw Error("Guardado pendiente: espere a que termine la captura y recargue para comprobarlo.");
+    } catch (error) { eventsConfig=null; throw error; }
+    finally {
+        eventsSaving=false;
+        $("#gridSettingsFields, #captureFields, #gridSettingsForm button, #waveConfigForm button, #wavePreMs, #waveSaveEnabled, #btnSaveMeterOptions, #btnLoadSettings").prop("disabled",false);
+        updatePointWaveControls();
+    }
+}
+
+// Lee limites junto con eventos y Wave; sin parametros.
+function loadGridSettings() { return loadUnifiedEventSettings(); }
 
 // Valida y guarda el formulario; event es el envio del formulario web.
 function saveGridSettings(event) {
@@ -808,6 +914,9 @@ function saveGridSettings(event) {
     if (!form.reportValidity()) return;
     const values = Object.fromEntries(new FormData(form));
     const absence = Number(values.noVoltage), hysteresis = Number(values.hysteresis);
+    if (Number(values.ocHyst) >= Number(values.ocCurrent)) {
+        $("#gridSettingsStatus").text("La histéresis de corriente debe ser menor que el umbral de sobrecorriente."); return;
+    }
     if (Number(values.neutralHysteresis) >= Number(values.neutralHigh)) {
         $("#gridSettingsStatus").text("La histéresis de neutro debe ser menor que el umbral."); return;
     }
@@ -818,50 +927,142 @@ function saveGridSettings(event) {
     }
     $("#gridSettingsFields, #btnLoadGridSettings").prop("disabled", true);
     $("#gridSettingsStatus").text("Guardando...");
-    $.ajax({type: "POST", url: board.IP + "/grid/config", data: values, timeout: Math.max(board.timeout, 5000)})
-        .done((saved) => {
-            fillGridSettings(saved);
+    saveEventConfig(mapEventFields(values,{...eventGridFields,ocCurrent:"curr.high",ocHyst:"curr.hyst"}))
+        .then(() => {
+            fillGridSettings({...flattenEventFields(eventsConfig,eventGridFields),ocCurrent:eventsConfig.curr.high,ocHyst:eventsConfig.curr.hyst,
+                pointLimitMs:eventsStatus.lim.point,capturePages:eventsStatus.lim.pages});
             $("#gridSettingsStatus").text("Guardado. Los estados se confirman nuevamente con estos ajustes.");
         })
-        .fail((xhr) => $("#gridSettingsStatus").text(xhr.responseText || "No se pudo confirmar el guardado. Recargue los ajustes."))
-        .always(() => $("#gridSettingsFields, #btnLoadGridSettings").prop("disabled", false));
+        .catch(error => $("#gridSettingsStatus").text(error.message || "No se pudo confirmar el guardado. Recargue los ajustes."))
+        .finally(() => $("#gridSettingsFields, #btnLoadGridSettings").prop("disabled", false));
 }
 
-// Crea el bloque de opciones del medidor.
+// Crea un boton compacto; id/label lo identifican, save elige el icono y type su accion HTML.
+function createSettingsIconButton(id, label, save, type = "button") {
+    const path = save ? '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/>' : '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-2L20 8M4 16l2.3 3A7 7 0 0 0 18 17"/>';
+    return '<button' + (id ? ' id="' + id + '"' : '') + ' type="' + type + '" class="btn btn-sm btn-outline-' + (save ? "success" : "secondary") + ' settingsIconButton" title="' + label + '" aria-label="' + label + '"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">' + path + '</svg></button>';
+}
+
+// Crea el acceso a la ayuda del bloque indicado por key; no envia formularios.
+function createEventSettingsHelpButton(key) {
+    return '<button type="button" class="btn btn-sm btn-outline-secondary settingsIconButton eventSettingsHelpButton" data-help="' + key + '" title="Ayuda de este bloque" aria-label="Ayuda de este bloque"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2-3 4M12 17h.01"/></svg></button>';
+}
+
+// Muestra ayuda contextual en una ventana; key identifica limites, deteccion u oscilografias.
+function showEventSettingsHelp(key) {
+    const help = {
+        limits: ["Límites y estados de red", [
+            "Baja / DIP y Alta / Swell definen los umbrales de tensión de cada fase. Copiar R a S/T copia únicamente esos dos valores de R a las otras fases.",
+            "Sobrecorriente es un único umbral, común a las corrientes de R/S/T. Su histéresis evita cambios repetidos cerca del límite. Estos ajustes se guardan con el botón de este bloque.",
+            "Sin tensión define la pérdida de fase; las confirmaciones de sin tensión y normalidad filtran cambios demasiado breves. Neutro-tierra tiene su propio umbral, histéresis y tiempos.",
+            "Los DIP y swell usan los mismos límites de tensión. Si la condición persiste más que la duración máxima puntual, se registra como estado sostenido. Los estados y cortes se registran siempre."
+        ]],
+        points: ["Detección de eventos de línea", [
+            "Configure los umbrales de tensión y corriente en Límites por fase. Aquí seleccione el tiempo mínimo de detección de cada evento y si desea registrar el evento y guardar su oscilografía.",
+            "Confirmación es el tiempo mínimo que la señal debe permanecer fuera del umbral: de 10 a 2000 ms, en pasos de 10 ms. La histéresis y la confirmación de normalidad determinan la recuperación.",
+            "Un DIP, swell o pico de corriente se registra como puntual al recuperar la normalidad, si no excede la duración máxima puntual. Si persiste, se trata como estado sostenido; apagar Registro no deshabilita los estados ni los cortes.",
+            "Osc. requiere Registro para ese tipo de evento y la habilitación general de oscilografías. Al apagar Registro se desmarca y deshabilita Osc.; al reactivarlo puede elegir nuevamente si desea oscilografía. Guarde para aplicar los cambios."
+        ]],
+        wave: ["Oscilografías: captura y almacenamiento", [
+            "Al cruzar un umbral se inicia una captura provisional, antes de confirmar el evento. Incluye las muestras previas disponibles y continúa hasta completar 744 ms. Una captura puede reunir disparos cercanos.",
+            "Se guardan voltajes R/S/T y corrientes R/S/T/N a 8 kHz. No hay oscilografía de voltaje neutro-tierra. Cada captura ocupa 64 KiB: 31 páginas de 24 ms y una página final de enlaces a eventos FAST confirmados.",
+            "La captura solo se cierra si recibe un enlace FAST durable a tiempo y de un tipo habilitado. Puede terminar antes de la clasificación definitiva del evento; sin enlace queda huérfana hasta reutilizar ese espacio. Una captura compartida puede conservarse por otro tipo habilitado.",
+            "Antes del evento define la reserva de señal previa en RAM. Cambiar ese tiempo requiere reiniciar. La habilitación general controla nuevas oscilografías de estados, cortes, neutro y puntuales; no borra las existentes ni desactiva los registros FAST. Las capturas iniciadas terminan normalmente.",
+            "La NAND se reutiliza circularmente y prepara bloques borrados en segundo plano. Destinos ocupados incluye provisionales y huérfanas, no solo capturas confirmadas. Los contadores marcados desde este arranque se reinician al arrancar la placa."
+        ]]
+    }[key];
+    if (!help) return;
+    $("#eventSettingsHelpTitle").text(help[0]);
+    $("#eventSettingsHelpBody").empty();
+    help[1].forEach(text => $("<p>").text(text).appendTo("#eventSettingsHelpBody"));
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("eventSettingsHelp")).show();
+}
+
+// Ajusta cada selector Osc. segun su Registro y el estado del formulario; sin parametros.
+function updatePointWaveControls() {
+    [["dipEnabled","waveDip"],["swellEnabled","waveSwell"],["overcurrent","waveCurrent"]].forEach(([record,id]) => {
+        const enabled = $("#opt_meter_" + record).prop("checked"), input = $("#" + id);
+        if (!enabled) input.prop("checked",false);
+        input.prop("disabled",!enabled || eventsSaving || $("#captureFields").prop("disabled"));
+        input.attr("title",enabled ? "Guardar oscilografía de este evento" : "Active Registro para habilitar la oscilografía");
+    });
+}
+
+// Crea una fila con registro, oscilografia y confirmacion; key/waveKey/msKey son sus claves y label el tipo.
+function createPointSettingsRow(label, key, waveKey, msKey) {
+    return '<tr><th scope="row">' + label + '</th><td><input type="checkbox" class="form-check-input optionInput" id="opt_meter_' + key + '" data-key="' + key + '" data-type="bool" aria-label="Registrar ' + label + '"></td>' +
+        '<td><input type="checkbox" class="form-check-input" id="' + waveKey + '" aria-label="Oscilografía de ' + label + '"></td>' +
+        '<td><input class="form-control form-control-sm optionInput" id="opt_meter_' + msKey + '" data-key="' + msKey + '" data-type="int" type="number" min="10" max="2000" step="10" aria-label="Confirmación de ' + label + ' en ms"></td></tr>';
+}
+
+// Crea el bloque compacto de deteccion y guardado; no recibe parametros.
 function createMeterSettingsHtml() {
-    const actions = '<button class="btn btn-sm btn-outline-secondary" id="btnLoadSettings" type="button">Recargar</button>' +
-        '<button class="btn btn-sm btn-success" id="btnSaveMeterOptions" type="button" disabled>Guardar</button>';
-    let html = '<div class="settingsSection">' + createSettingsHeaderHtml("Captura de eventos", "Umbrales Dip/Swell, sobrecorriente y tamaño de las capturas.", actions);
+    const actions = createEventSettingsHelpButton("points") + createSettingsIconButton("btnLoadSettings", "Recargar eventos", false) + createSettingsIconButton("btnSaveMeterOptions", "Guardar eventos y oscilografías", true);
+    let html = '<div id="settings_capture" class="settingsSection border-top mt-3 pt-3">' + createSettingsHeaderHtml("Detección de eventos de línea", "DIP, swell y sobrecorriente: seleccione los tiempos mínimos de detección y si desea registrar cada evento y generar su oscilografía (umbrales en Límites por fase).", actions);
     html += '<div class="settingsStatus settingsStatusLine small text-muted" role="status"></div>';
-    html += '<fieldset id="captureFields" disabled><div class="settingsGroupGrid">' + createOptionGroupsHtml(meterOptionGroups, "meter") + "</div></fieldset>";
-    html += '<form id="waveConfigForm" class="border-top mt-3 pt-2"><strong class="small">Oscilografia NAND</strong><div class="d-flex flex-wrap gap-2 align-items-end mt-2"><label class="small">Historial previo (ms)<select id="wavePreMs" class="form-select form-select-sm">' +
-        [48,96,144,192,240,288].map(value => '<option value="' + value + '">' + value + '</option>').join("") +
-        '</select></label><button class="btn btn-sm btn-success" type="submit">Guardar</button><button id="waveConfigRefresh" class="btn btn-sm btn-outline-secondary" type="button">Recargar</button></div><div id="waveConfigStatus" class="small text-muted mt-2" role="status"></div></form></div>';
+    html += '<fieldset id="captureFields" disabled><table class="table table-sm align-middle settingsPointTable"><thead><tr><th>Evento</th><th title="Guardar registro FAST">Registro</th><th title="Guardar oscilografía vinculada al registro">Osc.</th><th>Conf. ms</th></tr></thead><tbody>' +
+        createPointSettingsRow("DIP", "dipEnabled", "waveDip", "dipMs") + createPointSettingsRow("Swell", "swellEnabled", "waveSwell", "swellMs") +
+        createPointSettingsRow("Sobrecorriente", "overcurrent", "waveCurrent", "ocMs") + '</tbody></table></fieldset>';
+    html += '<form id="waveConfigForm" class="border-top mt-3 pt-2"><div class="d-flex align-items-center justify-content-between gap-2"><strong>Oscilografías NAND</strong><div class="d-flex gap-1">' +
+        createEventSettingsHelpButton("wave") + createSettingsIconButton("waveConfigRefresh", "Recargar oscilografías", false) + createSettingsIconButton("", "Guardar oscilografías", true, "submit") + '</div></div>' +
+        '<p class="small text-muted mb-1 mt-1">Guarda la forma de onda de tensión y corriente alrededor del disparo para analizar el detalle del evento, además de sus muestras FAST.</p>' +
+        '<div class="waveConfigToolbar"><div class="wavePreControl"><label for="wavePreMs">Antes del evento</label><select id="wavePreMs" class="form-select form-select-sm" aria-describedby="wavePreHelp">' +
+        [48,96,144,192,240,288].map(value => '<option value="' + value + '">' + value + ' ms</option>').join("") +
+        '</select></div><label class="form-check form-switch mb-0"><input id="waveSaveEnabled" class="form-check-input" type="checkbox" checked>Habilitar oscilografías</label></div>' +
+        '<p id="wavePreHelp" class="small text-muted mt-1 mb-1">Tiempo de señal anterior al disparo que se conserva en memoria. El resto de la captura muestra lo ocurrido después. Cambiar este tiempo requiere reiniciar.</p>' +
+        '<div id="waveConfigStatus" class="small text-muted mt-2" role="status"></div><dl id="waveConfigMetrics" class="waveConfigMetrics small"></dl>' +
+        '</form></div>';
     return html;
 }
 
 // Consulta reserva y contadores Wave, sin descargar muestras; sin parametros.
-async function loadWaveConfig() {
+async function loadWaveConfig(value) {
+    if (!value || !Object.hasOwn(value,"preMs")) return loadUnifiedEventSettings();
+    $("#waveConfigForm").data("loaded", false);
+    $("#waveConfigForm button[type=submit], #wavePreMs, #waveSaveEnabled").prop("disabled", true);
     try {
-        const response = await fetch(board.IP + "/wave/config", {cache: "no-store"});
-        if (!response.ok) throw Error("No se pudo leer la configuracion Wave.");
-        const value = await response.json();
+        if (typeof value.saveEnabled !== "boolean") throw Error("Actualice el firmware para configurar el guardado de oscilografías.");
         $("#wavePreMs").val(value.preMs);
-        $("#waveConfigStatus").text((value.enabled ? "Activa" : "No disponible") + " · Previo efectivo: " + value.actualPreMs +
-            " ms · Buffers: " + value.reservedBytes + " B (heap de palabras) · Confirmadas: " + value.committed + " · Huerfanas: " + value.orphans +
-            " · Perdidas: " + value.gaps + " · Disparos descartados: " + value.droppedTriggers + " · Fallos NAND: " + value.failedWrites +
-            " · Bloques libres: " + value.erasedBlocks + " · Pendientes: " + value.pendingLinks);
-    } catch (error) { $("#waveConfigStatus").text(error.message); }
+        $("#waveSaveEnabled").prop("checked", value.saveEnabled !== false);
+        if (!Number.isInteger(value.pointMask)) throw Error("Actualice el firmware para configurar oscilografías por tipo.");
+        ["waveDip", "waveSwell", "waveCurrent"].forEach((id, index) => $("#" + id).prop("checked", !!(value.pointMask & (1 << index))));
+        $("#waveConfigStatus").text(!value.enabled ? "Capturador no disponible" : value.capturing ? "Capturando" : value.saveEnabled === false ? "Nuevas capturas deshabilitadas" : "Listo para capturar");
+        const metrics = [["Oscilografías guardadas", value.storedCaptures ?? "—"], ["Destinos ocupados¹", value.totalSlots ? value.occupiedSlots + " / " + value.totalSlots : "—"],
+            ["Previo efectivo", value.actualPreMs + " ms"], ["RAM reservada", (value.reservedBytes / 1024).toFixed(1) + " KiB"],
+            ["Confirmadas²", value.committed], ["Huérfanas²", value.orphans], ["Pendientes", value.pendingLinks],
+            ["Huecos²", value.gaps], ["Disparos descartados²", value.droppedTriggers], ["Fallos NAND²", value.failedWrites], ["Bloques libres", value.erasedBlocks]];
+        $("#waveConfigMetrics").empty();
+        for (const [label, count] of metrics) $("#waveConfigMetrics").append($("<div>").append($("<dt>").text(label), $("<dd>").text(count ?? "—")));
+        $("#waveConfigMetrics").append($('<small class="waveMetricsNote">').text("¹ Incluye provisionales y huérfanas. ² Desde este arranque."));
+        $("#waveConfigForm button[type=submit], #wavePreMs, #waveSaveEnabled").prop("disabled", false);
+        $("#waveConfigForm").data("loaded", true);
+        updatePointWaveControls();
+    } catch (error) { $("#waveConfigStatus").text(error.message); throw error; }
+}
+
+// Reune las habilitaciones Wave y el previo del formulario; exige una lectura valida previa.
+function getWaveConfigValues() {
+    if (!$("#waveConfigForm").data("loaded")) throw Error("Recargue la configuración de oscilografías antes de guardar.");
+    const pointMask = [["waveDip","dipEnabled"], ["waveSwell","swellEnabled"], ["waveCurrent","overcurrent"]].reduce((mask, [id,record], index) => mask | ($("#" + id).prop("checked") && $("#opt_meter_" + record).prop("checked") ? 1 << index : 0), 0);
+    return new URLSearchParams({preMs: $("#wavePreMs").val(), saveEnabled: $("#waveSaveEnabled").prop("checked") ? "1" : "0", pointMask});
 }
 
 // Persiste la prehistoria del formulario; event cancela la navegacion y muestra que requiere reinicio.
 async function saveWaveConfig(event) {
     event.preventDefault();
+    $("#waveConfigForm button").prop("disabled", true);
     try {
-        const response = await fetch(board.IP + "/wave/config", {method: "POST", body: new URLSearchParams({preMs: $("#wavePreMs").val()})});
-        if (!response.ok) throw Error("No se pudo guardar Wave.");
-        $("#waveConfigStatus").text("Guardado. La reserva nueva se aplica al reiniciar la placa.");
+        await saveEventConfig(waveFormEventFields());
+        $("#waveConfigStatus").text("Guardado. Habilitación aplicada; si cambió el previo, reinicie para ajustar la reserva.");
     } catch (error) { $("#waveConfigStatus").text(error.message); }
+    finally { $("#waveConfigForm button").prop("disabled", false); }
+}
+
+// Obtiene las opciones Wave del formulario como parametros del endpoint unificado; sin parametros.
+function waveFormEventFields() {
+    const values = getWaveConfigValues(), mask=Number(values.get("pointMask"));
+    return {"wave.pre":Number(values.get("preMs")),"wave.on":Number(values.get("saveEnabled")),
+        "wave.dip":mask&1?1:0,"wave.swell":mask&2?1:0,"wave.oc":mask&4?1:0};
 }
 
 // Crea el bloque compacto de calibración.
@@ -915,6 +1116,7 @@ function createOptionGroupsHtml(groups, prefix) {
     let html = "";
     groups.forEach((group) => {
         html += '<fieldset class="settingsGroup optionGroup"><legend>' + group.title + '</legend><div class="settingsFieldsGrid">';
+        if (group.description) html += '<p class="small text-muted settingsOptionDescription">' + group.description + '</p>';
         group.fields.forEach((field) => {
             html += createOptionInputHtml(field, prefix);
         });
@@ -951,20 +1153,22 @@ function loadSettings(section = $("#settingsTabs .active").data("section"), forc
     panel.data("loading", true);
     settingsLoadQueue = settingsLoadQueue.then(async () => {
         try {
-            if (section === "grid") await loadGridSettings();
+            if (section === "grid") {
+                await loadGridSettings();
+                $("#settings_capture").data("loaded", true);
+            }
             else if (section === "history") await loadHistorySettings();
             else if (section === "storage") await loadStorageStatus();
+            else if (section === "capture") await loadCaptureSettings();
             else {
                 $("#" + section + "Fields").prop("disabled", true);
-                $(section === "capture" ? "#btnSaveMeterOptions" : "#btnSaveCalibration").prop("disabled", true);
+                $("#btnSaveCalibration").prop("disabled", true);
                 setSettingsStatus("Cargando opciones...", false, section);
-                const values = await readOptions(section === "capture" ? "meter" : "ADE9000",
-                    section === "capture" ? getMeterOptionKeys() : getCalibrationKeys());
+                const values = await readOptions("ADE9000", getCalibrationKeys());
                 if (values.error) throw new Error(values.error);
-                if (section === "capture") { fillMeterOptions(values); await loadWaveConfig(); }
-                else fillCalibrationOptions(values);
+                fillCalibrationOptions(values);
                 $("#" + section + "Fields").prop("disabled", false);
-                $(section === "capture" ? "#btnSaveMeterOptions" : "#btnSaveCalibration").prop("disabled", false);
+                $("#btnSaveCalibration").prop("disabled", false);
                 setSettingsStatus("Opciones cargadas.", false, section);
             }
             panel.data("loaded", true);
@@ -977,6 +1181,11 @@ function loadSettings(section = $("#settingsTabs .active").data("section"), forc
         }
     });
     return settingsLoadQueue;
+}
+
+// Carga eventos puntuales y oscilografia dentro de Eventos de red; sin parametros y sin escrituras.
+async function loadCaptureSettings() {
+    return loadUnifiedEventSettings();
 }
 
 // Lee opciones de un namespace.
@@ -1001,6 +1210,7 @@ function getBackupSectionKeys(section) {
     if (section === "grid") return backupGridKeys;
     if (section === "history") return backupHistoryKeys;
     if (section === "capture") return getMeterOptionKeys();
+    if (section === "wave") return ["preMs", "saveEnabled", "pointMask"];
     if (section === "energy") return backupEnergyKeys;
     if (section === "calibration") return [...getCalibrationKeys(), "neutralRms", "neutralFast"];
     return [];
@@ -1015,6 +1225,10 @@ function validateBackupSection(section, values) {
     if (!keys.length) throw new Error("La sección está vacía.");
     const unknownKeys = keys.filter((key) => !allowed.includes(key));
     if (unknownKeys.length) throw new Error("Contiene campos no reconocidos: " + unknownKeys.join(", ") + ".");
+    if (section === "wave" && (!allowed.every(key => Object.hasOwn(values, key)) ||
+        !Number.isInteger(values.preMs) || values.preMs < 48 || values.preMs > 288 || values.preMs % 48 ||
+        ![true, false, 0, 1].includes(values.saveEnabled) || !Number.isInteger(values.pointMask) || values.pointMask < 0 || values.pointMask > 7))
+        throw new Error("La configuración de oscilografías no es válida.");
     if (keys.some((key) => values[key] === null || !["string", "number", "boolean"].includes(typeof values[key])))
         throw new Error("Contiene un valor con formato inválido.");
     if (section === "grid" && !backupGridKeys.every((key) => Object.prototype.hasOwnProperty.call(values, key)))
@@ -1042,14 +1256,19 @@ function validateBackupSection(section, values) {
 async function readBackupSection(section) {
     let values;
     let defaultsUsed = [];
-    if (section === "network") {
+    if (["grid","capture","wave"].includes(section)) {
+        const config = await readEventsConfig();
+        if (section === "grid") values = flattenEventFields(config,eventGridFields);
+        else if (section === "capture") values = flattenEventFields(config,eventPointFields);
+        else values = {preMs:config.wave.pre,saveEnabled:config.wave.on,pointMask:(config.wave.dip?1:0)|(config.wave.swell?2:0)|(config.wave.oc?4:0)};
+    } else if (section === "network") {
         const response = await $.ajax({url: board.IP + "/network/config", cache: false, timeout: Math.max(board.timeout, 5000)});
         const keys = getBackupSectionKeys(section);
         const missingKeys = keys.filter((key) => !Object.prototype.hasOwnProperty.call(response, key));
         if (missingKeys.length) throw new Error("Opciones de red ausentes: " + missingKeys.join(", ") + ".");
         values = Object.fromEntries(keys.map((key) => [key, response[key]]));
-    } else if (section === "capture" || section === "calibration") {
-        const namespace = section === "capture" ? "meter" : "ADE9000";
+    } else if (section === "calibration") {
+        const namespace = "ADE9000";
         const keys = getBackupSectionKeys(section);
         const response = await readOptions(namespace, keys);
         const missingKeys = keys.filter((key) => !Object.prototype.hasOwnProperty.call(response, key) || response[key] === "key no existe");
@@ -1061,9 +1280,6 @@ async function readBackupSection(section) {
             const value = response[key];
             return [key, section === "calibration" && !["neutralRms", "neutralFast"].includes(key) ? toHex32(value) : value];
         }));
-    } else if (section === "grid") {
-        const response = await $.ajax({url: board.IP + "/grid/config", cache: false, timeout: Math.max(board.timeout, 5000)});
-        values = Object.fromEntries(backupGridKeys.map((key) => [key, response[key]]));
     } else if (section === "history") {
         const response = await $.ajax({url: board.IP + "/history/config", cache: false, timeout: Math.max(board.timeout, 5000)});
         values = {enabled: response.enabled, groupConfig: historyOptionsToGroupConfig(response),
@@ -1088,6 +1304,7 @@ async function exportSettingsBackup() {
     const button = $("#btnExportSettingsBackup").prop("disabled", true);
     const status = $("#settingsBackupStatus").empty();
     const sections = {};
+    eventsConfig=null;
     try {
         for (const key of selected) {
             const label = settingsBackupSections.find((item) => item.key === key).label;
@@ -1139,13 +1356,15 @@ async function loadSettingsBackup(file) {
 // Aplica una seccion usando su endpoint especifico.
 // section: identificador. values: configuracion validada de esa seccion.
 async function applyBackupSection(section, values) {
-    if (section === "network") return $.ajax({type: "POST", url: board.IP + "/network/config", data: values, timeout: Math.max(board.timeout, 5000)});
-    if (section === "grid") return $.ajax({type: "POST", url: board.IP + "/grid/config", data: values, timeout: Math.max(board.timeout, 5000)});
-    if (section === "history") return $.ajax({type: "POST", url: board.IP + "/history/config", data: historyBackupToOptions(values), timeout: Math.max(board.timeout, 5000)});
-    if (section === "capture") {
-        await writeOptions("meter", values);
-        return $.ajax({type: "POST", url: board.IP + "/options/reload", timeout: Math.max(board.timeout, 5000)});
+    if (["grid","capture","wave"].includes(section)) {
+        await readEventsConfig(true);
+        if (section === "grid") return saveEventConfig(mapEventFields(values,eventGridFields));
+        if (section === "capture") return saveEventConfig(mapEventFields(values,eventPointFields));
+        return saveEventConfig({"wave.pre":values.preMs,"wave.on":Number(values.saveEnabled),
+            "wave.dip":values.pointMask&1?1:0,"wave.swell":values.pointMask&2?1:0,"wave.oc":values.pointMask&4?1:0});
     }
+    if (section === "network") return $.ajax({type: "POST", url: board.IP + "/network/config", data: values, timeout: Math.max(board.timeout, 5000)});
+    if (section === "history") return $.ajax({type: "POST", url: board.IP + "/history/config", data: historyBackupToOptions(values), timeout: Math.max(board.timeout, 5000)});
     if (section === "energy") return writeOptions("meter", values);
     if (section === "calibration") return writeOptions("ADE9000", values);
     throw new Error("Sección desconocida.");
@@ -1168,8 +1387,8 @@ async function importSettingsBackup() {
         const row = $("<li>").text(label + ": aplicando...").appendTo(status);
         try {
             await applyBackupSection(key, loadedSettingsBackup.sections[key]);
-            if (["network", "energy", "calibration"].includes(key)) settingsBackupRestartRequired = true;
-            row.text(label + (["network", "energy", "calibration"].includes(key) ? ": guardada; requiere reinicio." : ": aplicada."));
+            if (["network", "energy", "calibration", "wave"].includes(key)) settingsBackupRestartRequired = true;
+            row.text(label + (["network", "energy", "calibration", "wave"].includes(key) ? ": guardada; requiere reinicio." : ": aplicada."));
         } catch (error) {
             failed = true;
             row.addClass("text-danger").text(label + ": error; puede haber quedado parcialmente escrita. " + (error.responseText || error.message || ""));
@@ -1222,15 +1441,18 @@ function fillCalibrationOptions(values) {
 function saveMeterOptions() {
     const values = collectMeterOptionValues();
     if (!values) return;
+    let waveValues;
+    try { waveValues = waveFormEventFields(); }
+    catch (error) { setSettingsStatus(error.message, true, "capture"); return; }
     setSettingsStatus("Guardando opciones de captura...", false, "capture");
     $("#btnSaveMeterOptions, #btnLoadSettings, #captureFields").prop("disabled", true);
-    writeOptions("meter", values)
-        .then(() => $.ajax({type: "POST", url: board.IP + "/options/reload", timeout: Math.max(board.timeout, 3000)}))
-        .done(() => {
+    const {ocCurrent,ocHyst,...pointValues} = values;
+    saveEventConfig({...mapEventFields(pointValues,eventPointFields),...waveValues})
+        .then(() => {
             setSettingsStatus("Opciones de captura guardadas y aplicadas.", false, "capture");
         })
-        .fail(() => setSettingsStatus("No se pudo confirmar el guardado o la aplicación. Recargue las opciones.", true, "capture"))
-        .always(() => $("#btnSaveMeterOptions, #btnLoadSettings, #captureFields").prop("disabled", false));
+        .catch(error => setSettingsStatus(error.message || "No se pudo guardar la configuración.", true, "capture"))
+        .finally(() => $("#btnSaveMeterOptions, #btnLoadSettings, #captureFields").prop("disabled", false));
 }
 
 // Guarda los valores de calibración.

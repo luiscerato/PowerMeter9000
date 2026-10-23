@@ -1,4 +1,4 @@
-let gridEventsViewer = {events: [], cache: new Map(), selectedId: null, request: 0, records: [], selectedRecord: null, showMarkers: true, voltageChart: null, currentChart: null, voltageVisible: true, currentVisible: false, loading: false};
+let gridEventsViewer = {events: [], cache: new Map(), selectedId: null, request: 0, records: [], selectedRecord: null, showMarkers: true, linkViews: true, panMode: false, voltageChart: null, currentChart: null, voltageVisible: true, currentVisible: false, loading: false};
 
 // Inicializa los controles del visor de capturas persistentes de red; sin parámetros.
 function initGridEventsViewer() {
@@ -6,6 +6,16 @@ function initGridEventsViewer() {
     $("#gridEventVoltageToggle").on("click", () => setGridChartVisibility("voltage", !gridEventsViewer.voltageVisible));
     $("#gridEventCurrentToggle").on("click", () => setGridChartVisibility("current", !gridEventsViewer.currentVisible));
     $("#gridEventMarkers").on("change", function () { gridEventsViewer.showMarkers = this.checked; refreshGridMarkers(); });
+    $("#gridEventLinkViews").on("change", function () {
+        gridEventsViewer.linkViews = this.checked;
+        if (!this.checked) return;
+        const waveOpen = $("#gridEventWaveDetails").prop("open");
+        const source = waveOpen && gridWaveViewer.chart ? gridWaveViewer.chart :
+            (gridEventsViewer.currentVisible ? gridEventsViewer.currentChart : gridEventsViewer.voltageChart);
+        syncGridChartRange(source);
+    });
+    $("#gridEventZoomToggle").on("click", () => setGridChartNavigationMode(false));
+    $("#gridEventPanToggle").on("click", () => setGridChartNavigationMode(true));
     $("#gridEventResetZoom").on("click", resetGridChartRange);
     $("#gridEventWaveDetails").on("toggle", function () { if (this.open) loadGridWaves(); });
     $("#gridWaveRefresh").on("click", loadGridWaves);
@@ -17,6 +27,10 @@ async function loadGridEventsViewer() {
     if (gridEventsViewer.loading) return;
     gridEventsViewer.loading = true; setGridEventsStatus("Consultando eventos guardados...");
     try {
+        const scope = await refreshCaptureCacheScope(new AbortController().signal);
+        const identity = scope ? scope.deviceId + ":" + scope.fastEpoch : null;
+        if (identity !== gridEventsViewer.cacheIdentity) gridEventsViewer.cache.clear();
+        gridEventsViewer.cacheIdentity = identity;
         const infoResponse = await fetch(board.IP + "/grid-events", {cache: "no-store"});
         if (!infoResponse.ok) throw new Error("No se pudo leer el registro de eventos.");
         const info = await infoResponse.json();
@@ -51,22 +65,23 @@ function renderGridEventsList() {
 // Descarga y decodifica una captura Grid seleccionada; event contiene la cabecera indexada.
 async function loadGridEvent(event) {
     const request = ++gridEventsViewer.request;
+    gridEventsViewer.controller?.abort();
+    const controller = new AbortController();
+    gridEventsViewer.controller = controller;
     setGridEventsStatus("Cargando captura #" + event.i + "...");
     try {
-        let decoded = gridEventsViewer.cache.get(event.i);
-        if (decoded && decoded.timestamp !== event.t) { gridEventsViewer.cache.delete(event.i); decoded = null; }
-        if (!decoded) {
-            const response = await fetch(board.IP + "/grid-events/data?eventId=" + event.i, {cache: "no-store"});
-            if (!response.ok) throw new Error("No se pudo descargar la captura.");
-            decoded = decodeGridEvent(await response.arrayBuffer());
-            if (!decoded.partial) {
-                gridEventsViewer.cache.set(event.i, decoded);
-                if (gridEventsViewer.cache.size > 12) gridEventsViewer.cache.delete(gridEventsViewer.cache.keys().next().value);
-            }
-        }
+        const scope = await refreshCaptureCacheScope(controller.signal);
+        const identity = scope ? scope.deviceId + ":" + scope.fastEpoch : null;
+        if (identity !== gridEventsViewer.cacheIdentity) gridEventsViewer.cache.clear();
+        gridEventsViewer.cacheIdentity = identity;
+        const decoded = await loadCachedFast(event.i, event.t, scope, controller.signal);
         if (request !== gridEventsViewer.request) return;
+        if (!decoded.partial) {
+            gridEventsViewer.cache.set(event.i, decoded);
+            if (gridEventsViewer.cache.size > 12) gridEventsViewer.cache.delete(gridEventsViewer.cache.keys().next().value);
+        }
         gridEventsViewer.selectedId = event.i;
-        resetGridWaves(decoded);
+        resetGridWaves(decoded, scope);
         renderGridEvent(decoded); renderGridEventsList(); setGridEventsStatus("Captura #" + event.i + " cargada.");
         if ($("#gridEventWaveDetails").prop("open")) loadGridWaves();
     } catch (error) { if (request === gridEventsViewer.request) setGridEventsStatus(error.message || "No se pudo cargar la captura.", true); }
@@ -127,6 +142,7 @@ function decodeGridEvent(buffer) {
     if (!(timeStatus & 32)) throw new Error("Empaquetado FAST no válido.");
     const event = {format, id: root.getUint32(1, true), timestamp: root.getUint32(5, true) * 1000 + root.getUint16(9, true) / 10, states: decodeGridStates(root.getUint16(11, true), format), timeStatus: timeStatus, estimatedTime: !!(timeStatus & 1), startup: !!(timeStatus & 14), previousDurationMs: root.getUint32(14, true) * 10, previousVoltage: decodeGridVoltage(root.getUint16(18, true)), currentVoltage: decodeGridVoltage(root.getUint16(20, true)), firstOffset: root.getInt32(22, true) / 1000, samples: [], transitions: [], partial: false, invalidPages: 0, timingEstimated: false};
     const rootSamples = root.getUint8(26), pageCount = root.getUint8(27);
+    event.preSampleCount = rootSamples;
     event.hasNeutral = hasNeutral;
     event.snapshot = null;
     event.settings = null;
@@ -258,6 +274,14 @@ function decodeGridVoltage(raw) { return raw === 65535 ? null : raw / 100; }
 // Presenta una tensión opcional; voltage es null cuando no hubo lectura anterior.
 function formatGridVoltage(voltage, digits = 1) { return voltage == null ? "—" : voltage.toFixed(digits); }
 
+// Revisa el previo de event con tolerancia de una muestra/20 ms, incluso en capturas ya guardadas.
+function gridPreHistoryMissing(event) {
+    if (!(event.timeStatus & 16)) return false;
+    if (!event.settings || event.preSampleCount == null || !event.samples.length) return true;
+    const expectedMs = event.settings.preMs;
+    return event.preSampleCount + 1 < expectedMs / 10 || -event.samples[0].relativeMs + 20 < expectedMs;
+}
+
 // Presenta las gráficas Fast RMS y la secuencia de transiciones; event contiene la captura decodificada.
 function renderGridEvent(event) {
     const subject = gridRecordSubject(event.states.subject, event.states.pointType), previous = gridStateName(event.states.previous, event.states.subject), current = gridStateName(event.states.current, event.states.subject), when = event.estimatedTime ? "Hora estimada" : formatGridTime(event.timestamp), voltage = event.states.subject === 4 ? "" : " " + formatGridVoltage(event.previousVoltage, 2) + " → " + formatGridVoltage(event.currentVoltage, 2) + " V.", duration = event.startup ? "Duración previa no disponible" : "Estado previo durante " + formatGridDuration(event.previousDurationMs);
@@ -266,7 +290,7 @@ function renderGridEvent(event) {
     const timing = event.timingEstimated ? " La escala temporal incluye intervalos estimados." : "";
     const description = event.states.isPoint ? gridPointName(event.states.pointType) + ". Duración observada: " + formatGridDuration(event.previousDurationMs) + (event.states.limited ? " (captura limitada)." : ".") : previous + " → " + current + ". " + duration + "." + (event.states.isCurrent ? voltage.replace(" V.", " A.") : voltage);
     const dropped = event.timeStatus & 64 ? " Se agotó el espacio de marcas: faltan entradas." : "";
-    const synthetic = (event.timeStatus & 128 ? " Prueba artificial." : "") + (event.timeStatus & 16 ? " Tramo previo incompleto." : "");
+    const synthetic = (event.timeStatus & 128 ? " Prueba artificial." : "") + (gridPreHistoryMissing(event) ? " Historial FAST anterior al disparo insuficiente." : "");
     const first = event.samples[0], last = event.samples[event.samples.length - 1];
     $("#gridEventSummary").text("Captura #" + event.id + " · " + when + " · " + event.samples.length + " muestras" + (first && last ? " · " + formatGridDuration(last.relativeMs - first.relativeMs) + " cubiertos" : ""));
     $("#gridEventTrigger").text("Disparador: " + subject + " · " + description);
@@ -283,6 +307,7 @@ function renderGridEvent(event) {
     if (gridEventsViewer.currentChart) gridEventsViewer.currentChart.destroy();
     gridEventsViewer.voltageChart = createGridChart("gridEventVoltageChart", "Voltaje RMS", "V", voltageSeries, event.samples);
     gridEventsViewer.currentChart = createGridChart("gridEventCurrentChart", "Corriente RMS", "A", [["R", "ir", "#d9534f"], ["S", "is", "#5cb85c"], ["T", "it", "#337ab7"], ["N", "inn", "#6c757d"]], event.samples);
+    setGridChartNavigationMode(gridEventsViewer.panMode);
     refreshGridCharts();
 }
 
@@ -401,17 +426,56 @@ function zoomGridRecords(records) {
 function resetGridChartRange() {
     for (const chart of [gridEventsViewer.voltageChart, gridEventsViewer.currentChart]) {
         if (!chart) continue;
-        chart.options.axisX.viewportMinimum = null;
-        chart.options.axisX.viewportMaximum = null;
-        chart.render();
+        setGridChartRange(chart, null, null);
     }
-    if (typeof syncGridWaveRange === "function") syncGridWaveRange();
+    setGridChartNavigationMode(false);
+    if (typeof syncGridWaveRange === "function") syncGridWaveRange(null, null, true);
 }
 
 // Construye un gráfico Fast RMS; elementId identifica el contenedor y series define nombre, campo y color.
 function createGridChart(elementId, title, unit, series, samples) {
     const data = series.map(([name, key, color]) => ({type: "line", name: name, showInLegend: true, markerSize: 0, color: color, dataPoints: samples.map((sample) => ({x: sample.relativeMs, y: sample[key]}))}));
-    return new CanvasJS.Chart(elementId, {animationEnabled: false, zoomEnabled: true, axisX: {title: "Tiempo relativo (ms)", stripLines: gridEventsViewer.showMarkers && samples.length ? gridRecordMarkers(gridEventsViewer.records, null, samples[0].relativeMs, samples[samples.length - 1].relativeMs) : []}, axisY: {title: title, suffix: " " + unit, includeZero: false, gridDashType: "dot"}, legend: {cursor: "pointer", itemclick: toggleGridSeries}, data: data});
+    let chart;
+    chart = new CanvasJS.Chart(elementId, {animationEnabled: false, zoomEnabled: true, axisX: {title: "Tiempo relativo (ms)", stripLines: gridEventsViewer.showMarkers && samples.length ? gridRecordMarkers(gridEventsViewer.records, null, samples[0].relativeMs, samples[samples.length - 1].relativeMs) : []}, axisY: {title: title, suffix: " " + unit, includeZero: false, gridDashType: "dot"}, legend: {cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(chart), data: data});
+    chart.zoomEnabled = !gridEventsViewer.panMode;
+    chart.panEnabled = gridEventsViewer.panMode;
+    return chart;
+}
+
+// Aplica modo de zoom o paneo a todos los gráficos; panEnabled elige arrastrar para mover.
+function setGridChartNavigationMode(panEnabled) {
+    gridEventsViewer.panMode = panEnabled;
+    for (const chart of [gridEventsViewer.voltageChart, gridEventsViewer.currentChart, gridWaveViewer.chart]) {
+        if (!chart) continue;
+        chart.zoomEnabled = !panEnabled;
+        chart.panEnabled = panEnabled;
+        chart.render();
+    }
+    $("#gridEventZoomToggle").toggleClass("active", !panEnabled).attr("aria-pressed", !panEnabled);
+    $("#gridEventPanToggle").toggleClass("active", panEnabled).attr("aria-pressed", panEnabled);
+}
+
+// Cambia el rango X sin perder el estado interno que CanvasJS usa para zoom y paneo.
+function setGridChartRange(chart, minimum, maximum) {
+    const axis = chart.axisX && chart.axisX[0];
+    if (!axis) return;
+    axis.set("viewportMinimum", minimum, false);
+    axis.set("viewportMaximum", maximum, false);
+}
+
+// Propaga el rango cambiado por el usuario a las otras vistas; source es el gráfico manipulado.
+function syncGridChartRange(source) {
+    if (!source || !source.axisX || !source.axisX[0]) return;
+    const waveSource = typeof gridWaveViewer !== "undefined" && source === gridWaveViewer.chart;
+    if (waveSource && !gridEventsViewer.linkViews) return;
+    const axis = source.axisX[0], minimum = axis.viewportMinimum, maximum = axis.viewportMaximum;
+    for (const chart of [gridEventsViewer.voltageChart, gridEventsViewer.currentChart]) {
+        if (!chart || chart === source) continue;
+        setGridChartRange(chart, minimum, maximum);
+        chart.render();
+    }
+    if (!waveSource && gridEventsViewer.linkViews && typeof syncGridWaveRange === "function")
+        syncGridWaveRange(minimum, maximum);
 }
 
 // Alterna la visibilidad de una serie; event identifica la serie y su grafico CanvasJS.

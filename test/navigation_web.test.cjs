@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
+const {routeEvents,defaultState}=require('./events_api_fixture.cjs');
 const runtime = path.join(process.env.USERPROFILE, '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules');
 const {chromium} = require(require.resolve('playwright', {paths: [root, runtime]}));
 
@@ -17,6 +18,7 @@ async function run() {
     try {
         const page = await browser.newPage({viewport: {width: 1280, height: 900}});
         const errors = [];
+        const eventState=defaultState();
         let storageFormatCalls = 0;
         let storageFormatConfirmation = "";
         let partitionFormatCalls = 0;
@@ -25,6 +27,7 @@ async function run() {
         page.on('pageerror', error => errors.push(error.message));
         await page.route('http://app.test/**', async route => {
             const url = new URL(route.request().url());
+            if(url.pathname.startsWith('/events/'))return routeEvents(route,eventState);
             if (url.pathname === '/storage') return route.fulfill({json: {
                 state: 'ready', nand: {blocks: 2048, capacityBytes: 268435456},
                 partitions: {history: {blocks: 1536, usableBlocks: 1535}, waveEvents: {blocks: 320, usableBlocks: 320},
@@ -149,7 +152,8 @@ async function run() {
             return rect.left >= 0 && rect.right <= 200;
         })), true);
         await page.screenshot({path: path.join(root, '.pio/build/grid-web/navigation-1280.png')});
-        await page.click('#settingsTab_capture');
+        await page.click('#settingsTab_grid');
+        await page.locator('#settings_capture').scrollIntoViewIfNeeded();
         await page.screenshot({path: path.join(root, '.pio/build/grid-web/settings-capture-1280.png')});
         await page.click('#settingsTab_calibration');
         await page.screenshot({path: path.join(root, '.pio/build/grid-web/settings-calibration-1280.png')});

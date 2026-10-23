@@ -52,15 +52,32 @@ bool sendNandAsset(AsyncWebServerRequest* request, const String& path)
 {
 	WebFsFile file;
 	if (!storageManager->webFs().findFile(path.c_str(), file)) return false;
+	const bool library = path.startsWith("/lib/");
+	const char* cacheControl = library ? "public, max-age=31536000, immutable" : "private, no-cache, must-revalidate, no-transform";
+	const String etag = String('"') + String(file.entry.dataCrc32, HEX) + '"';
+	const String validator = request->header("If-None-Match");
+	// El proxy puede convertir la misma firma a un ETag debil al comprimir.
+	if (validator == etag || (validator.startsWith("W/") && strcmp(validator.c_str() + 2, etag.c_str()) == 0)) {
+		AsyncWebServerResponse* response = request->beginResponse(304);
+		response->addHeader("Cache-Control", cacheControl);
+		response->addHeader("ETag", etag);
+		request->send(response);
+		return true;
+	}
 	WebFsReadSession* session = findWebFsReadSession();
-	if (!session || !session->begin(storageManager->webFs(), file)) return false;
+	if (!session || !session->begin(storageManager->webFs(), file)) {
+		request->send(503, "text/plain", "WebFS download busy or insufficient memory");
+		return true;
+	}
+	const uint32_t sessionId = session->getId();
 	AsyncWebServerResponse* response = request->beginResponse(WebFsFormat::contentType(WebFsFormat::MimeType(file.entry.mimeType)),
-		file.entry.storedSize, [session](uint8_t* data, size_t maxLength, size_t offset) -> size_t {
-			return session->copyChunk(data, maxLength, offset);
+		file.entry.storedSize, [session, sessionId](uint8_t* data, size_t maxLength, size_t offset) -> size_t {
+			return session->copyChunk(data, maxLength, offset, sessionId);
 		});
+	request->onDisconnect([session, sessionId]() { session->cancel(sessionId); });
 	if (file.entry.encoding == uint8_t(WebFsFormat::Encoding::gzip)) response->addHeader("Content-Encoding", "gzip");
-	response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-	response->addHeader("ETag", String(file.entry.dataCrc32, HEX));
+	response->addHeader("Cache-Control", cacheControl);
+	response->addHeader("ETag", etag);
 	request->send(response);
 	return true;
 }
@@ -146,8 +163,10 @@ void registerWebFsEndpoints(AsyncWebServer& server)
 			request->send(503, "application/json", "{\"ok\":false,\"reason\":\"webfs_session_unavailable\"}");
 			return;
 		}
+		const uint32_t sessionId = session->getId();
 		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", image.entry.storedSize,
-			[session](uint8_t* data, size_t maxLength, size_t offset) -> size_t { return session->copyChunk(data, maxLength, offset); });
+			[session, sessionId](uint8_t* data, size_t maxLength, size_t offset) -> size_t { return session->copyChunk(data, maxLength, offset, sessionId); });
+		request->onDisconnect([session, sessionId]() { session->cancel(sessionId); });
 		response->addHeader("Content-Disposition", "attachment; filename=power-meter-webfs.fs32");
 		response->addHeader("Cache-Control", "no-store");
 		request->send(response);

@@ -517,7 +517,8 @@ void GridEventStore::confirmCandidate(const Candidate& candidate, uint32_t previ
 		capture.root = GridEventFormat::ListHeader{};
 		capture.root.formatVersion = GridEventFormat::version;
 		capture.root.timeStatus = candidate.sourceFlags | GridEventFormat::packedFastRms;
-		if (capture.rootSampleCount < GridEventFormat::preTriggerSamples) capture.root.timeStatus |= GridEventFormat::preTriggerMissing;
+		const uint32_t priorMs = capture.firstSampleKnown ? uint32_t(capture.startedMs - capture.firstSampleMs) : 0;
+		if (!eventPreHistoryComplete(capture.rootSampleCount, priorMs)) capture.root.timeStatus |= GridEventFormat::preTriggerMissing;
 		capture.root.eventId = capture.eventId;
 		capture.root.subjectAndStates = candidate.word ? candidate.word : GridEventFormat::packSubjectAndStates(candidate.subject, candidate.previousState, candidate.currentState);
 		capture.root.previousStateDuration10Ms = candidate.word && GridEventFormat::isPointEvent(candidate.word) ?
@@ -914,9 +915,17 @@ void GridEventStore::finishCapture(bool success)
 {
 	limitPoints();
 	if (success && capture.rootAssigned) {
+		// Convierte word en una mascara: bit 0 estados, bits 1/2/3 DIP/swell/corriente.
+		auto eventBit = [](uint16_t word) -> uint8_t {
+			return GridEventFormat::isPointEvent(word) ? uint8_t(1U << ((word >> 10) & 31U)) : 1U;
+		};
+		uint8_t eventMask = eventBit(capture.root.subjectAndStates);
+		for (uint8_t page = 0; page + 1 < capture.pageCount; ++page)
+			for (uint8_t index = 0; index < capture.transitionCountPerPage[page]; ++index)
+				eventMask |= eventBit(capture.transitions[page * GridEventFormat::transitionsPerPage + index].subjectAndStates);
 		waveCaptureConfirm(capture.eventId, capture.startedUs, capture.startedUs +
 			uint64_t(uint32_t(capture.closeAfterMs - capture.startedMs)) * 1000ULL, capture.rootStartedUs,
-			uint64_t(capture.root.unixSeconds) * 1000000ULL + capture.root.fraction100Us * 100ULL);
+			uint64_t(capture.root.unixSeconds) * 1000000ULL + capture.root.fraction100Us * 100ULL, eventMask);
 		nextEventId = capture.eventId + 1U;
 		currentPage += capture.pageCount;
 		if (currentPage >= WinbondSpiNand::pagesPerBlock) {

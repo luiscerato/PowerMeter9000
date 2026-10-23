@@ -5,7 +5,9 @@
 #include "time.h"
 #include "wifiUtils.h"
 #include "grid_state.h"
+#include "event_capture_config.h"
 #include "fast_rms_format.h"
+#include "../base/json_writer.h"
 
 #define fastDataSamplesCount 400
 
@@ -231,6 +233,20 @@ struct phaseValues
 		free(str);
 		return res;
 	};
+
+	// Escribe las propiedades de fase en buffer sin reservar heap.
+	// buffer y capacity describen la salida disponible.
+	bool getJson(char* buffer, size_t capacity) const {
+		char voltageJson[24], fastVoltageJson[24];
+		JsonWriter json(buffer, capacity);
+		json.appendFormat("{\"name\":\"%s\",\"vrms\":%s,\"vvrms\":%.4f,\"irms\":%.4f,\"fvrms\":%s,\"firms\":%.4f,"
+			"\"freq\":%.2f,\"pf\":%.4f,\"angle\":%.2f,\"vthd\":%.2f,\"ithd\":%.2f,"
+			"\"watt\":%.4f,\"var\":%.4f,\"va\":%.4f,\"watth\":%.4f,\"varh\":%.4f,\"vah\":%.4f}",
+			Name, meterJsonNumber(Vrms, voltageJson, sizeof(voltageJson)), VVrms, Irms,
+			meterJsonNumber(FastVrms, fastVoltageJson, sizeof(fastVoltageJson)), FastIrms,
+			Freq, PowerFactor, AngleVI, Vthd, Ithd, Watt, VAR, VA, Watt_H, VAR_H, VA_H);
+		return json.valid();
+	}
 };
 
 struct meterValues
@@ -342,6 +358,87 @@ struct meterValues
 		free(str);
 	}
 
+	// Escribe las mediciones principales en buffer sin reservar heap.
+	// buffer y capacity describen la salida disponible.
+	bool getJsonBasic(char* buffer, size_t capacity) const {
+		char neutralJson[24], fastNeutralJson[24];
+		JsonWriter json(buffer, capacity);
+		json.appendFormat("{\"vrms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%s,\"avg\":%.3f},"
+			"\"vvrms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f},"
+			"\"irms\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f,\"avg\":%.3f},"
+			"\"pf\":{\"r\":%.4f,\"s\":%.4f,\"t\":%.4f,\"tot\":%.4f},"
+			"\"watt\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
+			"\"var\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
+			"\"va\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"avg\":%.3f,\"tot\":%.3f},"
+			"\"wattH\":%.3f,\"varH\":%.3f,\"vaH\":%.3f,\"freq\":%.2f,\"fastVn\":%s,"
+			"\"gridState\":{\"r\":\"%s\",\"s\":\"%s\",\"t\":\"%s\",\"overall\":\"%s\"},"
+			"\"gridStateAgeMs\":{\"r\":%lu,\"s\":%lu,\"t\":%lu,\"overall\":%lu}}",
+			phaseR.Vrms, phaseS.Vrms, phaseT.Vrms, meterJsonNumber(neutral.Vrms, neutralJson, sizeof(neutralJson)), average.Vrms,
+			phaseR.VVrms, phaseS.VVrms, phaseT.VVrms, average.VVrms,
+			phaseR.Irms, phaseS.Irms, phaseT.Irms, neutral.Irms, average.Irms,
+			phaseR.PowerFactor, phaseS.PowerFactor, phaseT.PowerFactor, average.PowerFactor,
+			phaseR.Watt, phaseS.Watt, phaseT.Watt, average.Watt, power.Watt,
+			phaseR.VAR, phaseS.VAR, phaseT.VAR, average.VAR, power.VAR,
+			phaseR.VA, phaseS.VA, phaseT.VA, average.VA, power.VA,
+			energy.Watt_H, energy.VAR_H, energy.VA_H, average.Freq, meterJsonNumber(neutral.FastVrms, fastNeutralJson, sizeof(fastNeutralJson)),
+			phaseStateName(phaseR.gridState.state), phaseStateName(phaseS.gridState.state),
+			phaseStateName(phaseT.gridState.state), gridStateName(gridState),
+			static_cast<unsigned long>(millis() - phaseR.gridState.changedAtMs),
+			static_cast<unsigned long>(millis() - phaseS.gridState.changedAtMs),
+			static_cast<unsigned long>(millis() - phaseT.gridState.changedAtMs),
+			static_cast<unsigned long>(millis() - gridStateChangedAtMs));
+		return json.valid();
+	}
+
+	// Escribe las mediciones rapidas en buffer sin reservar heap.
+	// buffer y capacity describen la salida disponible.
+	bool getJsonFastMeasures(char* buffer, size_t capacity) const {
+		char neutralJson[24];
+		JsonWriter json(buffer, capacity);
+		json.appendFormat("{\"fastV\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%s},"
+			"\"fastI\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%.3f}}",
+			phaseR.FastVrms, phaseS.FastVrms, phaseT.FastVrms, meterJsonNumber(neutral.FastVrms, neutralJson, sizeof(neutralJson)),
+			phaseR.FastIrms, phaseS.FastIrms, phaseT.FastIrms, neutral.FastIrms);
+		return json.valid();
+	}
+
+	// Escribe las energias en buffer sin reservar heap.
+	// buffer y capacity describen la salida disponible.
+	bool getJsonEnergy(char* buffer, size_t capacity) const {
+		JsonWriter json(buffer, capacity);
+		json.appendFormat("{\"wattH\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"tot\":%.3f},"
+			"\"varH\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"tot\":%.3f},"
+			"\"vaH\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"tot\":%.3f}}",
+			phaseR.Watt_H, phaseS.Watt_H, phaseT.Watt_H, energy.Watt_H,
+			phaseR.VAR_H, phaseS.VAR_H, phaseT.VAR_H, energy.VAR_H,
+			phaseR.VA_H, phaseS.VA_H, phaseT.VA_H, energy.VA_H);
+		return json.valid();
+	}
+
+	// Escribe los angulos en buffer sin reservar heap.
+	// buffer y capacity describen la salida disponible.
+	bool getJsonAngles(char* buffer, size_t capacity) const {
+		JsonWriter json(buffer, capacity);
+		json.appendFormat("{\"voltage\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f},"
+			"\"vi\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f},"
+			"\"current\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f}}",
+			phaseR.AngleV, phaseS.AngleV, phaseT.AngleV,
+			phaseR.AngleVI, phaseS.AngleVI, phaseT.AngleVI,
+			phaseR.AngleI, phaseS.AngleI, phaseT.AngleI);
+		return json.valid();
+	}
+
+	// Escribe los valores THD en buffer sin reservar heap.
+	// buffer y capacity describen la salida disponible.
+	bool getJsonTHD(char* buffer, size_t capacity) const {
+		JsonWriter json(buffer, capacity);
+		json.appendFormat("{\"voltageTHD\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f},"
+			"\"currentTHD\":{\"r\":%.2f,\"s\":%.2f,\"t\":%.2f}}",
+			phaseR.Vthd, phaseS.Vthd, phaseT.Vthd,
+			phaseR.Ithd, phaseS.Ithd, phaseT.Ithd);
+		return json.valid();
+	}
+
 	__attribute__((noinline)) void getJsonFastMeasures(String& dest) {
 		char str[192], neutralJson[24];
 		snprintf(str, sizeof(str), "{\"fastV\":{\"r\":%.3f,\"s\":%.3f,\"t\":%.3f,\"n\":%s},"
@@ -404,8 +501,8 @@ void MeterReadEnergyRegisters();
 void MeterLoadOptions();
 // Copia los ajustes actuales en config.
 void meterGetGridSettings(gridSettings& config);
-// Valida y persiste config; devuelve false ante un error.
-bool meterSaveGridSettings(const gridSettings& config);
+// Encola grid y points para aplicarlos juntos al inicio del siguiente turno FAST.
+void meterQueueEventSettings(const gridSettings& grid, const eventCaptureConfig& points);
 
 void MeterLoop();
 uint64_t MeterGetLastSampleTimestampMs();

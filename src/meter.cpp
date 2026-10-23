@@ -13,6 +13,7 @@
 #include "memory_diagnostics.h"
 #include "meter_timing.h"
 #include "event_capture_config.h"
+#include "event_settings.h"
 #include "fast_event_detector.h"
 #include "wave_sample_clock.h"
 #include <new>
@@ -49,6 +50,7 @@ static gridSettings gridConfig, requestedGridConfig;
 static bool gridConfigPending = false;
 static portMUX_TYPE gridConfigMutex = portMUX_INITIALIZER_UNLOCKED;
 static eventCaptureConfig captureConfig;
+static eventCaptureConfig requestedCaptureConfig;
 static portMUX_TYPE captureConfigMutex = portMUX_INITIALIZER_UNLOCKED;
 
 // Copia en config los ajustes ADE aplicados, sin consultar NVS ni bloquear la adquisicion.
@@ -67,34 +69,21 @@ void meterGetGridSettings(gridSettings& config) {
 	taskEXIT_CRITICAL(&gridConfigMutex);
 }
 
-// Guarda config validada en un unico registro NVS y solicita su aplicacion a MeterTask.
-bool meterSaveGridSettings(const gridSettings& config) {
-	if (!validGridSettings(config)) return false;
-	Preferences prefs;
-	if (!prefs.begin("grid", false)) return false;
-	const bool saved = prefs.putBytes("settings", &config, sizeof(config)) == sizeof(config);
-	prefs.end();
-	if (!saved) return false;
+// Publica grid y points en la misma solicitud RAM, sin escribir NVS.
+void meterQueueEventSettings(const gridSettings& grid, const eventCaptureConfig& points) {
 	taskENTER_CRITICAL(&gridConfigMutex);
-	requestedGridConfig = config;
+	requestedGridConfig = grid;
+	requestedCaptureConfig = points;
 	gridConfigPending = true;
 	taskEXIT_CRITICAL(&gridConfigMutex);
-	return true;
 }
 
 // Restaura ajustes validos antes de iniciar MeterTask; sin parametros.
 static void meterLoadGridSettings() {
-	gridSettings config;
-	Preferences prefs;
-	if (prefs.begin("grid", true)) {
-		const size_t storedSize = prefs.getBytesLength("settings");
-		if (storedSize == sizeof(config))
-			prefs.getBytes("settings", &config, sizeof(config));
-		prefs.end();
-	}
-	if (!validGridSettings(config)) config = gridSettings{};
+	eventSettingsSnapshot settings; eventSettingsGet(settings);
 	taskENTER_CRITICAL(&gridConfigMutex);
-	gridConfig = requestedGridConfig = config;
+	gridConfig = requestedGridConfig = settings.config.grid;
+	requestedCaptureConfig = settings.config.points;
 	taskEXIT_CRITICAL(&gridConfigMutex);
 }
 struct TotalEnergyVals MeterEnergy;
@@ -510,39 +499,12 @@ void MeterReadEnergyRegisters()
 	meterOptions.end();
 }
 
-// Carga y completa en NVS los ajustes FAST; sin parametros, se ejecuta fuera de adquisicion.
+// Carga los ajustes FAST confirmados desde RAM al arrancar; sin parametros ni escrituras NVS.
 void MeterLoadOptions()
 {
-	eventCaptureConfig config;
-	Preferences captureOptions;
-	if (!captureOptions.begin("meter", false)) { debugE("No se pudo cargar configuracion FAST"); return; }
-	const char* enabledKeys[] = {"dipEnabled", "swellEnabled", "overcurrent"};
-	bool* enabled[] = {&config.dipEnabled, &config.swellEnabled, &config.overCurrentEnabled};
-	for (uint8_t index = 0; index < 3; ++index) {
-		*enabled[index] = captureOptions.getBool(enabledKeys[index], true);
-		if (!captureOptions.isKey(enabledKeys[index])) captureOptions.putBool(enabledKeys[index], *enabled[index]);
-	}
-	config.overCurrent = captureOptions.getFloat("ocCurrent", 50);
-	if (!isfinite(config.overCurrent) || config.overCurrent <= 0 || config.overCurrent > 163.82f) config.overCurrent = 50;
-	if (!captureOptions.isKey("ocCurrent")) captureOptions.putFloat("ocCurrent", config.overCurrent);
-	config.currentHysteresis = captureOptions.getFloat("ocHyst", 1);
-	if (!isfinite(config.currentHysteresis) || config.currentHysteresis < 0 || config.currentHysteresis >= config.overCurrent)
-		config.currentHysteresis = config.overCurrent * 0.02f;
-	if (!captureOptions.isKey("ocHyst")) captureOptions.putFloat("ocHyst", config.currentHysteresis);
-	const char* timeKeys[] = {"dipMs", "swellMs", "ocMs"};
-	const int defaults[] = {50, 50, 10};
-	uint32_t* times[] = {&config.dipConfirmMs, &config.swellConfirmMs, &config.overCurrentConfirmMs};
-	for (uint8_t index = 0; index < 3; ++index) {
-		const int stored = captureOptions.getInt(timeKeys[index], defaults[index]);
-		*times[index] = limitEventConfirmMs(stored);
-		if (!captureOptions.isKey(timeKeys[index]) || stored != int(*times[index])) {
-			if (stored != int(*times[index])) debugW("%s limitado de %d a %u ms", timeKeys[index], stored, unsigned(*times[index]));
-			if (!captureOptions.putInt(timeKeys[index], *times[index])) debugE("No se pudo guardar %s", timeKeys[index]);
-		}
-	}
-	captureOptions.end();
+	eventSettingsSnapshot settings; eventSettingsGet(settings);
 	portENTER_CRITICAL(&captureConfigMutex);
-	captureConfig = config;
+	captureConfig = settings.config.points;
 	portEXIT_CRITICAL(&captureConfigMutex);
 }
 
@@ -675,6 +637,7 @@ void scopeWSevents(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEven
 void MeterLoop()
 {
 	static uint32_t energyUpdateTime = millis();
+	eventSettingsPoll();
 
 	if (meterUpdated) {
 		const uint64_t sampleTimestampMs = managerNowMs();
@@ -840,6 +803,9 @@ static void meterApplyFastRms(const float voltages[3], const float currents[4], 
 		(memcmp(&gridConfig, &requestedGridConfig, offsetof(gridSettings, neutral)) != 0);
 	if (settingsChanged) {
 		gridConfig = requestedGridConfig;
+		portENTER_CRITICAL(&captureConfigMutex);
+		captureConfig = requestedCaptureConfig;
+		portEXIT_CRITICAL(&captureConfigMutex);
 		gridConfigPending = false;
 	}
 	taskEXIT_CRITICAL(&gridConfigMutex);

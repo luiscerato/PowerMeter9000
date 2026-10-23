@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <sys/time.h>
 #include <atomic>
+#include <string.h>
 
 #include "storage/storage_manager.h"
 
@@ -80,27 +81,31 @@ static int32_t managerFindSample(const char* relativeTopic)
 
 // Guarda una muestra de telemetria en cache.
 // relativeTopic: topic relativo; dataPayload: JSON original; timestampMs: Unix ms; sequence: secuencia MQTT.
-static void managerStoreTelemetry(const char* relativeTopic, const String& dataPayload, uint64_t timestampMs, uint32_t sequence)
+static void managerStoreTelemetry(const char* relativeTopic, const char* dataPayload, uint64_t timestampMs, uint32_t sequence)
 {
 	int32_t index = managerFindSample(relativeTopic);
-	if (index < 0) return;
+	if (index < 0 || dataPayload == nullptr) return;
 	telemetrySamples[index].timestampMs = timestampMs;
 	telemetrySamples[index].sequence = sequence;
 	telemetrySamples[index].data = dataPayload;
-	telemetrySamples[index].valid = dataPayload.startsWith("{") && dataPayload.endsWith("}");
+	const size_t length = strlen(dataPayload);
+	telemetrySamples[index].valid = length >= 2 && dataPayload[0] == '{' && dataPayload[length - 1] == '}';
 }
 
 // Arma el payload MQTT agregando metadata en la raiz.
 // dest: JSON final; dataPayload: JSON original; timestampMs: Unix ms; sequence: secuencia.
-static void managerBuildTelemetryPayload(String& dest, const String& dataPayload, uint64_t timestampMs, uint32_t sequence)
+static void managerBuildTelemetryPayload(String& dest, const char* dataPayload, uint64_t timestampMs, uint32_t sequence)
 {
+	const size_t length = strlen(dataPayload);
+	dest.reserve(length + 96);
 	dest = "{\"schemaVersion\":1,";
 	managerAppendTimestampField(dest, "timestamp", timestampMs);
 	dest += ",\"sequence\":";
 	dest += String(sequence);
-	if (dataPayload.length() > 2 && dataPayload[0] == '{' && dataPayload[dataPayload.length() - 1] == '}') {
+	if (length > 2 && dataPayload[0] == '{' && dataPayload[length - 1] == '}') {
 		dest += ",";
-		dest += dataPayload.substring(1, dataPayload.length() - 1);
+		for (size_t index = 1; index < length - 1; ++index)
+			dest += dataPayload[index];
 	}
 	dest += "}";
 }
@@ -187,8 +192,9 @@ String managerGetMqttBrokerUrl()
 	return "mqtt://" + server + ":" + String(port);
 }
 
-void managerPublishTelemetry(const char* relativeTopic, const String& dataPayload, uint64_t timestampMs)
+void managerPublishTelemetry(const char* relativeTopic, const char* dataPayload, uint64_t timestampMs)
 {
+	if (dataPayload == nullptr) return;
 	uint32_t sequence = managerNextSequence();
 	managerStoreTelemetry(relativeTopic, dataPayload, timestampMs, sequence);
 	if (!mqtt.connected()) return;

@@ -24,6 +24,7 @@ bool NandReadSession::begin(NandPartition& partition, uint16_t block, uint8_t pa
 	source = &partition; total = totalBytes; produced = 0; currentBuffer = bufferCount; lastConsumerMs = millis();
 	firstBlock = block; firstPage = page;
 	currentLength = 0; currentOffset = 0; producerFailed = false; active = true;
+	if (++sessionId == 0) ++sessionId;
 	if (xTaskCreatePinnedToCore(readTaskEntry, "nandRead", 2048, this, 1, &taskHandle, tskNO_AFFINITY) != pdPASS) {
 		active = false; taskHandle = nullptr; return false;
 	}
@@ -31,13 +32,16 @@ bool NandReadSession::begin(NandPartition& partition, uint16_t block, uint8_t pa
 }
 
 // Copia datos ya precargados o pide al servidor que reintente cuando el productor aun esta leyendo.
-size_t NandReadSession::copyChunk(uint8_t* dest, size_t maxLen, size_t index)
+size_t NandReadSession::copyChunk(uint8_t* dest, size_t maxLen, size_t index, uint32_t id)
 {
-	if (!active || index >= total) return 0;
+	if (id != sessionId || !active) return 0;
+	if (!dest || index >= total) { cancel(id); return 0; }
 	lastConsumerMs = millis();
 	if (currentBuffer == bufferCount) {
-		if (xQueueReceive(readyQueue, &currentBuffer, 0) != pdPASS)
-			return producerFailed ? 0 : RESPONSE_TRY_AGAIN;
+		if (xQueueReceive(readyQueue, &currentBuffer, 0) != pdPASS) {
+			if (producerFailed) { cancel(id); return 0; }
+			return RESPONSE_TRY_AGAIN;
+		}
 		currentLength = min(pageSize, total - index); currentOffset = 0;
 	}
 	const size_t count = min(maxLen, currentLength - currentOffset);
@@ -46,9 +50,15 @@ size_t NandReadSession::copyChunk(uint8_t* dest, size_t maxLen, size_t index)
 	if (currentOffset == currentLength) {
 		xQueueSend(freeQueue, &currentBuffer, 0); currentBuffer = bufferCount;
 	}
-	if (index + count == total) active = false;
+	if (index + count == total) cancel(id);
 	return count;
 }
+
+// Obtiene la generacion actual para asociarla a callbacks HTTP; sin parametros.
+uint32_t NandReadSession::getId() const { return sessionId; }
+
+// Detiene exclusivamente id; el productor conserva los buffers hasta completar la operacion NAND.
+void NandReadSession::cancel(uint32_t id) { if (id == sessionId) active = false; }
 
 // Indica si la sesion aun reserva buffers para una respuesta HTTP.
 bool NandReadSession::isActive() const { return active || taskHandle; }

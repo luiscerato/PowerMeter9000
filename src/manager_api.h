@@ -36,7 +36,7 @@ String managerGetMqttBrokerUrl();
 // relativeTopic: topic relativo a managerMqttBaseTopic.
 // dataPayload: JSON original de la medicion, sin metadata.
 // timestampMs: Unix ms de adquisicion, o 0 si no hay reloj valido.
-void managerPublishTelemetry(const char* relativeTopic, const String& dataPayload, uint64_t timestampMs);
+void managerPublishTelemetry(const char* relativeTopic, const char* dataPayload, uint64_t timestampMs);
 
 // Devuelve el proximo contador de publicacion MQTT.
 uint32_t managerNextSequence();

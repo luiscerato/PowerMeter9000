@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <atomic>
 #include "webfs_store.h"
 
 // Transmite un archivo WebFS sin construirlo completo en RAM.
@@ -10,7 +11,13 @@ public:
 	bool begin(WebFsStore& store, const WebFsFile& file);
 
 	// Copia el siguiente fragmento HTTP o devuelve RESPONSE_TRY_AGAIN mientras NAND lee datos.
-	size_t copyChunk(uint8_t* data, size_t maxLength, size_t offset);
+	size_t copyChunk(uint8_t* data, size_t maxLength, size_t offset, uint32_t id);
+
+	// Identifica la descarga actual para distinguir callbacks de conexiones anteriores; sin parametros.
+	uint32_t getId() const;
+
+	// Cancela solamente la descarga id; el productor libera RAM al terminar cualquier I/O pendiente.
+	void cancel(uint32_t id);
 
 	// Indica si la sesion mantiene buffers o una tarea activa; sin parametros.
 	bool isActive() const;
@@ -26,10 +33,9 @@ private:
 	uint32_t firstPage = 0;
 	uint16_t firstColumn = 0;
 	size_t totalBytes = 0;
-	volatile size_t producedBytes = 0;
-	volatile bool active = false;
-	volatile bool producerFailed = false;
-	volatile uint32_t lastConsumerMs = 0;
+	size_t producedBytes = 0;
+	std::atomic<bool> active{false}, producerFailed{false};
+	uint32_t sessionId = 0;
 	QueueHandle_t freeQueue = nullptr;
 	QueueHandle_t readyQueue = nullptr;
 	QueueHandle_t completionQueue = nullptr;

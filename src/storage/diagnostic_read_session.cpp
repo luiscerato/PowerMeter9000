@@ -1,5 +1,6 @@
 #include "diagnostic_read_session.h"
 #include "../diagnostic_logger.h"
+#include "../memory_diagnostics.h"
 #include "ESPAsyncWebServer.h"
 #include <esp_system.h>
 #include <new>
@@ -12,6 +13,7 @@ bool DiagnosticReadSession::beginLatest(DiagnosticLogger& logger, DiagnosticStor
 {
 	if (!isAvailable()) return false;
 	releaseBuffers();
+	if (!memoryHasRoom(sizeof(DiagnosticBinarySnapshot), bufferCount * pageSize + 3072 + 512 + 16 * 1024)) return false;
 	snapshot = new (std::nothrow) DiagnosticBinarySnapshot;
 	if (!snapshot || !logger.captureStoreSnapshot(*snapshot)) {
 		releaseBuffers();
@@ -19,6 +21,8 @@ bool DiagnosticReadSession::beginLatest(DiagnosticLogger& logger, DiagnosticStor
 	}
 	sessionToken = esp_random();
 	if (!sessionToken) sessionToken = 1;
+	anchorBlock = snapshot->block;
+	recentSequence = snapshot->recentSequence;
 	blockIndex = 0;
 	if (!beginBlock(partition, snapshot->block, snapshot->ramPageCount,
 		uint8_t(snapshot->lastCommittedPage + 1))) {
@@ -34,10 +38,10 @@ bool DiagnosticReadSession::beginPrevious(DiagnosticStore& store, uint32_t token
 	done = false;
 	if (!matches(token) || !isAvailable() || !source) return false;
 	uint16_t previous = NandPartition::invalidBlock;
-	if (!store.findPreviousSnapshotBlock(beforeBlock, snapshot->block, previous)) return false;
+	if (!store.findPreviousSnapshotBlock(beforeBlock, anchorBlock, previous)) return false;
 	if (previous == NandPartition::invalidBlock) {
 		done = true;
-		lastUsedMs = millis();
+		invalidate();
 		return true;
 	}
 	++blockIndex;
@@ -48,14 +52,15 @@ bool DiagnosticReadSession::beginPrevious(DiagnosticStore& store, uint32_t token
 bool DiagnosticReadSession::beginBlock(NandPartition& partition, uint16_t block, uint8_t ramCount, uint8_t nandCount)
 {
 	if (!nandCount || nandCount > WinbondSpiNand::pagesPerBlock || !partition.isEnabled()) return false;
+	if (!memoryHasRoom(3072, bufferCount * pageSize + 512 + 16 * 1024)) return false;
 	for (uint8_t index = 0; index < bufferCount; ++index) {
 		if (!buffers[index]) buffers[index] = new (std::nothrow) uint8_t[pageSize];
-		if (!buffers[index]) return false;
+		if (!buffers[index]) { releaseTransferBuffers(); return false; }
 	}
 	freeQueue = xQueueCreateStatic(bufferCount, sizeof(uint8_t), freeData, &freeControl);
 	readyQueue = xQueueCreateStatic(bufferCount, sizeof(uint8_t), readyData, &readyControl);
 	completionQueue = xQueueCreateStatic(1, sizeof(NandIoResult), completionData, &completionControl);
-	if (!freeQueue || !readyQueue || !completionQueue) return false;
+	if (!freeQueue || !readyQueue || !completionQueue) { releaseTransferBuffers(); return false; }
 	for (uint8_t index = 0; index < bufferCount; ++index) xQueueSend(freeQueue, &index, 0);
 	source = &partition;
 	responseBlock = block;
@@ -64,7 +69,10 @@ bool DiagnosticReadSession::beginBlock(NandPartition& partition, uint16_t block,
 	producedPages = 0;
 	currentBuffer = bufferCount;
 	currentOffset = 0;
-	lastConsumerMs = lastUsedMs = millis();
+	lastConsumerMs = millis();
+	lastUsedMs = lastConsumerMs;
+	producerFailed = false;
+	if (++sessionId == 0) ++sessionId;
 	totalBytes = responseHeaderSize + size_t(ramCount + nandCount) * pageSize;
 	memcpy(responseHeader, "DLOG", 4);
 	responseHeader[4] = 1;
@@ -77,31 +85,37 @@ bool DiagnosticReadSession::beginBlock(NandPartition& partition, uint16_t block,
 	responseHeader[14] = uint8_t(blockIndex);
 	responseHeader[15] = uint8_t(blockIndex >> 8);
 	for (uint8_t index = 0; index < 4; ++index)
-		responseHeader[16 + index] = uint8_t(snapshot->recentSequence >> (8 * index));
+		responseHeader[16 + index] = uint8_t(recentSequence >> (8 * index));
 	active = true;
 	taskRunning = true;
 	if (xTaskCreatePinnedToCore(taskEntry, "diagRead", 3072, this, 1, nullptr,
 		tskNO_AFFINITY) != pdPASS) {
 		active = false;
 		taskRunning = false;
+		releaseTransferBuffers();
 		return false;
 	}
 	return true;
 }
 
 // Entrega primero la cabecera, luego paginas completas ya precargadas.
-size_t DiagnosticReadSession::copyChunk(uint8_t* destination, size_t capacity, size_t offset)
+size_t DiagnosticReadSession::copyChunk(uint8_t* destination, size_t capacity, size_t offset, uint32_t id)
 {
-	if (!active || !destination || offset >= totalBytes) return 0;
+	if (id != sessionId || !active) return 0;
+	if (!destination || offset >= totalBytes) { cancel(id); return 0; }
 	lastConsumerMs = millis();
+	lastUsedMs = lastConsumerMs;
 	if (offset < responseHeaderSize) {
 		const size_t count = min(capacity, size_t(responseHeaderSize) - offset);
 		memcpy(destination, responseHeader + offset, count);
 		return count;
 	}
 	if (currentBuffer == bufferCount) {
-		if (xQueueReceive(readyQueue, &currentBuffer, 0) != pdPASS)
-			return RESPONSE_TRY_AGAIN;
+		if (xQueueReceive(readyQueue, &currentBuffer, 0) != pdPASS) {
+			if (!producerFailed) return RESPONSE_TRY_AGAIN;
+			cancel(id);
+			return 0;
+		}
 		currentOffset = 0;
 	}
 	const size_t count = min(capacity, pageSize - currentOffset);
@@ -111,8 +125,19 @@ size_t DiagnosticReadSession::copyChunk(uint8_t* destination, size_t capacity, s
 		xQueueSend(freeQueue, &currentBuffer, 0);
 		currentBuffer = bufferCount;
 	}
-	if (offset + count == totalBytes) active = false;
+	if (offset + count == totalBytes) cancel(id);
 	return count;
+}
+
+// Devuelve la generacion de la transferencia actual; sin parametros.
+uint32_t DiagnosticReadSession::getId() const { return sessionId; }
+
+// Cancela id y conserva la vigencia del cursor desde la ultima actividad HTTP.
+void DiagnosticReadSession::cancel(uint32_t id)
+{
+	if (id != sessionId) return;
+	lastUsedMs = millis();
+	active = false;
 }
 
 // Indica que la respuesta y su tarea terminaron.
@@ -124,10 +149,10 @@ bool DiagnosticReadSession::isAvailable() const
 // Compara el token del cliente con la sesion vigente.
 bool DiagnosticReadSession::matches(uint32_t token) const
 {
-	return token && token == sessionToken && snapshot;
+	return token && token == sessionToken;
 }
 
-// Limita la memoria de snapshots que un cliente dejo sin continuar.
+// Vence el cursor despues de 120 segundos sin actividad y sin transferencia activa.
 bool DiagnosticReadSession::isExpired() const
 {
 	return isAvailable() && (!sessionToken || uint32_t(millis() - lastUsedMs) > 120000U);
@@ -149,13 +174,19 @@ size_t DiagnosticReadSession::contentLength() const
 void DiagnosticReadSession::releaseBuffers()
 {
 	if (!isAvailable()) return;
+	releaseTransferBuffers();
+	sessionToken = 0;
+}
+
+// Devuelve los buffers de la transferencia a RAM; se llama sin lecturas NAND ni copias HTTP pendientes.
+void DiagnosticReadSession::releaseTransferBuffers()
+{
 	delete snapshot;
 	snapshot = nullptr;
 	for (uint8_t index = 0; index < bufferCount; ++index) {
 		delete[] buffers[index];
 		buffers[index] = nullptr;
 	}
-	sessionToken = 0;
 }
 
 // Ejecuta el productor de paginas en su propia tarea.
@@ -169,10 +200,10 @@ void DiagnosticReadSession::taskEntry(void* parameter)
 void DiagnosticReadSession::taskLoop()
 {
 	const uint8_t totalPages = ramPageCount + nandPageCount;
-	while (active && producedPages < totalPages) {
+	while (active && !producerFailed && producedPages < totalPages) {
 		uint8_t index = 0;
 		if (xQueueReceive(freeQueue, &index, pdMS_TO_TICKS(250)) != pdPASS) {
-			if (uint32_t(millis() - lastConsumerMs) > 5000U) active = false;
+			if (uint32_t(millis() - lastConsumerMs) > 5000U) producerFailed = true;
 			continue;
 		}
 		bool ready = true;
@@ -183,14 +214,20 @@ void DiagnosticReadSession::taskLoop()
 			NandIoResult result;
 			while (xQueueReceive(completionQueue, &result, 0) == pdPASS) {}
 			ready = source->submitReadPage(responseBlock, page, 0, buffers[index], pageSize,
-				StoragePriority::low, completionQueue) &&
-				xQueueReceive(completionQueue, &result, pdMS_TO_TICKS(5000)) == pdPASS && result.success;
+				StoragePriority::low, completionQueue);
+			if (ready) {
+				// Una lectura aceptada retiene su buffer hasta completarse, aunque HTTP ya se haya desconectado.
+				while (xQueueReceive(completionQueue, &result, pdMS_TO_TICKS(100)) != pdPASS) vTaskDelay(1);
+				ready = result.success;
+			}
 			if (!ready) memset(buffers[index], 0xFF, pageSize);
 		}
 		++producedPages;
 		while (active && xQueueSend(readyQueue, &index, pdMS_TO_TICKS(250)) != pdPASS) {
-			if (uint32_t(millis() - lastConsumerMs) > 5000U) active = false;
+			if (uint32_t(millis() - lastConsumerMs) > 5000U) { producerFailed = true; break; }
 		}
 	}
+	while (active) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+	releaseTransferBuffers();
 	taskRunning = false;
 }

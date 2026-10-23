@@ -12,8 +12,12 @@ public:
 	// Lee pageCount paginas desde block/page; onReadFinished libera recursos al terminar el ultimo acceso NAND.
 	bool begin(NandPartition& partition, uint16_t block, uint8_t page, uint32_t pageCount, void (*onReadFinished)() = nullptr);
 
-	// Copia el siguiente fragmento HTTP o devuelve RESPONSE_TRY_AGAIN mientras NAND precarga datos.
-	size_t copyChunk(uint8_t* dest, size_t maxLen, size_t index);
+	// Copia dest/maxLen desde index solo para la generacion id; reintenta si falta precarga.
+	size_t copyChunk(uint8_t* dest, size_t maxLen, size_t index, uint32_t id);
+	// Devuelve la generacion de la descarga actual; sin parametros.
+	uint32_t getId() const;
+	// Cancela solo la generacion id sin liberar buffers usados por NAND.
+	void cancel(uint32_t id);
 
 	// Indica si una descarga sigue usando los buffers compartidos; sin parametros.
 	bool isActive() const;
@@ -31,6 +35,7 @@ private:
 	volatile bool active = false;
 	volatile bool producerFailed = false;
 	volatile uint32_t lastConsumerMs = 0;
+	uint32_t sessionId = 0;
 	uint16_t firstBlock = 0;
 	uint8_t firstPage = 0;
 	QueueHandle_t freeQueue = nullptr;

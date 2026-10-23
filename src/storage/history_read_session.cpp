@@ -1,5 +1,6 @@
 #include "history_read_session.h"
 #include "ESPAsyncWebServer.h"
+#include "../memory_diagnostics.h"
 #include <new>
 
 constexpr size_t HistoryReadSession::pageSize;
@@ -10,6 +11,8 @@ static HistoryReadSessionMetrics historyReadMetrics;
 bool HistoryReadSession::begin(NandPartition& partition, const HistoryReadPlan& plan, const uint8_t* activeSnapshot)
 {
 	if (active || taskHandle || !partition.isEnabled() || (!plan.storedPageCount && !plan.includesActivePage)) return false;
+	const size_t pagesBytes = (bufferCount + (plan.includesActivePage ? 1U : 0U)) * pageSize;
+	if (!memoryHasRoom(3072, pagesBytes + 512 + 16 * 1024)) return false;
 	releaseBuffers();
 	for (uint8_t index = 0; index < bufferCount; ++index) {
 		buffers[index] = new (std::nothrow) uint8_t[pageSize];
@@ -59,6 +62,7 @@ bool HistoryReadSession::begin(NandPartition& partition, const HistoryReadPlan& 
 	sessionMetrics = {};
 	portEXIT_CRITICAL(&historyReadMetricsMux);
 	active = true;
+	if (++sessionId == 0) ++sessionId;
 	Serial.printf("[history] start session=%p pages=%lu bytes=%lu activePage=%u range=%lu..%lu heap=%u minHeap=%u\n",
 		this, (unsigned long)totalPhysicalPages, (unsigned long)totalBytes,
 		plan.includesActivePage ? 1U : 0U, (unsigned long)fromTimestamp,
@@ -82,9 +86,10 @@ void HistoryReadSession::getMetrics(HistoryReadSessionMetrics& output)
 }
 
 // Entrega bytes en orden al servidor web, sin tocar NAND desde el callback asincronico.
-size_t HistoryReadSession::copyChunk(uint8_t* destination, size_t maxLength, size_t offset)
+size_t HistoryReadSession::copyChunk(uint8_t* destination, size_t maxLength, size_t offset, uint32_t id)
 {
-	if (!active || offset >= totalBytes || !destination) return 0;
+	if (id != sessionId || !active) return 0;
+	if (offset >= totalBytes || !destination) { cancel(id); return 0; }
 	lastConsumerMs = millis();
 	if (currentBuffer == bufferCount) {
 		if (xQueueReceive(readyQueue, &currentBuffer, 0) != pdPASS) {
@@ -110,7 +115,8 @@ size_t HistoryReadSession::copyChunk(uint8_t* destination, size_t maxLength, siz
 				waitingForBuffer = false;
 			}
 			portEXIT_CRITICAL(&historyReadMetricsMux);
-			return failed ? 0 : RESPONSE_TRY_AGAIN;
+			if (failed) { cancel(id); return 0; }
+			return RESPONSE_TRY_AGAIN;
 		}
 		if (waitingForBuffer) {
 			const uint32_t waitUs = micros() - bufferWaitStartedUs;
@@ -134,16 +140,23 @@ size_t HistoryReadSession::copyChunk(uint8_t* destination, size_t maxLength, siz
 		xQueueSend(freeQueue, &currentBuffer, 0);
 		currentBuffer = bufferCount;
 	}
-	if (offset + count == totalBytes) active = false;
+	if (offset + count == totalBytes) cancel(id);
 	return count;
 }
 
-// Indica que no queda una respuesta ni una tarea usando los buffers de esta sesion y libera su memoria temporal.
+// Devuelve la generacion de la respuesta actual; sin parametros.
+uint32_t HistoryReadSession::getId() const { return sessionId; }
+
+// Cancela id sin permitir que una desconexion vieja afecte a otra respuesta.
+void HistoryReadSession::cancel(uint32_t id)
+{
+	if (id == sessionId) active = false;
+}
+
+// Indica que no queda una respuesta ni una tarea usando los buffers de esta sesion.
 bool HistoryReadSession::isAvailable()
 {
-	if (active || taskHandle) return false;
-	releaseBuffers();
-	return true;
+	return !active && !taskHandle;
 }
 
 // Ingresa a la tarea productora y se elimina al terminar la sesion.
@@ -161,12 +174,12 @@ void HistoryReadSession::readTaskLoop()
 	uint32_t nandFailureCount = 0;
 	uint32_t invalidPageCount = 0;
 	const char* stopReason = "complete";
-	while (active && producedBytes < totalBytes) {
+	while (active && !producerFailed && producedBytes < totalBytes) {
 		uint8_t bufferIndex = 0;
 		if (xQueueReceive(freeQueue, &bufferIndex, pdMS_TO_TICKS(250)) != pdPASS) {
 			if (millis() - lastConsumerMs > 5000U) {
 				stopReason = "consumer_idle_timeout";
-				active = false;
+				producerFailed = true;
 			}
 			continue;
 		}
@@ -185,7 +198,8 @@ void HistoryReadSession::readTaskLoop()
 				if (!submitted) {
 					if (uint32_t(millis() - lastConsumerMs) > 5000U) {
 						stopReason = "consumer_idle_submit";
-						active = false;
+						producerFailed = true;
+						break;
 					}
 					else vTaskDelay(pdMS_TO_TICKS(10));
 				}
@@ -193,7 +207,6 @@ void HistoryReadSession::readTaskLoop()
 			if (!submitted) {
 				if (active) stopReason = "submit_timeout";
 				producerFailed = true;
-				active = false;
 				xQueueSend(freeQueue, &bufferIndex, 0);
 				break;
 			}
@@ -203,10 +216,10 @@ void HistoryReadSession::readTaskLoop()
 				completed = xQueueReceive(completionQueue, &result, pdMS_TO_TICKS(250)) == pdPASS;
 				if (!completed && uint32_t(millis() - lastConsumerMs) > 5000U) {
 					stopReason = "consumer_idle_waiting_nand";
-					active = false;
+					producerFailed = true;
 				}
 			}
-			if (!active) {
+			if (!active || producerFailed) {
 				if (!strcmp(stopReason, "complete")) stopReason = "consumer_closed";
 				producerFailed = true;
 				break;
@@ -243,14 +256,14 @@ void HistoryReadSession::readTaskLoop()
 			}
 			producerFailed = true;
 			stopReason = "no_data_ready";
-			active = false;
 			break;
 		}
 		producedBytes += pageSize;
 		while (active && xQueueSend(readyQueue, &bufferIndex, pdMS_TO_TICKS(250)) != pdPASS) {
 			if (millis() - lastConsumerMs > 5000U) {
 				stopReason = "consumer_idle_ready_queue";
-				active = false;
+				producerFailed = true;
+				break;
 			}
 		}
 		const uint32_t pagesRead = totalPhysicalPages - remainingPhysicalPages;
@@ -275,7 +288,6 @@ void HistoryReadSession::readTaskLoop()
 	}
 	if (producedBytes < totalBytes) {
 		producerFailed = true;
-		active = false;
 		if (!strcmp(stopReason, "complete")) stopReason = "incomplete";
 	}
 	HistoryReadSessionMetrics metrics;
@@ -294,6 +306,9 @@ void HistoryReadSession::readTaskLoop()
 		(unsigned long)metrics.lastBufferWaitUs, (unsigned long)metrics.maxBufferWaitUs,
 		(unsigned long long)metrics.totalBufferWaitUs, ESP.getFreeHeap(), ESP.getMinFreeHeap(),
 		(unsigned)uxTaskGetStackHighWaterMark(nullptr));
+	// El productor conserva las paginas hasta que HTTP copie el ultimo byte o se desconecte.
+	while (active) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+	releaseBuffers();
 	taskHandle = nullptr;
 }
 

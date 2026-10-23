@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <atomic>
 #include "history_store.h"
 
 struct HistoryReadSessionMetrics {
@@ -17,8 +18,14 @@ public:
 	// Reserva buffers dinamicos y comienza a precargar las paginas descriptas por plan.
 	bool begin(NandPartition& partition, const HistoryReadPlan& plan, const uint8_t* activeSnapshot);
 
-	// Copia el siguiente fragmento HTTP o devuelve RESPONSE_TRY_AGAIN mientras NAND prepara datos.
-	size_t copyChunk(uint8_t* destination, size_t maxLength, size_t offset);
+	// Copia destination/maxLength/offset para la respuesta id; devuelve RESPONSE_TRY_AGAIN si NAND aun prepara datos.
+	size_t copyChunk(uint8_t* destination, size_t maxLength, size_t offset, uint32_t id);
+
+	// Identifica la respuesta actual; sin parametros, cambia al iniciar cada descarga.
+	uint32_t getId() const;
+
+	// Cancela la respuesta id; la tarea libera sus paginas cuando termina cualquier lectura NAND pendiente.
+	void cancel(uint32_t id);
 
 	// Indica si la sesion termino y puede reutilizarse para otra descarga.
 	bool isAvailable();
@@ -37,8 +44,8 @@ private:
 	size_t currentOffset = 0;
 	size_t totalBytes = 0;
 	volatile size_t producedBytes = 0;
-	volatile bool active = false;
-	volatile bool producerFailed = false;
+	std::atomic<bool> active{false}, producerFailed{false};
+	uint32_t sessionId = 0;
 	volatile uint32_t lastConsumerMs = 0;
 	bool waitingForBuffer = false;
 	uint32_t bufferWaitStartedUs = 0;

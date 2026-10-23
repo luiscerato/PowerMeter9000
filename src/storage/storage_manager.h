@@ -100,6 +100,9 @@ public:
 	// Inicia el borrado fisico en background; id identifica la particion y excluye metadata.
 	bool startPartitionFormat(StoragePartitionId id);
 
+	// Copia generaciones persistentes para la cache web; fast/wave reciben sus nonces de 64 bits.
+	bool getEventCacheEpochs(uint64_t& fast, uint64_t& wave) const;
+
 	// Devuelve la particion elegida; id identifica history, wave, grid o diagnostico.
 	NandPartition& partition(StoragePartitionId id);
 
@@ -179,6 +182,13 @@ private:
 	portMUX_TYPE formatMutex = portMUX_INITIALIZER_UNLOCKED;
 	StorageFormatProgress formatProgress;
 	uint32_t formatRequestId = 0;
+	uint64_t fastCacheEpoch = 0;
+	uint64_t waveCacheEpoch = 0;
+	StaticSemaphore_t cacheMutexStorage;
+	SemaphoreHandle_t cacheMutex = nullptr;
+
+	// Carga o renueva nonces antes de borrar; resetFast/resetWave indican las particiones afectadas.
+	bool updateEventCacheEpochs(bool resetFast, bool resetWave);
 
 	// Lee y valida los dos bloques de metadata; sin parametros.
 	bool loadMetadata();

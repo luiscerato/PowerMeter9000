@@ -27,6 +27,26 @@ function addCompression(files, enabled) {
   });
 }
 
+// Agrupa scripts propios respetando su orden; files contiene los fuentes y el HTML del cargador.
+function bundleAppScripts(files) {
+  const html = files.find(file => file.path === "index.html");
+  if (!html) return files;
+  const source = html.data.toString("utf8");
+  const match = source.match(/const bootScripts = (\[[^;]+\]);/);
+  if (!match) return files;
+  const scripts = JSON.parse(match[1]), appPaths = scripts.filter(file => !file.startsWith("lib/"));
+  if (!appPaths.length) return files;
+  const parts = appPaths.map(name => {
+    const file = files.find(file => file.path.replace(/\\/g, "/") === name);
+    if (!file) throw Error("Script no encontrado: " + name);
+    return file;
+  });
+  const bundle = {path:"app.js", data:Buffer.from(parts.map(file => ";\n" + file.data.toString("utf8")).join("\n")),
+    modifiedTime:Math.max(...parts.map(file => file.modifiedTime))};
+  html.data = Buffer.from(source.replace(match[0], "const bootScripts = " + JSON.stringify([...scripts.filter(file => file.startsWith("lib/")),"app.js"]) + ";"));
+  return [...files,bundle];
+}
+
 // Parses command line arguments; no parameters are required for the default data folder.
 function parseArguments() {
   const values = process.argv.slice(2);
@@ -42,7 +62,7 @@ function parseArguments() {
 const options = parseArguments();
 const files = [];
 collectFiles(options.source, "", files);
-const image = WebFsImage.buildImage(addCompression(files, options.gzip));
+const image = WebFsImage.buildImage(addCompression(bundleAppScripts(files), options.gzip));
 fs.mkdirSync(path.dirname(options.output), { recursive: true });
 fs.writeFileSync(options.output, image.image);
 const saved = image.files.reduce((total, file) => total + file.originalSize - file.storedSize, 0);

@@ -20,9 +20,12 @@
 #include "storage/diagnostic_read_session.h"
 #include "storage/history_recorder.h"
 #include "web/webfs_http.h"
+#include "web/events_http.h"
+#include "event_settings.h"
 #include <math.h>
 #include <new>
 #include <stdlib.h>
+#include <errno.h>
 
 
 // Create AsyncWebServer object on port 80
@@ -34,8 +37,27 @@ extern bool flashDetected;
 extern BL0942 bl0942;
 extern StorageManager storageManager;
 extern HistoryRecorder historyRecorder;
-static NandReadSession nandDownloadSession;
-static NandReadSession gridEventReadSession;
+// Las descargas binarias comparten dos paginas; una segunda solicitud recibe ocupado.
+static NandReadSession nandReadSession;
+
+// Identifica el origen de un binario; wave elige particion, buffer/size reciben MAC y generacion.
+static bool captureCacheIdentity(bool wave, char* buffer, size_t size)
+{
+	uint64_t fastEpoch = 0, waveEpoch = 0;
+	const auto id = wave ? StoragePartitionId::waveEvents : StoragePartitionId::gridEvents;
+	if (!storageManager.isReady() || storageManager.partition(id).isFormatting() ||
+		!storageManager.getEventCacheEpochs(fastEpoch, waveEpoch)) return false;
+	snprintf(buffer, size, "%012llx:%016llx", ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL, wave ? waveEpoch : fastEpoch);
+	return true;
+}
+
+// Vincula la respuesta con su generacion; response es el binario y wave indica su particion.
+static void addCaptureCacheIdentity(AsyncWebServerResponse* response, bool wave)
+{
+	char identity[32];
+	if (captureCacheIdentity(wave, identity, sizeof(identity))) response->addHeader("X-Capture-Identity", identity);
+	response->addHeader("Access-Control-Expose-Headers", "X-Capture-Identity");
+}
 static constexpr uint8_t historyReadSessionCount = 5;
 static HistoryReadSession historyReadSessions[historyReadSessionCount];
 static DiagnosticReadSession diagnosticReadSessions[2];
@@ -193,6 +215,17 @@ static bool requireExactPath(AsyncWebServerRequest* request, const char* path)
 	if (request->url() == path) return true;
 	request->send(404, "application/json", "{\"error\":\"not_found\"}");
 	return false;
+}
+
+// Lee name como entero decimal de 64 bits; request aporta el parametro y value recibe el resultado.
+static bool getUint64Parameter(AsyncWebServerRequest* request, const char* name, uint64_t& value) {
+    if (!request->hasParam(name)) return false;
+    const String& text = request->getParam(name)->value();
+    if (!text.length() || text[0] < '0' || text[0] > '9') return false;
+    char* end = nullptr; errno = 0;
+    const unsigned long long parsed = strtoull(text.c_str(), &end, 10);
+    if (errno == ERANGE || !end || *end) return false;
+    value = parsed; return true;
 }
 
 // Devuelve una sesion de descarga libre; las sesiones conservan buffers solo mientras transmiten.
@@ -560,10 +593,22 @@ static bool parseBackupOption(BackupOptionValue& item, const String& nameSpace)
 	return true;
 }
 
+// Identifica key de eventos que ya pertenece exclusivamente al servicio unificado.
+static bool isEventOptionKey(const String& key) {
+	const char* keys[] = {"dipEnabled", "swellEnabled", "overcurrent", "dipMs", "swellMs", "ocMs", "ocCurrent", "ocHyst"};
+	for (const char* name : keys) if (key == name) return true;
+	return false;
+}
+
 // Escribe un grupo previamente validado con los tipos que espera cada consumidor.
 // request: formulario POST. nameSpace: namespace NVS. restartRequired: indica si hay que reiniciar.
 static void writeBackupOptions(AsyncWebServerRequest* request, const String& nameSpace, bool restartRequired)
 {
+	if (nameSpace == "meter") {
+		for (size_t i = 0; i < request->params(); ++i) if (isEventOptionKey(request->getParam(i)->name())) {
+			request->send(410, "application/json", "{\"error\":\"use_events_config\"}"); return;
+		}
+	}
 	BackupOptionValue values[40];
 	size_t count = 0;
 	for (size_t i = 0; i < request->params(); ++i) {
@@ -718,44 +763,11 @@ static void handleNetworkConfigPost(AsyncWebServerRequest* request)
 	writeBackupOptions(request, "wifi-stuff", true);
 }
 
-// Lee o guarda ajustes de red; request recibe el formulario POST, incluido el disparador de neutro.
+// Conserva la lectura antigua; request POST debe usar la configuracion unificada.
 static void handleGridSettings(AsyncWebServerRequest* request) {
-	gridSettings config;
-	meterGetGridSettings(config);
-	if (request->method() == HTTP_POST) {
-		const char* keys[] = {"lowR", "highR", "lowS", "highS", "lowT", "highT",
-			"noVoltage", "hysteresis", "lossConfirmMs", "recoveryConfirmMs",
-			"neutralHigh", "neutralHysteresis", "neutralConfirmMs", "neutralRecoveryMs"};
-		double values[14] = {};
-		if (request->params() != 14) { request->send(400, "text/plain", "Se requieren los 14 ajustes actuales"); return; }
-		for (unsigned i = 0; i < 14; ++i) {
-			if (!request->hasParam(keys[i], true)) {
-				request->send(400, "text/plain", "Faltan ajustes de red"); return;
-			}
-			const String& text = request->getParam(keys[i], true)->value();
-			char* end;
-			values[i] = strtod(text.c_str(), &end);
-			if (end == text.c_str() || *end || !isfinite(values[i]) || values[i] < 0 ||
-				values[i] > 600000 || (((i >= 8 && i <= 9) || i >= 12) && floor(values[i]) != values[i])) {
-				request->send(400, "text/plain", "Valor de red invalido"); return;
-			}
-		}
-		for (unsigned i = 0; i < 3; ++i) {
-			config.phases[i].lowVoltage = values[i * 2];
-			config.phases[i].highVoltage = values[i * 2 + 1];
-		}
-		config.noVoltage = values[6]; config.hysteresis = values[7];
-		config.lossConfirmMs = values[8]; config.recoveryConfirmMs = values[9];
-		config.voltageConfirmMs = eventPointLimitMs(); config.capturePages = eventCapturePages;
-		config.neutral.enabled = true; config.neutral.highVoltage = values[10];
-		config.neutral.hysteresis = values[11]; config.neutral.confirmMs = values[12]; config.neutral.recoveryMs = values[13];
-		if (!validGridSettings(config)) {
-			request->send(400, "text/plain", "Limites o tiempos de red incompatibles"); return;
-		}
-		if (!meterSaveGridSettings(config)) {
-			request->send(500, "text/plain", "No se pudieron guardar los ajustes"); return;
-		}
-	}
+	if (request->method() == HTTP_POST) { request->send(410, "application/json", "{\"error\":\"use_events_config\"}"); return; }
+	eventSettingsSnapshot settings; eventSettingsGet(settings);
+	const gridSettings& config = settings.config.grid;
 	char json[640];
 	snprintf(json, sizeof(json), "{\"schemaVersion\":1,\"lowR\":%.2f,\"highR\":%.2f,"
 		"\"lowS\":%.2f,\"highS\":%.2f,\"lowT\":%.2f,\"highT\":%.2f,"
@@ -785,11 +797,18 @@ AsyncWebSocket* webServerGetMeterWS()
 	return &scopeWS;
 }
 
-// Retira clientes WebSocket desconectados de las listas internas.
+// Retira clientes WebSocket desconectados y vence cursores de logs inactivos; sin parametros.
 void webServerCleanupClients()
 {
 	scopeWS.cleanupClients();
 	remoteScreen.cleanupClients();
+	static uint32_t lastSessionCleanupMs = 0;
+	if (uint32_t(millis() - lastSessionCleanupMs) < 1000U) return;
+	lastSessionCleanupMs = millis();
+	if (!diagnosticReadMutex || xSemaphoreTake(diagnosticReadMutex, 0) != pdTRUE) return;
+	for (DiagnosticReadSession& session : diagnosticReadSessions)
+		if (session.isExpired()) session.invalidate();
+	xSemaphoreGive(diagnosticReadMutex);
 }
 
 
@@ -1088,10 +1107,12 @@ void Init_WebServer()
 			request->send(204);
 			return;
 		}
+		const uint32_t sessionId = session->getId();
 		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream",
-			session->contentLength(), [session](uint8_t* data, size_t capacity, size_t offset) -> size_t {
-				return session->copyChunk(data, capacity, offset);
+			session->contentLength(), [session, sessionId](uint8_t* data, size_t capacity, size_t offset) -> size_t {
+				return session->copyChunk(data, capacity, offset, sessionId);
 			});
+		request->onDisconnect([session, sessionId]() { session->cancel(sessionId); });
 		response->addHeader("Cache-Control", "no-store");
 		request->send(response);
 	});
@@ -1390,14 +1411,16 @@ void Init_WebServer()
 			request->send(400, "application/json", "{\"schemaVersion\":1,\"ok\":false,\"reason\":\"invalid_size_or_storage_unavailable\"}");
 			return;
 		}
-		if (!nandDownloadSession.begin(storageManager.partition(StoragePartitionId::history), size)) {
+		if (!nandReadSession.begin(storageManager.partition(StoragePartitionId::history), size)) {
 			request->send(409, "application/json", "{\"schemaVersion\":1,\"ok\":false,\"reason\":\"download_busy\"}");
 			return;
 		}
+		const uint32_t sessionId = nandReadSession.getId();
 		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", size,
-			[](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
-				return nandDownloadSession.copyChunk(buffer, maxLen, index);
+			[sessionId](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+				return nandReadSession.copyChunk(buffer, maxLen, index, sessionId);
 			});
+		request->onDisconnect([sessionId]() { nandReadSession.cancel(sessionId); });
 		response->addHeader("Content-Disposition", "attachment; filename=nand-history-test.bin");
 		response->addHeader("Cache-Control", "no-store");
 		request->send(response);
@@ -1797,10 +1820,12 @@ void Init_WebServer()
 		}
 		delete[] activeSnapshot;
 		const size_t dataSize = size_t(plan.physicalPageCount + (plan.includesActivePage ? 1U : 0U)) * HistoryFormat::pageSize;
+		const uint32_t sessionId = session->getId();
 		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", dataSize,
-			[session](uint8_t* buffer, size_t maxLength, size_t offset) -> size_t {
-				return session->copyChunk(buffer, maxLength, offset);
+			[session, sessionId](uint8_t* buffer, size_t maxLength, size_t offset) -> size_t {
+				return session->copyChunk(buffer, maxLength, offset, sessionId);
 			});
+		request->onDisconnect([session, sessionId]() { session->cancel(sessionId); });
 		response->addHeader("Content-Disposition", "attachment; filename=power-meter-history.bin");
 		response->addHeader("Cache-Control", "no-store");
 		response->addHeader("X-History-From", String(fromTimestamp));
@@ -1848,71 +1873,106 @@ void Init_WebServer()
 	};
 
 	// Las rutas especificas van antes de sus prefijos: evita que otra ruta intercepte la descarga.
+	server.on("/capture-cache", HTTP_GET, [](AsyncWebServerRequest* request) {
+		if (!requireExactPath(request, "/capture-cache")) return;
+		uint64_t fast = 0, wave = 0;
+		const bool ready = storageManager.isReady() && !storageManager.partition(StoragePartitionId::gridEvents).isFormatting() &&
+			!storageManager.partition(StoragePartitionId::waveEvents).isFormatting() && storageManager.getEventCacheEpochs(fast, wave);
+		char json[224];
+		snprintf(json, sizeof(json), "{\"schemaVersion\":1,\"ready\":%s,\"deviceId\":\"%012llx\",\"fastEpoch\":\"%016llx\",\"waveEpoch\":\"%016llx\"}",
+			ready ? "true" : "false", ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL, fast, wave);
+		auto* response = request->beginResponse(200, "application/json", json);
+		response->addHeader("Cache-Control", "no-store"); request->send(response);
+	});
 	server.on("/wave-events/data", HTTP_GET, [](AsyncWebServerRequest* request) {
 		if (!requireExactPath(request, "/wave-events/data")) return;
-		uint32_t block = 0, id = 0;
-		if (!getUint32Parameter(request, "block", block) || !getUint32Parameter(request, "waveId", id) ||
-			block >= 320 || !id || request->params() != 2) { request->send(400, "text/plain", "invalid_query"); return; }
+		uint32_t block = 0, id = 0, page = 0, formatVersion = 0;
+		const bool legacyRequest = request->params() == 2;
+		const bool baseParamsValid = getUint32Parameter(request, "block", block) && getUint32Parameter(request, "waveId", id);
+		const bool layoutParamsValid = legacyRequest ||
+			(getUint32Parameter(request, "page", page) && getUint32Parameter(request, "version", formatVersion));
+		if (!baseParamsValid || !layoutParamsValid || (!legacyRequest && request->params() != 4) ||
+			block >= 320 || !id || (page != 0 && page != 32) ||
+			(formatVersion != waveEventFormat::legacyVersion && formatVersion != waveEventFormat::version)) {
+			request->send(400, "text/plain", "invalid_query"); return;
+		}
+		if (legacyRequest) formatVersion = waveEventFormat::legacyVersion;
 		auto& store = storageManager.waveEvents();
 		// FAST y Wave comparten las dos paginas de lectura; otra descarga recibe ocupado.
-		if (gridEventReadSession.isActive() || !store.pin(uint16_t(block), id)) {
+		if (nandReadSession.isActive() || !store.pin(uint16_t(block), uint8_t(page), id, uint8_t(formatVersion))) {
 			request->send(409, "text/plain", "wave_unavailable_or_busy"); return;
 		}
-		if (!gridEventReadSession.begin(storageManager.partition(StoragePartitionId::waveEvents), uint16_t(block), 0, 64,
+		const uint32_t pageCount = formatVersion == waveEventFormat::legacyVersion ? 64 : 32;
+		const size_t contentLength = size_t(pageCount) * 2048;
+		if (!nandReadSession.begin(storageManager.partition(StoragePartitionId::waveEvents), uint16_t(block), uint8_t(page), pageCount,
 			[]() { storageManager.waveEvents().unpin(); })) {
 			store.unpin(); request->send(503, "text/plain", "wave_reader_unavailable"); return;
 		}
-		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", 131072,
-			[](uint8_t* buffer, size_t length, size_t offset) -> size_t { return gridEventReadSession.copyChunk(buffer, length, offset); });
+		const uint32_t sessionId = nandReadSession.getId();
+		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", contentLength,
+			[sessionId](uint8_t* buffer, size_t length, size_t offset) -> size_t { return nandReadSession.copyChunk(buffer, length, offset, sessionId); });
+		request->onDisconnect([sessionId]() { nandReadSession.cancel(sessionId); });
 		response->addHeader("Cache-Control", "no-store");
+		addCaptureCacheIdentity(response, true);
 		request->send(response);
 	});
 	server.on("/wave-events", HTTP_GET, [](AsyncWebServerRequest* request) {
 		if (!requireExactPath(request, "/wave-events")) return;
 		uint32_t eventId = 0;
-		if (!getUint32Parameter(request, "eventId", eventId) || !eventId || request->params() != 1) {
-			request->send(400, "text/plain", "eventId_required"); return;
+		uint64_t unixUs = 0;
+		if (!getUint32Parameter(request, "eventId", eventId) || !eventId ||
+			!getUint64Parameter(request, "unixUs", unixUs) || request->params() != 2) {
+			request->send(400, "text/plain", "eventId_and_unixUs_required"); return;
 		}
-		GridEventIndexEntry entry;
-		if (!storageManager.gridEvents().findEntry(eventId, entry)) { request->send(404, "text/plain", "event_not_found"); return; }
-		const uint64_t unixUs = uint64_t(entry.header.unixSeconds) * 1000000ULL + entry.header.fraction100Us * 100ULL;
-		uint16_t cursor = 0, block = 0;
-		waveEventFormat::commitHeader commit;
-		String json = "{\"captures\":[";
-		uint8_t count = 0;
-		while (count < 8 && storageManager.waveEvents().find(eventId, unixUs, cursor, block, commit)) {
-			if (count++) json += ',';
+		waveIndexSnapshot index;
+		const auto state = storageManager.waveEvents().lookup(eventId, unixUs, index);
+		if (state != waveIndexStatus::ready) {
+			const bool pending = state == waveIndexStatus::pending;
+			const char* reason = pending ? "wave_index_pending" : state == waveIndexStatus::busy ? "wave_index_busy" :
+				state == waveIndexStatus::failed ? "wave_index_read_failed" : "wave_index_unavailable";
+			char json[96]; snprintf(json, sizeof(json), "{\"ready\":false,\"reason\":\"%s\"}", reason);
+			auto* response = request->beginResponse(pending ? 202 : state == waveIndexStatus::failed ? 500 : 503, "application/json", json);
+			response->addHeader("Cache-Control", "no-store");
+			if (!pending) response->addHeader("Retry-After", "1");
+			request->send(response); return;
+		}
+		char fastIdentity[32] = {}, waveIdentity[32] = {};
+		captureCacheIdentity(false, fastIdentity, sizeof(fastIdentity)); captureCacheIdentity(true, waveIdentity, sizeof(waveIdentity));
+		String json = "{\"fastIdentity\":\"";
+		json += fastIdentity; json += "\",\"waveIdentity\":\""; json += waveIdentity;
+		json += "\",\"eventTimestamp\":"; json += String(double(unixUs) / 1000.0, 1); json += ",\"captures\":[";
+		for (uint8_t count = 0; count < index.count; ++count) {
+			const auto& capture = index.entries[count];
+			if (count) json += ',';
 			char item[160];
-			snprintf(item, sizeof(item), "{\"id\":%lu,\"block\":%u,\"triggerUs\":%llu,\"endUs\":%llu}",
-				(unsigned long)commit.waveId, block, commit.triggerUs, commit.endUs);
+			snprintf(item, sizeof(item), "{\"id\":%lu,\"block\":%u,\"page\":%u,\"version\":%u,\"triggerUs\":%llu,\"endUs\":%llu}",
+				(unsigned long)capture.id, capture.block, capture.page, capture.version, capture.triggerUs, capture.endUs);
 			json += item;
 		}
 		json += "]}";
 		request->send(200, "application/json", json);
 	});
+	eventsHttpBegin(server);
 	server.on("/wave/config", HTTP_GET, [](AsyncWebServerRequest* request) {
 		if (!requireExactPath(request, "/wave/config")) return;
 		waveStoreMetrics metrics; storageManager.waveEvents().getMetrics(metrics);
-		Preferences prefs; uint16_t requested = 192;
-		if (prefs.begin("wave", true)) { requested = prefs.getUShort("preMs", 192); prefs.end(); }
-		char json[600];
+		eventSettingsSnapshot settings; eventSettingsGet(settings);
+		const uint16_t requested = settings.config.preMs; const bool saveEnabled = settings.config.waveEnabled;
+		const uint8_t pointMask = settings.config.waveMask;
+		char json[720];
 		snprintf(json, sizeof(json), "{\"preMs\":%u,\"actualPreMs\":%u,\"reservedBytes\":%lu,\"enabled\":%s,\"capturing\":%s,"
 			"\"captures\":%lu,\"committed\":%lu,\"orphans\":%lu,\"gaps\":%lu,\"droppedTriggers\":%lu,"
-			"\"failedWrites\":%lu,\"erasedBlocks\":%u,\"pendingLinks\":%lu,\"publishedSlices\":%lu,\"wordHeapBytes\":%lu,\"stackFreeBytes\":%u}", requested,
+			"\"failedWrites\":%lu,\"erasedBlocks\":%u,\"pendingLinks\":%lu,\"publishedSlices\":%lu,\"wordHeapBytes\":%lu,\"stackFreeBytes\":%u,\"saveEnabled\":%s,\"occupiedSlots\":%u,\"totalSlots\":%u,\"storedCaptures\":%u,\"pointMask\":%u}", requested,
 			metrics.actualPreMs, (unsigned long)metrics.reservedBytes, metrics.enabled ? "true" : "false", metrics.capturing ? "true" : "false",
 			(unsigned long)metrics.captures, (unsigned long)metrics.committed, (unsigned long)metrics.orphans, (unsigned long)metrics.gaps,
 			(unsigned long)metrics.droppedTriggers, (unsigned long)metrics.failedWrites, metrics.erasedBlocks,
-			(unsigned long)metrics.pendingLinks, (unsigned long)metrics.publishedSlices, (unsigned long)metrics.wordHeapBytes, metrics.stackFreeBytes);
+			(unsigned long)metrics.pendingLinks, (unsigned long)metrics.publishedSlices, (unsigned long)metrics.wordHeapBytes, metrics.stackFreeBytes,
+			saveEnabled ? "true" : "false", metrics.occupiedSlots, metrics.totalSlots, metrics.storedCaptures, pointMask);
 		request->send(200, "application/json", json);
 	});
 	server.on("/wave/config", HTTP_POST, [](AsyncWebServerRequest* request) {
 		if (!requireExactPath(request, "/wave/config")) return;
-		uint32_t value = 0;
-		if (!getUint32Parameter(request, "preMs", value, true) || value > 288 ||
-			!storageManager.waveEvents().savePreMs(uint16_t(value))) {
-			request->send(400, "text/plain", "preMs_must_be_48_to_288_step_48"); return;
-		}
-		request->send(200, "application/json", "{\"ok\":true,\"restartRequired\":true}");
+		request->send(410, "application/json", "{\"error\":\"use_events_config\"}");
 	});
 	server.on("/grid-events/data", HTTP_GET, [](AsyncWebServerRequest* request) {
 		if (!requireExactPath(request, "/grid-events/data")) return;
@@ -1932,15 +1992,18 @@ void Init_WebServer()
 			request->send(404, "application/json", "{\"schemaVersion\":1,\"ok\":false,\"reason\":\"event_not_found\"}");
 			return;
 		}
-		if (gridEventReadSession.isActive() || !gridEventReadSession.begin(storageManager.partition(StoragePartitionId::gridEvents), entry.block, entry.page, entry.header.pageCount)) {
+		if (nandReadSession.isActive() || !nandReadSession.begin(storageManager.partition(StoragePartitionId::gridEvents), entry.block, entry.page, entry.header.pageCount)) {
 			request->send(429, "application/json", "{\"schemaVersion\":1,\"ok\":false,\"reason\":\"grid_download_busy\"}");
 			return;
 		}
 		const size_t size = size_t(entry.header.pageCount) * GridEventFormat::pageSize;
+		const uint32_t sessionId = nandReadSession.getId();
 		AsyncWebServerResponse* response = request->beginResponse("application/octet-stream", size,
-			[](uint8_t* buffer, size_t maxLength, size_t offset) -> size_t { return gridEventReadSession.copyChunk(buffer, maxLength, offset); });
+			[sessionId](uint8_t* buffer, size_t maxLength, size_t offset) -> size_t { return nandReadSession.copyChunk(buffer, maxLength, offset, sessionId); });
+		request->onDisconnect([sessionId]() { nandReadSession.cancel(sessionId); });
 		response->addHeader("Content-Disposition", "attachment; filename=power-meter-grid-event-" + String(eventId) + ".bin");
 		response->addHeader("Cache-Control", "no-store");
+		addCaptureCacheIdentity(response, false);
 		request->send(response);
 		});
 
@@ -2013,37 +2076,45 @@ void Init_WebServer()
 		});
 
 	server.on("/meter", HTTP_GET, [](AsyncWebServerRequest* request) {
-		String Value = "";
+		char value[1280];
+		bool valid = true;
 		if (request->params() > 0) {
 			const String& param = request->getParam(0)->name();
 			if (param == "energy")
-				Meter.getJsonEnergy(Value);
+				valid = Meter.getJsonEnergy(value, sizeof(value));
 			else if (param == "fast")
-				Meter.getJsonFastMeasures(Value);
-			else if (param == "timing")
-				meterTimingGetJson(Value);
+				valid = Meter.getJsonFastMeasures(value, sizeof(value));
+			else if (param == "timing") {
+				String timing;
+				meterTimingGetJson(timing);
+				request->send(200, "application/json", timing);
+				return;
+			}
 			else if (param == "phaseR")
-				Value = Meter.phaseR.getJson();
+				valid = Meter.phaseR.getJson(value, sizeof(value));
 			else if (param == "phaseS")
-				Value = Meter.phaseS.getJson();
+				valid = Meter.phaseS.getJson(value, sizeof(value));
 			else if (param == "phaseT")
-				Value = Meter.phaseT.getJson();
+				valid = Meter.phaseT.getJson(value, sizeof(value));
 			else if (param == "neutral")
-				Value = Meter.neutral.getJson();
+				valid = Meter.neutral.getJson(value, sizeof(value));
 			else if (param == "angles")
-				Meter.getJsonAngles(Value);
+				valid = Meter.getJsonAngles(value, sizeof(value));
 			else if (param == "thd")
-				Meter.getJsonTHD(Value);
+				valid = Meter.getJsonTHD(value, sizeof(value));
 			else
 			{
 				request->send(404, "text/plain", "Page Not Found");
 				return;
 			}
 		}
-		else {
-			Meter.getJsonBasic(Value);
+		else
+			valid = Meter.getJsonBasic(value, sizeof(value));
+		if (!valid) {
+			request->send(500, "application/json", "{\"error\":\"json_buffer_too_small\"}");
+			return;
 		}
-		request->send(200, "application/json", Value);
+		request->send(200, "application/json", value);
 		});
 
 
@@ -2103,8 +2174,7 @@ void Init_WebServer()
 		});
 
 	server.on("/options/reload", HTTP_POST, [](AsyncWebServerRequest* request) {
-		MeterLoadOptions();
-		request->send(200, "text/plain", "opciones recargadas");
+		request->send(410, "application/json", "{\"error\":\"use_events_config\"}");
 		});
 	server.on("/grid/config", HTTP_GET | HTTP_POST, handleGridSettings);
 
@@ -2116,6 +2186,9 @@ void Init_WebServer()
 		if (request->params() > 1) {
 			Preferences opts;
 			const String& nameSpace = request->getParam(0)->value();
+			if (nameSpace == "meter") for (size_t i = 1; i < request->params(); ++i) if (isEventOptionKey(request->getParam(i)->name())) {
+				request->send(410, "application/json", "{\"error\":\"use_events_config\"}"); return;
+			}
 			if (request->getParam(0)->name() == "ns" && opts.begin(nameSpace.c_str())) {
 				for (int32_t i = 1; i < request->params(); i++) {
 					String value;

@@ -1,10 +1,11 @@
 #pragma once
 
 #include "diagnostic_store.h"
+#include <atomic>
 
 class DiagnosticLogger;
 
-// Conserva un snapshot y transmite sus bloques NAND por paginas.
+// Transmite bloques NAND con snapshot temporal y conserva solo el cursor entre respuestas.
 class DiagnosticReadSession {
 public:
 	static constexpr uint16_t responseHeaderSize = 20;
@@ -15,8 +16,14 @@ public:
 	// Abre el bloque anterior a beforeBlock; token identifica el snapshot y done indica fin del anillo.
 	bool beginPrevious(DiagnosticStore& store, uint32_t token, uint16_t beforeBlock, bool& done);
 
-	// Copia bytes listos al callback HTTP; destination, capacity y offset describen el tramo solicitado.
-	size_t copyChunk(uint8_t* destination, size_t capacity, size_t offset);
+	// Copia bytes listos; destination/capacity/offset describen el tramo e id identifica la respuesta vigente.
+	size_t copyChunk(uint8_t* destination, size_t capacity, size_t offset, uint32_t id);
+
+	// Identifica la transferencia actual, sin cambiar el token del cursor; sin parametros.
+	uint32_t getId() const;
+
+	// Cancela solamente la transferencia id, sin liberar memoria que NAND todavia usa.
+	void cancel(uint32_t id);
 
 	// Indica si no hay una respuesta HTTP o tarea de lectura en curso.
 	bool isAvailable() const;
@@ -24,7 +31,7 @@ public:
 	// Indica si token corresponde al snapshot conservado.
 	bool matches(uint32_t token) const;
 
-	// Indica si una sesion inactiva vencio y puede reemplazarse.
+	// Indica si el cursor inactivo vencio y puede descartarse; sin parametros.
 	bool isExpired() const;
 
 	// Descarta el snapshot cuando no hay una transferencia o lectura activa.
@@ -41,7 +48,9 @@ private:
 	uint8_t* buffers[bufferCount] = {};
 	uint8_t responseHeader[responseHeaderSize] = {};
 	uint32_t sessionToken = 0;
-	uint32_t lastUsedMs = 0;
+	uint32_t sessionId = 0, recentSequence = 0;
+	std::atomic<uint32_t> lastUsedMs{0};
+	uint16_t anchorBlock = 0;
 	uint16_t responseBlock = 0;
 	uint16_t blockIndex = 0;
 	uint8_t ramPageCount = 0;
@@ -50,8 +59,7 @@ private:
 	size_t currentOffset = 0;
 	size_t totalBytes = 0;
 	volatile uint8_t producedPages = 0;
-	volatile bool active = false;
-	volatile bool taskRunning = false;
+	std::atomic<bool> active{false}, taskRunning{false}, producerFailed{false};
 	volatile uint32_t lastConsumerMs = 0;
 	QueueHandle_t freeQueue = nullptr;
 	QueueHandle_t readyQueue = nullptr;
@@ -66,6 +74,9 @@ private:
 
 	// Libera buffers de una sesion vencida antes de reutilizarla.
 	void releaseBuffers();
+
+	// Libera paginas y snapshot de la respuesta terminada; conserva el cursor para continuar leyendo.
+	void releaseTransferBuffers();
 
 	// Entra a la tarea de lectura; parameter apunta a esta sesion.
 	static void taskEntry(void* parameter);

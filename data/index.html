@@ -3,7 +3,7 @@
     <head>
         <title>POWER METER ADE9000</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" charset="UTF-8"/>
-        <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+        <meta http-equiv="Cache-Control" content="no-cache, must-revalidate" />
         <meta http-equiv="Pragma" content="no-cache" />
         <meta http-equiv="Expires" content="0" />
         <link rel="icon" type="image/png" href="favicon.png" />
@@ -15,8 +15,9 @@
 </div>
 <script>
 const bootStyles = ["lib/bootstrap.min.css","lib/jquery.simplegauge.css","style.css"];
-const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","board.js","scope.js","logs_ui.js","index.js","history_ui.js","grid_events_ui.js","wave_events_ui.js","scope_ui.js","script.js"];
-const bootBuild = "20261020-wave-nand-v1";
+const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","board.js","scope.js","logs_ui.js","index.js","history_ui.js","grid_events_ui.js","event_history_period.js","event_history.js","capture_cache.js","event_history_preview.js","event_statistics.js","wave_events_ui.js","scope_ui.js","script.js"];
+// Cambiar esta version solo cuando se actualice alguna dependencia de lib/.
+const bootLibraryBuild = "vendor-1";
 
 // Agrega una linea al progreso de carga.
 // message: texto que se muestra en el textarea.
@@ -53,10 +54,11 @@ function loadScript(path) {
     });
 }
 
-// Agrega version a los archivos para evitar cache viejo del navegador.
+// Versiona librerias y conserva URLs propias para revalidarlas por ETag.
 // path: ruta original del archivo.
 function cacheBust(path) {
-    return path + (path.includes("?") ? "&" : "?") + "v=" + bootBuild;
+    if (!path.startsWith("lib/")) return path;
+    return path + (path.includes("?") ? "&" : "?") + "v=" + bootLibraryBuild;
 }
 
 // Carga todos los archivos de la app de a uno.
@@ -98,6 +100,7 @@ bootApp();
                 <a class="nav-link app-page-link" href="#history" id="history-tab" data-page="history" title="Histórico"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 1 1-8.94 10h2.02A7 7 0 1 0 8 7.1L11 10H4V3l2.58 2.58A8.96 8.96 0 0 1 13 3m-1 5h2v4.2l3 1.8-1 1.7-4-2.4z"/></svg><span class="navLabel">Histórico</span></a>
 				<a class="nav-link app-page-link" href="#logs" id="logs-tab" data-page="logs" title="Logs"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zm2 2v12h12V6zm2 2h8v2H8zm0 4h8v2H8z"/><path d="M9 9h1v1H9zm0 4h1v1H9z"/></svg><span class="navLabel">Logs</span></a>
 				<a class="nav-link app-page-link" href="#gridEvents" id="gridEvents-tab" data-page="gridEvents" title="Eventos"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a2 2 0 0 0-2 2c0 .74.4 1.38 1 1.72v2.34L6 10.8a2 2 0 1 0 1 1.73l5-2.74 5 2.74a2 2 0 1 0 1-1.73l-5-2.74V5.72A2 2 0 0 0 12 2M4 16a2 2 0 1 0 2 2c0-.27-.05-.52-.15-.75L12 13.9l6.15 3.35A2 2 0 1 0 19 16l-7-3.8z"/></svg><span class="navLabel">Eventos</span></a>
+                <a class="nav-link app-page-link" href="#eventHistory" id="eventHistory-tab" data-page="eventHistory" title="Historial"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2v16H3zm4 2h14v3H7zm0 5h8v3H7zm0 5h11v3H7z"/></svg><span class="navLabel">Historial</span></a>
                 <a class="nav-link app-page-link" href="#scopePage" id="navscope" data-page="scopePage" title="Osciloscopio"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3zm2 2v12h14V6zm1 7h2l2-5 3 8 2-5h2v2h-1l-2 5h-2l-2.5-6.6-1.5 3.6H6z"/></svg><span class="navLabel">Osciloscopio</span></a>
                 <a class="nav-link app-page-link" href="#settings" id="settings-tab" data-page="settings" title="Configuración"><svg class="navIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="m19.4 13 .1-1-.1-1 2-1.6-2-3.5-2.4 1a8 8 0 0 0-1.7-1L15 3h-4l-.4 2.9a8 8 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.6-.1 1 .1 1-2 1.6 2 3.5 2.4-1a8 8 0 0 0 1.7 1L11 22h4l.4-2.9a8 8 0 0 0 1.7-1l2.4 1 2-3.5zM13 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8"/></svg><span class="navLabel">Configuración</span></a>
             </div>
@@ -457,6 +460,93 @@ bootApp();
                     </div>
                 </div>
                 <div class="tab-pane" id="settings" role="region" aria-labelledby="settings-tab"></div>
+                <div class="tab-pane" id="eventHistory" role="region" aria-labelledby="eventHistory-tab">
+                    <div class="p-2 eventHistoryViewer">
+                        <div class="eventHistoryRangeScroll"><div class="eventHistoryControls">
+                            <label>Desde<input id="eventHistoryFrom" class="form-control form-control-sm" type="datetime-local" step="1"></label>
+                            <label>Hasta<input id="eventHistoryTo" class="form-control form-control-sm" type="datetime-local" step="1"></label>
+                            <select id="eventHistoryPreset" class="form-select form-select-sm" aria-label="Periodo del historial"><option value="">Personalizado</option><option value="today">Hoy</option><option value="yesterday">Ayer</option><option value="thisWeek">Esta semana</option><option value="lastWeek">La semana pasada</option><option value="thisMonth">Este mes</option><option value="lastMonth">El mes pasado</option><option value="thisYear">Este año</option></select>
+                            <div class="btn-group btn-group-sm" role="group" aria-label="Navegar periodos">
+                                <button id="eventHistoryPrevious" class="btn btn-outline-secondary" type="button" title="Periodo anterior" aria-label="Periodo anterior"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 5.4 14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg></button>
+                                <button id="eventHistoryCurrent" class="btn btn-outline-secondary" type="button" title="Periodo actual" aria-label="Periodo actual"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2m0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8m1-13h-2v6l5 3 1-1.7-4-2.3z"/></svg></button>
+                                <button id="eventHistoryNext" class="btn btn-outline-secondary" type="button" title="Periodo siguiente" aria-label="Periodo siguiente"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 18.6 10 20l8-8-8-8-1.4 1.4 6.6 6.6z"/></svg></button>
+                            </div>
+                            <button id="eventHistoryLoad" class="btn btn-primary btn-sm" type="button">Analizar</button>
+                            <button id="eventHistoryStop" class="btn btn-outline-secondary btn-sm" type="button" disabled>Detener</button>
+                        </div></div>
+                        <div class="d-flex justify-content-end my-2"><select id="eventHistoryLane" class="form-select form-select-sm eventHistoryLaneFilter" aria-label="Entrada del historial">
+                                <option value="all">Todas las entradas</option><option value="4:V">Red</option>
+                                <option value="0:V">Fase R</option><option value="1:V">Fase S</option><option value="2:V">Fase T</option><option value="3:V">Neutro-tierra</option>
+                                <option value="0:A">Corriente R</option><option value="1:A">Corriente S</option><option value="2:A">Corriente T</option><option value="3:A">Corriente neutro</option>
+                            </select></div>
+                        <div id="eventHistoryStatus" class="small text-muted my-2" role="status" aria-live="polite">Ultima semana</div>
+                        <div id="eventHistoryCacheStatus" class="small text-muted"></div>
+                        <progress id="eventHistoryProgress" class="eventHistoryProgress" max="1" value="0" aria-label="Progreso del analisis"></progress>
+                        <div id="eventHistoryWarning" class="alert alert-warning alert-dismissible small py-2 d-none" role="status"><span id="eventHistoryWarningText"></span><button type="button" class="btn-close py-2" data-bs-dismiss="alert" aria-label="Cerrar aviso" title="Cerrar aviso"></button></div>
+                        <div id="eventHistoryTimeline" class="eventHistoryTimeline" aria-label="Linea temporal por entrada"></div>
+                        <div id="eventHistoryAxis" class="eventHistoryAxis small text-muted"></div>
+                        <div class="eventHistoryLegend small"><span>Normal registrado</span><span>Bajo / anormal</span><span>Sin tension / corte</span><span>Alto</span><span class="eventHistoryLegendPoint" style="--event-color:#c58b16">DIP</span><span class="eventHistoryLegendPoint" style="--event-color:#c94d83">Swell</span><span class="eventHistoryLegendPoint" style="--event-color:#16859b">Sobrecorriente</span><span class="eventHistoryLegendUnknown">Sin datos reconstruidos</span><span class="eventHistoryLegendPartial">Rayado: parcial o sin cierre</span></div>
+                        <div id="eventHistorySummary" class="small text-muted my-3"></div>
+                        <div id="eventHistoryNote" class="small text-muted mb-2"></div>
+                        <ul class="nav nav-tabs mb-3" role="tablist">
+                            <li class="nav-item" role="presentation"><button id="eventHistoryEvents-tab" class="nav-link active" data-bs-toggle="tab" data-bs-target="#eventHistoryEventsPane" type="button" role="tab" aria-selected="true" aria-controls="eventHistoryEventsPane">Eventos</button></li>
+                            <li class="nav-item" role="presentation"><button id="eventHistoryStats-tab" class="nav-link" data-bs-toggle="tab" data-bs-target="#eventHistoryStatsPane" type="button" role="tab" aria-selected="false" aria-controls="eventHistoryStatsPane">Estadísticas</button></li>
+                        </ul>
+                        <div class="tab-content">
+                        <div id="eventHistoryEventsPane" class="tab-pane active" role="tabpanel" aria-labelledby="eventHistoryEvents-tab">
+                            <div id="eventHistoryDetail" class="eventHistoryDetail mb-3 d-none"></div>
+                            <div class="table-responsive"><table class="table table-sm eventHistoryTable"><thead><tr><th>Inicio</th><th>Entrada</th><th>Condicion</th><th>Final</th><th>Duracion</th></tr></thead><tbody id="eventHistoryRows"></tbody></table></div>
+                        </div>
+                        <section id="eventHistoryStatsPane" class="tab-pane eventStatistics" role="tabpanel" aria-labelledby="eventHistoryStats-tab">
+                            <h2 id="eventStatisticsTitle">Estadisticas</h2>
+                            <div id="eventStatisticsStatus" class="small text-muted mb-2" role="status"></div>
+                            <div class="eventStatisticsControls my-3">
+                                <label>Agrupar por<select id="eventStatisticsUnit" class="form-select form-select-sm"><option value="auto">Automatico</option><option value="hour">Hora</option><option value="day">Dia</option><option value="week">Semana</option></select></label>
+                                <label>Entrada<select id="eventStatisticsSubject" class="form-select form-select-sm"><option value="4">Red</option><option value="0">Fase R</option><option value="1">Fase S</option><option value="2">Fase T</option><option value="3">Neutro-tierra / corriente neutro</option></select></label>
+                            </div>
+                            <ul class="nav nav-pills mb-3" role="tablist">
+                                <li class="nav-item" role="presentation"><button id="eventStatisticsCharts-tab" class="nav-link active" data-bs-toggle="tab" data-bs-target="#eventStatisticsChartsPane" type="button" role="tab" aria-selected="true" aria-controls="eventStatisticsChartsPane">Gráficos</button></li>
+                                <li class="nav-item" role="presentation"><button id="eventStatisticsTables-tab" class="nav-link" data-bs-toggle="tab" data-bs-target="#eventStatisticsTablesPane" type="button" role="tab" aria-selected="false" aria-controls="eventStatisticsTablesPane">Tablas</button></li>
+                            </ul>
+                            <div class="tab-content">
+                                <div id="eventStatisticsChartsPane" class="tab-pane active" role="tabpanel" aria-labelledby="eventStatisticsCharts-tab">
+                                    <div id="eventStatisticsChartNotice" class="small text-danger"></div>
+                                    <div class="eventStatisticsChartGrid"><div id="eventStatisticsCountChart"></div><div id="eventStatisticsDurationChart"></div></div>
+                                </div>
+                                <div id="eventStatisticsTablesPane" class="tab-pane" role="tabpanel" aria-labelledby="eventStatisticsTables-tab">
+                                    <div class="table-responsive"><table class="table table-sm eventStatisticsTable"><caption class="visually-hidden">Resumen por entrada</caption><thead><tr id="eventStatisticsSummaryHeader"></tr></thead><tbody id="eventStatisticsSummary"></tbody></table></div>
+                                    <div class="table-responsive"><table class="table table-sm eventStatisticsTable"><caption class="visually-hidden">Detalle por intervalo</caption><thead><tr id="eventStatisticsRowsHeader"></tr></thead><tbody id="eventStatisticsRows"></tbody></table></div>
+                                </div>
+                            </div>
+                            <p id="eventStatisticsNote" class="small text-muted mb-2"></p>
+                        </section>
+                        </div>
+                        <div class="modal fade" id="eventHistoryPreview" tabindex="-1" aria-labelledby="eventHistoryPreviewTitle" aria-hidden="true">
+                            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable"><div class="modal-content">
+                                <div class="modal-header gap-2"><h2 id="eventHistoryPreviewTitle" class="modal-title fs-6">Vista previa</h2><button id="eventHistoryPreviewExpand" type="button" class="btn btn-sm btn-outline-secondary ms-auto" title="Pantalla completa" aria-label="Pantalla completa" aria-pressed="false">&#x26F6;</button><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button></div>
+                                <div class="modal-body">
+                                    <div id="eventHistoryPreviewInfo" class="small text-muted mb-2"></div>
+                                    <div class="d-flex flex-wrap gap-2 align-items-center mb-2" role="group" aria-label="Navegacion del evento">
+                                        <div id="eventHistoryPreviewSections" class="d-flex flex-wrap gap-1" role="group" aria-label="Tramos con muestras"></div>
+                                        <button id="eventHistoryPreviewFull" class="btn btn-sm btn-outline-secondary" type="button" aria-pressed="false">Ver todo</button>
+                                        <label class="small d-inline-flex align-items-center gap-1"><input id="eventHistoryPreviewPan" type="checkbox">Mover</label>
+                                        <label class="small d-inline-flex align-items-center gap-1"><input id="eventHistoryPreviewLink" type="checkbox" checked>Vincular vistas</label>
+                                    </div>
+                                    <div id="eventHistoryPreviewSectionStatus" class="small text-muted mb-2" role="status"></div>
+                                    <div id="eventHistoryPreviewSignals" class="eventHistorySignals mb-2" role="group" aria-label="Senales visibles"></div>
+                                    <div id="eventHistoryPreviewSignalStatus" class="small text-muted mb-2" role="status"></div>
+                                    <div id="eventHistoryPreviewWarnings" class="small text-danger" role="status"></div>
+                                    <div id="eventHistoryPreviewFastStatus" class="small text-muted" role="status"></div>
+                                    <div id="eventHistoryPreviewFast" class="eventHistoryPreviewChart"></div>
+                                    <div id="eventHistoryPreviewWaveStatus" class="small text-muted" role="status"></div>
+                                    <div id="eventHistoryPreviewWave" class="eventHistoryPreviewChart"></div>
+                                    <div id="eventHistoryPreviewRecords" class="d-flex flex-wrap gap-1 mb-2" aria-label="Marcas del evento"></div>
+                                </div>
+                                <div class="modal-footer"><select id="eventHistoryPreviewCapture" class="form-select form-select-sm w-auto" aria-label="Captura para ver detalles"></select><button id="eventHistoryPreviewDetails" class="btn btn-primary btn-sm" type="button" disabled>Ver detalles</button><button class="btn btn-outline-secondary btn-sm" type="button" data-bs-dismiss="modal">Cerrar</button></div>
+                            </div></div>
+                        </div>
+                    </div>
+                </div>
 				<div class="tab-pane" id="gridEvents" role="region" aria-labelledby="gridEvents-tab">
                     <div class="row p-2">
                         <div class="col-sm-12 col-md-4 col-lg-3 mb-2">
@@ -472,10 +562,15 @@ bootApp();
                                 <div id="gridEventTrigger" class="small text-muted mt-1"></div>
                                 <div id="gridEventWarnings" class="small text-danger mt-1 d-none" role="status"></div>
                                 <div id="gridEventOverview" class="gridEventOverview my-2" aria-label="Resumen de la captura"></div>
-                                <div class="d-flex flex-wrap gap-3 align-items-center justify-content-end mb-2">
+                                <div class="gridChartNavTools d-flex flex-wrap gap-2 align-items-center justify-content-end mb-2" role="group" aria-label="Navegación de las gráficas">
                                     <label class="small d-inline-flex gap-1 align-items-center"><input id="gridEventMarkers" type="checkbox" checked>Marcas</label>
                                     <div class="btn-group btn-group-sm"><button id="gridEventVoltageToggle" class="btn btn-outline-primary active" type="button" aria-pressed="true">Voltajes</button><button id="gridEventCurrentToggle" class="btn btn-outline-primary" type="button" aria-pressed="false">Corrientes</button></div>
-                                    <button id="gridEventResetZoom" class="btn btn-outline-secondary btn-sm" type="button" title="Ver todo el tramo FAST" aria-label="Ver todo el tramo FAST"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button>
+                                    <label class="small d-inline-flex gap-1 align-items-center" title="Sincroniza zoom y desplazamiento entre FAST y oscilografía"><input id="gridEventLinkViews" type="checkbox" checked>Vincular vistas</label>
+                                    <div class="btn-group btn-group-sm" role="group" aria-label="Modo de navegación">
+                                        <button id="gridEventZoomToggle" class="btn btn-outline-secondary active" type="button" aria-pressed="true" title="Arrastrá sobre la gráfica para ampliar" aria-label="Modo zoom">Zoom</button>
+                                        <button id="gridEventPanToggle" class="btn btn-outline-secondary" type="button" aria-pressed="false" title="Arrastrá la gráfica para desplazarte" aria-label="Modo arrastrar">Mover</button>
+                                    </div>
+                                    <button id="gridEventResetZoom" class="btn btn-outline-secondary btn-sm" type="button" title="Ver todo el tramo" aria-label="Restablecer zoom">Vista completa</button>
                                 </div>
                                 <div class="row g-2">
                                     <div id="gridEventChartPanel" class="col-lg-8">

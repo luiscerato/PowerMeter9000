@@ -1,5 +1,6 @@
 #include "webfs_read_session.h"
 #include "ESPAsyncWebServer.h"
+#include "../memory_diagnostics.h"
 #include <new>
 
 // Inicia la lectura de un archivo ya localizado; store contiene los bancos y file describe el rango.
@@ -7,6 +8,7 @@ bool WebFsReadSession::begin(WebFsStore& store, const WebFsFile& file)
 {
 	if (active || taskHandle || file.bank == WebFsBank::none || !file.entry.storedSize ||
 		file.entry.dataOffset % WebFsFormat::pageSize) return false;
+	releaseBuffers();
 	freeQueue = xQueueCreateStatic(bufferCount, sizeof(uint8_t), freeQueueData, &freeQueueStorage);
 	readyQueue = xQueueCreateStatic(bufferCount, sizeof(uint8_t), readyQueueData, &readyQueueStorage);
 	completionQueue = xQueueCreateStatic(1, sizeof(NandIoResult), completionQueueData, &completionQueueStorage);
@@ -15,6 +17,7 @@ bool WebFsReadSession::begin(WebFsStore& store, const WebFsFile& file)
 		buffers[index] = new (std::nothrow) uint8_t[WebFsFormat::pageSize];
 		if (!buffers[index]) {
 			releaseBuffers();
+			memoryReportState("WebFS page allocation failed", WebFsFormat::pageSize);
 			return false;
 		}
 		xQueueSend(freeQueue, &index, 0);
@@ -29,28 +32,29 @@ bool WebFsReadSession::begin(WebFsStore& store, const WebFsFile& file)
 	currentOffset = 0;
 	currentLength = 0;
 	producerFailed = false;
-	lastConsumerMs = millis();
+	if (++sessionId == 0) ++sessionId;
 	active = true;
 	if (xTaskCreatePinnedToCore(readTaskEntry, "webfsRead", 2048, this, 1, &taskHandle, tskNO_AFFINITY) != pdPASS) {
 		active = false;
 		taskHandle = nullptr;
 		releaseBuffers();
+		memoryReportState("WebFS task allocation failed", 2048);
 		return false;
 	}
 	return true;
 }
 
 // Copia bytes precargados o indica que AsyncWebServer debe reintentar; data, maxLength y offset describen la respuesta.
-size_t WebFsReadSession::copyChunk(uint8_t* data, size_t maxLength, size_t offset)
+size_t WebFsReadSession::copyChunk(uint8_t* data, size_t maxLength, size_t offset, uint32_t id)
 {
-	if (!active || offset >= totalBytes) {
-		if (!taskHandle) releaseBuffers();
-		return 0;
-	}
-	lastConsumerMs = millis();
+	if (id != sessionId || !active) return 0;
+	if (offset >= totalBytes) { cancel(id); return 0; }
 	if (currentBuffer == bufferCount) {
-		if (xQueueReceive(readyQueue, &currentBuffer, 0) != pdPASS)
-			return producerFailed ? 0 : RESPONSE_TRY_AGAIN;
+		if (xQueueReceive(readyQueue, &currentBuffer, 0) != pdPASS) {
+			if (!producerFailed) return RESPONSE_TRY_AGAIN;
+			cancel(id);
+			return 0;
+		}
 		currentOffset = 0;
 		currentLength = min<size_t>(WebFsFormat::pageSize - firstColumn, totalBytes - offset);
 		if (offset >= WebFsFormat::pageSize - firstColumn) currentLength = min<size_t>(WebFsFormat::pageSize, totalBytes - offset);
@@ -63,11 +67,18 @@ size_t WebFsReadSession::copyChunk(uint8_t* data, size_t maxLength, size_t offse
 		xQueueSend(freeQueue, &currentBuffer, 0);
 		currentBuffer = bufferCount;
 	}
-	if (offset + count == totalBytes) {
-		active = false;
-		releaseBuffers();
-	}
+	if (offset + count == totalBytes) cancel(id);
 	return count;
+}
+
+// Devuelve la generacion actual de la sesion; sin parametros.
+uint32_t WebFsReadSession::getId() const { return sessionId; }
+
+// Detiene la generacion id sin reciclar memoria que NAND todavia puede estar usando.
+void WebFsReadSession::cancel(uint32_t id)
+{
+	if (id != sessionId) return;
+	active = false;
 }
 
 // Indica si una respuesta sigue reteniendo la sesion; sin parametros.
@@ -97,10 +108,8 @@ void WebFsReadSession::readTaskLoop()
 {
 	while (producedBytes < totalBytes && active) {
 		uint8_t bufferIndex = 0;
-		if (xQueueReceive(freeQueue, &bufferIndex, pdMS_TO_TICKS(250)) != pdPASS) {
-			if (millis() - lastConsumerMs > 5000U) active = false;
-			continue;
-		}
+		if (xQueueReceive(freeQueue, &bufferIndex, pdMS_TO_TICKS(50)) != pdPASS) continue;
+		if (!active) break;
 		NandIoResult stale;
 		while (xQueueReceive(completionQueue, &stale, 0) == pdPASS) {}
 		const uint32_t page = firstPage + (producedBytes + firstColumn) / WebFsFormat::pageSize;
@@ -109,16 +118,18 @@ void WebFsReadSession::readTaskLoop()
 			break;
 		}
 		NandIoResult result;
-		if (xQueueReceive(completionQueue, &result, pdMS_TO_TICKS(750)) != pdPASS || !result.success) {
+		// Una lectura aceptada conserva el buffer hasta recibir su resultado, incluso si HTTP se desconecta.
+		while (xQueueReceive(completionQueue, &result, pdMS_TO_TICKS(100)) != pdPASS) vTaskDelay(1);
+		if (!result.success) {
 			producerFailed = true;
 			break;
 		}
 		const size_t pageBytes = producedBytes ? WebFsFormat::pageSize : WebFsFormat::pageSize - firstColumn;
 		producedBytes += min(pageBytes, totalBytes - producedBytes);
-		while (active && xQueueSend(readyQueue, &bufferIndex, pdMS_TO_TICKS(250)) != pdPASS) {
-			if (millis() - lastConsumerMs > 5000U) active = false;
-		}
+		while (active && xQueueSend(readyQueue, &bufferIndex, pdMS_TO_TICKS(50)) != pdPASS) {}
 	}
-	if (producedBytes < totalBytes) active = false;
+	// El ultimo bloque precargado no implica que HTTP ya lo haya consumido.
+	while (active) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+	releaseBuffers();
 	taskHandle = nullptr;
 }

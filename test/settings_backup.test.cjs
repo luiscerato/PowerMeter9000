@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
+const {routeEvents}=require('./events_api_fixture.cjs');
 const runtime = path.join(process.env.USERPROFILE, '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules');
 const {chromium} = require(require.resolve('playwright', {paths: [root, runtime]}));
 
@@ -12,6 +13,14 @@ async function run() {
     try {
         const page = await context.newPage();
         const calls = [];
+        const eventState={grid:{lowR:185,highR:250,lowS:180,highS:255,lowT:190,highT:260,noVoltage:20,hysteresis:5,
+            lossConfirmMs:250,recoveryConfirmMs:250,neutralHigh:25,neutralHysteresis:2,neutralConfirmMs:100,neutralRecoveryMs:250},
+            meter:{dipEnabled:1,swellEnabled:1,overcurrent:1,dipMs:50,swellMs:50,ocMs:50,ocCurrent:85,ocHyst:1},
+            wave:{preMs:192,saveEnabled:true,pointMask:5},onPost:fields=>{
+                if(fields.has('volt.lowR'))calls.push('grid');
+                if(fields.has('rec.dip'))calls.push('events:capture');
+                if(fields.has('wave.on'))calls.push('wave');
+            }};
         const networkKeys = new Set(['sta-ssid', 'sta-pass', 'ap-pass', 'ota-pass', 'time-server', 'debug-pass', 'mqtt-pass', 'mqtt-server', 'mqtt-user', 'ota-name', 'debug-name', 'ap-ssid', 'sta-ip', 'sta-mask', 'sta-gw', 'sta-dns1', 'sta-dns2', 'ap-ip', 'ap-mask', 'ap-gw']);
         const boolKeys = new Set(['staticIp', 'ap-hide', 'ap-custom-ip', 'ota-enabled', 'time-sync', 'debug-enabled', 'mqtt-enabled', 'dipEnabled', 'swellEnabled', 'overcurrent']);
         const signedKeys = new Set(['wifi-mode', 'time-dsttime', 'time-minwest', 'dipMs', 'swellMs', 'ocMs']);
@@ -19,6 +28,7 @@ async function run() {
         const floatKeys = new Set(['ocCurrent', 'ocHyst']);
         await page.route('http://meter.test/**', async route => {
             const request = route.request(), url = new URL(request.url());
+            if(url.pathname.startsWith('/events/'))return routeEvents(route,eventState);
             if (url.pathname === '/network/config' && request.method() === 'GET') {
                 const values = {};
                 for (const key of networkKeys) values[key] = key === 'sta-pass' ? 'clear"text' : key + '-value';
@@ -85,6 +95,14 @@ async function run() {
             if (url.pathname === '/meter') return route.fulfill({json: {
                 wattH: {r: 10, s: 20, t: 30, tot: 60}, varH: {r: 1, s: 2, t: 3, tot: 6}, vaH: {r: 11, s: 22, t: 33, tot: 66}
             }});
+            if (url.pathname === '/wave/config') {
+                if (request.method() === 'POST') {
+                    const form = new URLSearchParams(request.postData());
+                    assert.equal(form.get('preMs'), '192'); assert.equal(form.get('pointMask'), '5');
+                    assert.equal(form.get('saveEnabled'), '1'); calls.push('wave');
+                }
+                return route.fulfill({json:{preMs:192,saveEnabled:true,pointMask:5}});
+            }
             if (url.pathname === '/options/reload') return route.fulfill({body: 'ok'});
             if (url.pathname === '/restart') return route.fulfill({json: {ok: true}});
             return route.fulfill({status: 404, body: 'Not found'});
@@ -120,7 +138,8 @@ async function run() {
         assert.equal(Object.hasOwn(backup.sections.capture, 'eventPrevSamples'), false);
         assert.equal(Object.hasOwn(backup.sections.capture, 'eventPostSamples'), false);
         assert.equal(Object.hasOwn(backup.sections.capture, 'eventMaxSamples'), false);
-        assert.equal(Object.keys(backup.sections).length, 6);
+        assert.equal(Object.keys(backup.sections).length, 7);
+        assert.deepEqual(backup.sections.wave, {preMs:192,saveEnabled:true,pointMask:5});
         assert.equal(Object.hasOwn(backup.sections, 'web'), false);
         assert.equal(await page.evaluate(() => {
             try { validateBackupSection('calibration', {neutralRms: -1}); return false; }
@@ -130,10 +149,10 @@ async function run() {
 
         page.on('dialog', dialog => dialog.accept());
         await page.setInputFiles('#settingsBackupFile', {name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(backup))});
-        await page.waitForFunction(() => document.querySelectorAll('.backupImportSection').length === 6);
+        await page.waitForFunction(() => document.querySelectorAll('.backupImportSection').length === 7);
         await page.click('#btnImportSettingsBackup');
         await page.waitForFunction(() => document.querySelector('#settingsBackupWarning').textContent.startsWith('Importación terminada.'));
-        assert.deepEqual(calls, ['grid', 'history', 'opts:meter', 'opts:meter', 'opts:ADE9000', 'network']);
+        assert.deepEqual(calls, ['grid', 'history', 'events:capture', 'wave', 'opts:meter', 'opts:ADE9000', 'network']);
         assert.equal(await page.isHidden('#btnRestartAfterImport'), false);
         console.log('PASS: respaldo JSON completo, escape de credenciales, validacion y restauracion secuencial con red al final.');
     } finally {

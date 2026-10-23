@@ -1,6 +1,8 @@
 #include "storage_manager.h"
 #include "../diagnostic_logger.h"
 #include <string.h>
+#include <Preferences.h>
+#include <esp_system.h>
 
 // Asocia el manager con el driver y crea el servicio de I/O que lo controlara.
 StorageManager::StorageManager(WinbondSpiNand& nandDriver) : nand(nandDriver), nandService(nandDriver),
@@ -17,6 +19,8 @@ bool StorageManager::begin(void (*onDiagnosticsReady)(DiagnosticStore&))
 		mountState = StorageState::formatError;
 		return false;
 	}
+	cacheMutex = xSemaphoreCreateMutexStatic(&cacheMutexStorage);
+	updateEventCacheEpochs(false, false);
 	metadataResultQueue = xQueueCreateStatic(1, sizeof(NandIoResult), metadataResultQueueData, &metadataResultQueueStorage);
 	if (!metadataResultQueue) {
 		mountState = StorageState::formatError;
@@ -55,6 +59,44 @@ StorageState StorageManager::state() const
 bool StorageManager::isReady() const
 {
 	return mountState == StorageState::ready;
+}
+
+// Copia los nonces sin esperar escrituras NVS; fast/wave se publican juntos bajo mutex.
+bool StorageManager::getEventCacheEpochs(uint64_t& fast, uint64_t& wave) const
+{
+	if (!cacheMutex || xSemaphoreTake(cacheMutex, 0) != pdTRUE) return false;
+	fast = fastCacheEpoch;
+	wave = waveCacheEpoch;
+	xSemaphoreGive(cacheMutex);
+	return fast && wave;
+}
+
+// Persiste generaciones antes del borrado; resetFast/resetWave renuevan solo las particiones indicadas.
+bool StorageManager::updateEventCacheEpochs(bool resetFast, bool resetWave)
+{
+	if (!cacheMutex || xSemaphoreTake(cacheMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
+	Preferences prefs;
+	bool success = prefs.begin("event-cache", false);
+	uint64_t fast = 0, wave = 0;
+	if (success) {
+		fast = prefs.getULong64("fastEpoch", 0);
+		wave = prefs.getULong64("waveEpoch", 0);
+		if (!fast || resetFast) {
+			fast = (uint64_t(esp_random()) << 32) | esp_random();
+			if (!fast) fast = 1;
+			success = prefs.putULong64("fastEpoch", fast) == sizeof(fast);
+		}
+		if (success && (!wave || resetWave)) {
+			wave = (uint64_t(esp_random()) << 32) | esp_random();
+			if (!wave) wave = 1;
+			success = prefs.putULong64("waveEpoch", wave) == sizeof(wave);
+		}
+		prefs.end();
+	}
+	fastCacheEpoch = success ? fast : 0;
+	waveCacheEpoch = success ? wave : 0;
+	xSemaphoreGive(cacheMutex);
+	return success;
 }
 
 // Inicia el formateo destructivo cuando la NAND esta disponible y no hay otra tarea de formato.
@@ -240,7 +282,7 @@ void StorageManager::formatTaskLoop()
 		return;
 	}
 	StorageLayout layout;
-	bool success = buildDefaultLayout(layout) && scanFormatBlocks() && eraseFormatBlocks();
+	bool success = updateEventCacheEpochs(true, true) && buildDefaultLayout(layout) && scanFormatBlocks() && eraseFormatBlocks();
 	if (success) success = writeFormatMetadata(layout);
 	if (success) {
 		activeMetadata = MetadataHeader{};
@@ -270,8 +312,10 @@ void StorageManager::partitionFormatTaskLoop()
 		return;
 	}
 
-	const bool erased = formatTarget == StoragePartitionId::diagnostics
-		? diagnosticStore.erasePartition() : target.eraseAllBlocks();
+	const bool cacheReady = (formatTarget != StoragePartitionId::gridEvents && formatTarget != StoragePartitionId::waveEvents) ||
+		updateEventCacheEpochs(formatTarget == StoragePartitionId::gridEvents, formatTarget == StoragePartitionId::waveEvents);
+	const bool erased = cacheReady && (formatTarget == StoragePartitionId::diagnostics
+		? diagnosticStore.erasePartition() : target.eraseAllBlocks());
 	if (erased) {
 		switch (formatTarget) {
 		case StoragePartitionId::history:

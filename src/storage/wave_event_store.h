@@ -8,8 +8,18 @@ struct waveStoreMetrics {
     uint32_t publishedSlices = 0, reservedBytes = 0, nextId = 1, pendingLinks = 0, wordHeapBytes = 0;
     uint16_t requestedPreMs = 192, actualPreMs = 0, erasedBlocks = 0;
     uint16_t stackFreeBytes = 0;
+    uint16_t occupiedSlots = 0, totalSlots = 0, storedCaptures = 0;
     bool enabled = false, capturing = false;
 };
+
+enum class waveIndexStatus : uint8_t { empty, pending, ready, busy, unavailable, failed };
+struct waveIndexEntry {
+    uint64_t triggerUs = 0, endUs = 0;
+    uint32_t id = 0;
+    uint16_t block = 0;
+    uint8_t page = 0, version = 0;
+};
+struct waveIndexSnapshot { waveIndexEntry entries[8]; uint8_t count = 0; };
 
 // Captura provisional Wave con buffers permanentes y un unico escritor fuera de MeterTask.
 class waveEventStore {
@@ -23,21 +33,21 @@ public:
     // Solicita captura en firstUs monotono; varios cruces simultaneos comparten la captura activa.
     void trigger(uint64_t firstUs);
     // Vincula un FAST durable; startUs/endUs son su ventana y rootUs/unixUs su referencia temporal.
-    void confirm(uint32_t eventId, uint64_t startUs, uint64_t endUs, uint64_t rootUs, uint64_t unixUs);
+    void confirm(uint32_t eventId, uint64_t startUs, uint64_t endUs, uint64_t rootUs, uint64_t unixUs, uint8_t eventMask = 1);
     // Copia contadores y reserva efectiva a dest; no consulta NAND.
     void getMetrics(waveStoreMetrics& dest);
     // Indica captura activa o disparo reciente para diferir escrituras NVS; sin parametros.
     bool isAcquiring();
-    // Persiste preMs (48..288, multiplos de 48); entra en vigor en el siguiente arranque.
-    bool savePreMs(uint16_t preMs);
+    // Aplica enabled y pointMask desde el servicio unificado, sin acceder a NVS.
+    void applyConfig(bool enabled, uint8_t pointMask);
     // Pausa y espera operaciones propias antes del borrado; false si hay una descarga activa.
     bool prepareFormat();
     // Reabre despues del borrado; success indica si todos los bloques se borraron correctamente.
     void finishFormat(bool success);
-    // Busca eventId/unixUs desde cursor; copia commit y devuelve block, sin fijarlo para descarga.
-    bool find(uint32_t eventId, uint64_t unixUs, uint16_t& cursor, uint16_t& block, waveEventFormat::commitHeader& commit);
-    // Protege block/id contra reutilizacion durante una descarga; false si ya cambio o esta ocupado.
-    bool pin(uint16_t block, uint32_t id);
+    // Solicita eventId/unixUs sin esperar NAND; dest solo se completa cuando devuelve ready.
+    waveIndexStatus lookup(uint32_t eventId, uint64_t unixUs, waveIndexSnapshot& dest);
+    // Protege bloque/pagina/id/version contra borrado durante una descarga.
+    bool pin(uint16_t block, uint8_t firstPage, uint32_t id, uint8_t formatVersion);
     // Libera la proteccion de descarga; sin parametros.
     void unpin();
 private:
@@ -45,8 +55,10 @@ private:
     union workerBuffer { slice sample; alignas(4) uint8_t page[2048]; };
     struct slot {
         uint32_t* words = nullptr;
-        alignas(4) waveEventFormat::packetHeader header = {};
+        alignas(4) waveEventFormat::pageHeader header = {};
         uint32_t crcState = ~0U;
+        uint16_t dataBytes = 0;
+        uint32_t previousSequence = 0;
         uint8_t slices = 0;
         uint64_t order = 0;
         bool queued = false;
@@ -54,7 +66,8 @@ private:
     static_assert(sizeof(slice) % 4 == 0, "Wave slices require word-aligned copies");
     struct pendingCapture {
         bool used = false, complete = false, failed = false;
-        uint16_t block = 0;
+        uint16_t block = 0, slotIndex = 0;
+        uint8_t firstPage = 0;
         uint64_t firstUs = 0, deadlineUs = 0;
         waveEventFormat::commitHeader commit = {};
     };
@@ -67,24 +80,36 @@ private:
     portMUX_TYPE mutex = portMUX_INITIALIZER_UNLOCKED;
     slice* acquisition = nullptr;
     uint32_t published = 0, consumed = 0;
-    slot slots[8];
+    slot slots[288 / (waveEventFormat::pageUs / 1000) + 3];
     uint8_t slotCount = 0, preSlots = 0, currentSlot = 0, packetIndex = 0;
     uint64_t slotOrder = 0;
-    uint32_t ids[320] = {};
+    uint32_t ids[640] = {};
+    uint8_t slotState[640] = {}, slotVersion[640] = {};
+    uint8_t committedSlots[80] = {};
     uint8_t blockState[320] = {}; // 0: requiere borrar; 1: borrado; 2: reservado; 3: fallo de borrado.
     uint16_t blockCount = 0, writeCursor = 0, pinnedBlock = UINT16_MAX;
     pendingCapture pending[8];
     int8_t active = -1;
     waveStoreMetrics metrics;
     waveStoreMetrics snapshot;
+    struct indexQuery {
+        waveIndexSnapshot result;
+        uint64_t unixUs = 0;
+        uint32_t eventId = 0, completedMs = 0;
+        uint16_t cursor = 0;
+        bool delivered = false;
+        waveIndexStatus status = waveIndexStatus::empty;
+    };
+    indexQuery indexQueries[2];
     std::atomic<uint32_t> triggerDrops{0};
     std::atomic<uint32_t> nvsHoldUntilMs{0};
     std::atomic<bool> acquisitionActive{false};
+    std::atomic<bool> saveEnabled{true};
+    std::atomic<uint8_t> wavePointMask{7};
     std::atomic<bool> paused{true}, workerPaused{true};
     QueueHandle_t commands = nullptr, ioQueue = nullptr, readQueue = nullptr;
     StaticQueue_t commandControl, ioControl, readControl;
     uint8_t commandData[16 * sizeof(command)], ioData[sizeof(NandIoResult)], readData[sizeof(NandIoResult)];
-    SemaphoreHandle_t readMutex = nullptr;
     // Ejecuta el guardador recibido como parameter desde FreeRTOS.
     static void taskEntry(void* parameter);
     // Atiende comandos, muestras, escrituras y reserva de bloques; sin parametros.
@@ -103,8 +128,12 @@ private:
     int8_t freeSlot();
     // Completa cierres vencidos; nowUs es el reloj y pageBuffer la pagina DRAM reutilizable.
     void sealPending(uint64_t nowUs, uint8_t* pageBuffer);
+    // Vincula item a las Wave pendientes cuyo tramo capturado coincide con la ventana FAST.
+    void linkEvent(const command& item);
     // Borra como maximo un bloque y mantiene cuatro destinos preparados; sin parametros.
     void reserveBlocks();
+    // Procesa una sola cabecera pendiente fuera del callback HTTP; sin parametros.
+    void serviceIndex();
 };
 
 // Publica datos del ADE al guardador montado; payload/firstUs/flags describen 16 ms.
@@ -114,4 +143,4 @@ void waveCaptureTrigger(uint64_t firstUs);
 // Indica si la adquisicion Wave necesita evitar escrituras en la flash interna; sin parametros.
 bool waveCaptureBusy();
 // Vincula un FAST ya persistido con sus Wave; parametros identifican evento, ventana y relojes.
-void waveCaptureConfirm(uint32_t eventId, uint64_t startUs, uint64_t endUs, uint64_t rootUs, uint64_t unixUs);
+void waveCaptureConfirm(uint32_t eventId, uint64_t startUs, uint64_t endUs, uint64_t rootUs, uint64_t unixUs, uint8_t eventMask = 1);

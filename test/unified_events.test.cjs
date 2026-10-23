@@ -40,7 +40,7 @@ async function browserCheck() {
             page.on('pageerror',error => errors.push(error.message));
             await page.setContent('<html lang="es"><body><div class="container-fluid" id="host"></div></body></html>');
             for (const name of ['lib/bootstrap.min.css','style.css']) await page.addStyleTag({path:path.join(root,'data',name)});
-            for (const name of ['lib/jquery-3.6.4.min.js','lib/canvasjs.min.js','grid_events_ui.js','wave_events_ui.js']) await page.addScriptTag({path:path.join(root,'data',name)});
+            for (const name of ['lib/jquery-3.6.4.min.js','lib/canvasjs.min.js','grid_events_ui.js','wave_events_ui.js','capture_cache.js']) await page.addScriptTag({path:path.join(root,'data',name)});
             await page.evaluate(({html,bytes}) => {
                 const doc = new DOMParser().parseFromString(html,'text/html'), section = doc.getElementById('gridEvents');
                 section.classList.add('active'); document.getElementById('host').append(section);
@@ -85,6 +85,8 @@ async function browserCheck() {
             const cache = await page.evaluate(async bytes => {
                 let requests = 0;
                 window.board = {IP:''};
+                refreshCaptureCacheScope = async () => ({ready:true,deviceId:'aabbccddeeff',fastEpoch:'123456789abcdef0',waveEpoch:'fedcba9876543210'});
+                window.fetchEventHistory = async url => ({buffer:await (await fetch(url)).arrayBuffer(),identity:'aabbccddeeff:123456789abcdef0'});
                 window.fetch = async () => {++requests;return {ok:true,arrayBuffer:async () => new Uint8Array(bytes).buffer};};
                 const event = {i:77,t:decodeGridEvent(new Uint8Array(bytes).buffer).timestamp,y:'R',p:'N',s:'X'};
                 gridEventsViewer.events = [event];
@@ -102,7 +104,7 @@ async function browserCheck() {
                 }
                 let release;
                 const wait = new Promise(resolve => {release=resolve;});
-                gridEventsViewer.cache.clear();
+                gridEventsViewer.cache.clear(); captureCacheState.memory.clear(); captureCacheState.memoryBytes = 0;
                 window.fetch = async url => {
                     if (url.endsWith('=77')) await wait;
                     return {ok:true,arrayBuffer:async () => url.endsWith('=77') ? first.buffer : second.buffer};
@@ -111,7 +113,7 @@ async function browserCheck() {
                 const slow = loadGridEvent({i:77,t:timestamp});
                 await loadGridEvent({i:78,t:timestamp}); release(); await slow;
                 const selected = gridEventsViewer.selectedId;
-                gridEventsViewer.cache.clear(); let partialRequests = 0;
+                gridEventsViewer.cache.clear(); captureCacheState.memory.clear(); captureCacheState.memoryBytes = 0; let partialRequests = 0;
                 first.fill(255,2048);
                 window.fetch = async () => {++partialRequests;return {ok:true,arrayBuffer:async () => first.buffer};};
                 await loadGridEvent({i:77,t:timestamp}); await loadGridEvent({i:77,t:timestamp});

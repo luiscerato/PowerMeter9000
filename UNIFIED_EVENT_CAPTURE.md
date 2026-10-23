@@ -274,17 +274,24 @@ carga responsable. Archivos de comprobacion: `tmp/review-event-12.bin` a
 
 ## Oscilografia NAND
 
-Contrato Wave v1, sin compatibilidad con otros formatos:
+Las capturas nuevas usan Wave v2 en paginas compactas de 2 KiB; el lector
+mantiene compatibilidad con las capturas v1 existentes:
 
-- Un bloque fisico de 128 KiB por captura. Canales IA/VA/IB/VB/IC/VC/IN,
+- Un bloque de borrado NAND admite dos capturas v2; v1 ocupaba uno por captura.
+  Canales IA/VA/IB/VB/IC/VC/IN,
   signed12 a 8000 Hz; escalas fijas 0.1 A y 0.25 V. No depende de los controles
   del osciloscopio en vivo. BL no tiene oscilografia.
-- 31 paquetes de 4096 bytes: cabecera de 64 bytes y 4032 bytes utiles, tres
-  tramos de 16 ms. Total nominal 1488 ms, incluyendo el historial previo.
-- Cada paquete tiene magic, version, Wave ID, indice, secuencia, tiempo inicial
+- v1: 31 paquetes de 4096 bytes, cada uno con tres tramos de 16 ms; captura
+  historica de 128 KiB. v2: 31 paginas de 2048 bytes, cada una con 32 bytes
+  de cabecera y 2016 bytes utiles, equivalentes a 24 ms; duracion 744 ms.
+- En v2, las 31 paginas de datos mas una pagina de cierre ocupan 64 KiB. Dos
+  capturas caben en un bloque de borrado NAND de 128 KiB.
+- En v1 cada paquete tiene magic, version, Wave ID, indice, secuencia, tiempo inicial
   uint64 us y offsets int32 us de sus otros dos tramos; disparo uint64 us,
   escalas, frecuencia/cantidad, mascara de canales/tramos y CRC32 separados
-  para cabecera y muestras. Flags: saturacion, hueco, reloj estimado, previo corto.
+  para cabecera y muestras. v2 guarda magic, version, Wave ID, indice, primer
+  tiempo, secuencia, flags y CRC32 de cabecera/muestras por pagina. Flags:
+  saturacion, hueco, reloj estimado y previo corto.
 - La referencia temporal se ancla al contador de paginas ADE y sigue mitades
   de 128 muestras a 8 kHz. No usa cada IRQ0 compartida como un nuevo reloj:
   filtra el jitter de atencion (correccion maxima 8 us por mitad), reconoce
@@ -292,9 +299,10 @@ Contrato Wave v1, sin compatibilidad con otros formatos:
   precision fisica de 100 us sin validar la latencia ADE con instrumental.
   FAST toma su referencia monotona
   antes de la lectura SPI y espera BL sin cambiar ese instante.
-- Las paginas 62 y 63 contienen dos copias identicas de un cierre de 112 bytes,
-  resto 0xff. CRC32 y ambas copias deben coincidir. Guarda hasta cuatro enlaces
-  con FAST ID, raiz monotona us y Unix us. Nunca se reprograma una pagina usada.
+- En v1, las paginas 62 y 63 contienen dos copias identicas del cierre. En v2,
+  la pagina final de cada mitad contiene un cierre de 112 bytes y el resto 0xff.
+  Ambas versiones guardan hasta cuatro enlaces FAST; nunca se reprograma una
+  pagina usada.
 - Se captura desde el primer cruce candidato (tambien retornos). Cruces dentro
   de una Wave activa no prolongan la captura. Al confirmar y persistir FAST se
   asocian las Wave cuyo disparo pertenece a su ventana. El cierre espera seis
@@ -310,10 +318,11 @@ Contrato Wave v1, sin compatibilidad con otros formatos:
 RAM y propiedad:
 
 - Previo pedido 192 ms por defecto, 48..288 ms en pasos de 48. Se reserva una
-  sola vez antes de MeterTask; al fallar se reduce un paquete por vez hasta
-  48 ms. Si no cabe ese minimo, solo Wave queda deshabilitada.
-- Pool de N paquetes completos + parcial + margen: 24 KiB con 192 ms, maximo
-  32 KiB con 288 ms. Anillo de adquisicion de tres tramos, aproximadamente
+  sola vez antes de MeterTask; si falta heap, el previo efectivo se reduce en
+  paginas de 24 ms hasta el minimo disponible. Si no caben 48 ms, Wave se deshabilita.
+- Pool de paginas completas + parcial + margen: unos 24 KiB con 192 ms y 32 KiB
+  con 288 ms. La compactacion reduce la reserva frente a buffers de 4 KiB.
+  Anillo de adquisicion de tres tramos, aproximadamente
   4 KiB. El previo efectivo puede variar hasta un paquete adicional por la
   posicion del disparo; si falta historial al arrancar queda marcado.
 - MeterTask empaqueta un tramo de 1344 bytes y publica una copia acotada. No
@@ -323,8 +332,11 @@ RAM y propiedad:
   DRAM; el CRC de datos se acumula al recibir cada tramo. No se lee IRAM por
   bytes ni se pasan esos punteros directamente al driver SPI. Esta restriccion
   esta documentada por [Espressif](https://docs.espressif.com/projects/esp-idf/en/v4.4/esp32/api-reference/system/mem_alloc.html).
-- El guardador arma paquetes listos para NAND. Copia cada pagina por palabras
-  a una pagina DRAM de 2048 bytes en el stack de su tarea, compartida mediante
+- El guardador arma paginas listas para NAND. Une tramos recibidos de 16 ms en
+  paginas de 24 ms; cada frontera corta un tramo a 8 ms (672 bytes), alineado
+  con el empaquetado signed12, y conserva el resto en el slot de la pagina
+  siguiente. Copia cada pagina por palabras a una pagina DRAM de 2048 bytes en
+  el stack de su tarea, compartida mediante
   union con el tramo de recepcion y usada tambien para el cierre. Conserva
   ambos buffers hasta la finalizacion NAND. No solo hasta entrar en la cola.
   Los buffers de muestras se reciclan al terminar; solo queda metadata de
@@ -352,9 +364,9 @@ API y web:
   propio y no forma parte del respaldo general de opciones anterior.
 - `GET /wave-events?eventId=N`: devuelve hasta ocho Wave confirmadas para el
   ID y la hora de esa raiz FAST; evita confundir IDs reciclados tras formateo.
-- `GET /wave-events/data?block=B&waveId=N`: 131072 bytes. El bloque se fija
-  contra reutilizacion hasta terminar sus lecturas fisicas; HTTP consume
-  despues las ultimas paginas ya copiadas. Un lector activo impide formatear.
+- `GET /wave-events/data?block=B&page=P&version=V&waveId=N`: 65536 bytes v2
+  o 131072 bytes v1. Las consultas antiguas de dos parametros siguen sirviendo
+  capturas v1. El bloque se fija contra reutilizacion durante la descarga.
 - Panel plegable debajo de FAST: seleccion de Wave, recarga, leyenda por
   canal y RMS opcional superpuesto. Eje temporal comun relativo a la raiz
   FAST; el zoom por registro se replica. Paquetes invalidos dejan huecos,
@@ -414,3 +426,131 @@ invalidos y cero huecos, flags=4. La web real pasa en 1280 y 390 px sin errores
 JavaScript ni desborde horizontal. Despues de esas descargas el osciloscopio
 transmitio 56 tramas / 451584 bytes en seis segundos.
 Queda para pruebas fisicas: cortes, neutro y alineacion temporal con instrumental.
+
+### Retorno sin Wave visible: eventos 6 y 7 (21/10)
+
+El corte duro 27,95 s. FAST #6 tenia Wave #17; FAST #7 no tenia enlace.
+Wave #18 seguia en el bloque 9: 31 paquetes con CRC valido, sin paginas de
+cierre. El disparo fue aproximadamente 19 ms anterior al inicio normal de
+FAST #7: durante la subida aparecio primero un candidato intermedio.
+El filtro exigia que el disparo Wave estuviera dentro de la ventana FAST;
+al cambiar el candidato, excluia la Wave aunque contuviera el retorno.
+
+Ahora `linkEvent` compara el tramo disparo..ultima muestra escrita con la
+ventana FAST. Conserva el limite de cuatro enlaces, evita duplicados y no
+asocia la Wave del corte con el retorno ocurrido 28 s despues. La prueba
+`test/wave_link.test.cjs` compila el metodo real y reproduce esta secuencia,
+ademas de limites temporales y capturas sin usar. No cambia formatos ni borra
+eventos. Copias de diagnostico: `tmp/grid-event-6-recovery.bin`,
+`tmp/grid-event-7-recovery.bin` y `tmp/wave-recovery-17.bin`/`18.bin`.
+La correccion aplica a nuevas capturas; no reescribe el cierre de la Wave
+huerfana anterior.
+
+### Formato Wave compacto (21/10)
+
+Cada pagina NAND de 2 KiB guarda 32 bytes de cabecera y 2016 bytes de muestras
+signed12: 192 muestras por canal, equivalentes a 24 ms. Las muestras recibidas
+en tramos de 16 ms se concatenan; la division a 8 ms es exacta porque equivale
+a 64 muestras por canal y 672 bytes. No se reserva un segundo buffer de armado:
+el pool de slots existente mantiene el fragmento pendiente.
+
+Una captura v2 contiene 31 paginas de datos (744 ms) y una pagina de cierre:
+64 KiB en total, dos capturas por bloque NAND. Se conserva el orden de canales,
+signed12, resoluciones 0.1 A/0.25 V y enlaces FAST. No cambia el formato FAST.
+El lector conserva soporte para v1 de 128 KiB; las capturas existentes no se
+reescriben. RAM de slots baja frente a paquetes de 4 KiB: aproximadamente
+24 KiB para previo de 192 ms y 32 KiB para 288 ms, incluido el anillo de entrada.
+
+### Aviso de previo FAST (21/10)
+
+Las capturas 9 y 10 tenian 112 muestras previas en vez de 113, sin paginas
+invalidas: el recorte por milisegundos y la fase real del muestreo dejaban
+una muestra fuera del intervalo. `eventPreHistoryComplete` ahora tolera una
+muestra y 20 ms, comprobando cantidad y cobertura antes de marcar el previo.
+La web aplica el mismo margen a los avisos de capturas existentes sin
+reescribir NAND. Si falta mas historial, muestra un aviso explicito sobre
+el historial FAST anterior al disparo, separado de errores de integridad.
+`test/pre_history.test.cjs` comprueba firmware, web y los binarios reales
+`tmp/grid-event-9-prior.bin` y `tmp/grid-event-10-prior.bin`.
+
+### Configuracion unificada y revision de DIP (22/10)
+
+La pestaña web Eventos de red ahora reune limites por fase, estados sostenidos,
+neutro-tierra, DIP/swell, sobrecorriente y previo Wave. Se elimino la pestaña
+separada de captura. Los bloques tienen guardados identificados (limites,
+eventos y previo Wave); conservan sus namespaces/endpoints y respaldos.
+Abrir o recargar la pestaña carga los ajustes secuencialmente, sin escribir.
+
+La deteccion DIP/swell se ejecuta por software en `meterPollCapturedEvents`,
+con los limites bajo/alto individuales de `gridConfig`. `fastEventDetector`
+confirma sobre FAST y `GridEventStore::observePoint/finishPoint` guarda el
+evento al recuperar. Si ya confirma un estado sostenido no se duplica como
+un DIP. Las habilitaciones afectan a eventos puntuales, no a estados/cortes.
+
+Lectura real del 22/10: DIP/swell habilitados, confirmacion 50 ms, limites
+190/250 V en R/S/T, histeresis 5 V y recuperacion 250 ms. Maximo puntual
+3700 ms; corte bajo 20 V con confirmacion 250 ms. Sobrecorriente habilitada
+desde 50 A, histeresis 1 A y confirmacion 10 ms. No se cambiaron esos valores.
+
+Se encontraron y decodificaron tres DIP reales completos, sin paginas invalidas:
+
+| Captura | Duracion | Minimo | Muestras FAST | Transiciones |
+| --- | --- | --- | --- | --- |
+| 43 | 70 ms | 182.18 V | 222 | 2 |
+| 44 | 80 ms | 180.78 V | 222 | 2 |
+| 45 | 70 ms | 180.10 V | 220 | 2 |
+
+Las tres guardan DIP habilitado, confirmacion 50 ms y limites 190 V. Esto
+comprueba deteccion/guardado reales; no demuestra que cualquier bajada del
+taller deba disparar: debe cruzar el umbral y durar la confirmacion configurada.
+No se inyectaron eventos sinteticos ni se modificaron los formatos NAND.
+
+Pruebas: `incident_policy`, `unified_events`, `grid_web`, `navigation_web` y
+`settings_backup`. `event_settings_live` verifica carga sin escrituras y
+visibilidad conjunta en PC/movil. Publicacion WebFS: 30 archivos/329728 bytes.
+
+### Ajustes de oscilografias y metricas
+
+`/wave/config` agrega `saveEnabled`, persistido como bool en NVS `wave`.
+Predeterminado true. Se aplica a nuevos disparos de todos los eventos de red,
+incluidos puntuales, estados, cortes y neutro; no cambia los registros FAST
+ni cancela capturas ya aceptadas. El previo conserva 48..288 ms y requiere
+reinicio. Un POST antiguo sin saveEnabled conserva la habilitacion actual.
+
+`storedCaptures` cuenta cierres validos presentes en NAND (no verifica todos
+los CRC de muestras); se recupera al montar y se actualiza al cerrar, borrar
+o formatear. Un mapa de 80 bytes evita releer NAND en cada consulta HTTP.
+`occupiedSlots / totalSlots` incluye destinos provisionales y huerfanos.
+`committed`, `orphans`, `gaps`, `droppedTriggers`, `failedWrites` son contadores
+del arranque actual. La interfaz los distingue y ofrece ayuda desplegable.
+No se modificaron formatos binarios ni se formatearon particiones.
+
+Publicacion verificada: firmware por COM4 (1336809 B de flash, 117008 B
+de RAM estatica) y WebFS de 331776 B. `/wave/config` informa previo efectivo
+192 ms, reserva 26256 B en heap de palabras, guardado habilitado y 52 cierres
+validos presentes en NAND tras reiniciar. La prueba de configuracion real
+paso en 1280/390 px sin escrituras; no se alteraron umbrales ni habilitaciones.
+
+### Habilitaciones separadas de puntuales
+
+El bloque compacto muestra DIP, swell y sobrecorriente en filas con Registro,
+Osc. y confirmacion. Registro conserva las opciones meter existentes; Osc.
+se persiste en `wave/pointMask` (bits 0 DIP, 1 swell, 2 corriente; defecto 7).
+El icono de guardar eventos aplica ambos grupos y advierte un guardado parcial
+si falla alguno. La habilitacion general Wave sigue siendo necesaria.
+
+La politica se evalua tambien al vincular FAST durable: un puntual cuya
+oscilografia esta deshabilitada no puede cerrar por si solo una Wave provisional.
+En capturas compartidas basta que haya un estado u otro tipo permitido;
+no se separan las mismas muestras en copias por disparador. La escritura
+provisional puede suceder antes de conocer la clasificacion final; sin enlace
+permitido queda huerfana y el anillo la recupera normalmente. Sin registro
+FAST no se crea una oscilografia independiente para ese puntual.
+No cambia ningun formato NAND. Los estados sostenidos siguen registrandose
+siempre. Tests: wave_config_policy (metodo real, ocho mascaras), grid_web,
+incident_policy y settings_backup.
+
+El servicio unificado posterior se describe en `EVENTS_API.md`. Sustituye las
+escrituras separadas de grid/meter/wave por una configuracion versionada en
+events/cfg, con aplicacion diferida y control de revision desde la web. Los
+formatos de capturas y sus particiones no se modifican.

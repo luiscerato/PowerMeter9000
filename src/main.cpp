@@ -8,6 +8,7 @@
 #include "pins.h"
 #include "battery.h"
 #include "meter.h"
+#include "event_settings.h"
 // #include "ui/keyboard.h"
 #include "webserver.h"
 #include "AsyncMqttClient.h"
@@ -142,6 +143,7 @@ void setup(void)
 		eventFlash.modelName(), flashInfo.manufacturerId, flashInfo.deviceId,
 		flashInfo.geometry.blockCount, eventFlash.capacityBytes() / (1024U * 1024U),
 		flashInfo.protection, flashInfo.configuration, flashInfo.status);
+	eventSettingsBegin();
 	if (flashDetected) {
 		const bool storageStarted = storageManager.begin([](DiagnosticStore& store) {
 			if (!diagnosticLogger.start(&store)) Serial.println("Diagnostic logger: no se pudo iniciar la tarea");
@@ -213,10 +215,10 @@ void loop(void)
 	const uint32_t uptimeMs = millis();
 	if (uint32_t(uptimeMs - lastDiagnosticHeartbeat) >= 5000) {
 		lastDiagnosticHeartbeat = uptimeMs;
-		DIAG_INFO(DiagnosticModule::main, "Heartbeat uptime=%lu heap=%u free8=%u largest8=%u min8=%u",
+		DIAG_INFO(DiagnosticModule::main, "Heartbeat uptime=%lu heap=%u free8=%u largest8=%u min8=%u wifi=%u rssi=%d",
 			static_cast<unsigned long>(uptimeMs), ESP.getFreeHeap(),
 			heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-			heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+			heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT), unsigned(WiFi.status()), WiFi.RSSI());
 	}
 	diagnosticLogger.pollSerial();
 	memoryDiagnosticsPoll();
@@ -255,30 +257,31 @@ void loop(void)
 		// debugI("Loop counter: %d", counter);
 		counter = 0;
 
-		static String data;
+		static char meterJson[1280];
+		static String auxiliaryJson;
 		static uint32_t batt = 0;
 		uint64_t meterTimestamp = MeterGetLastSampleTimestampMs();
 
-		Meter.getJsonBasic(data);
-		managerPublishTelemetry("meter", data, meterTimestamp);
-		Meter.getJsonEnergy(data);
-		managerPublishTelemetry("meter/energy", data, meterTimestamp);
-		Meter.getJsonFastMeasures(data);
-		managerPublishTelemetry("meter/fast", data, meterTimestamp);
-		data = Meter.phaseR.getJson();
-		managerPublishTelemetry("meter/r", data, meterTimestamp);
-		data = Meter.phaseS.getJson();
-		managerPublishTelemetry("meter/s", data, meterTimestamp);
-		data = Meter.phaseT.getJson();
-		managerPublishTelemetry("meter/t", data, meterTimestamp);
+		if (Meter.getJsonBasic(meterJson, sizeof(meterJson)))
+			managerPublishTelemetry("meter", meterJson, meterTimestamp);
+		if (Meter.getJsonEnergy(meterJson, sizeof(meterJson)))
+			managerPublishTelemetry("meter/energy", meterJson, meterTimestamp);
+		if (Meter.getJsonFastMeasures(meterJson, sizeof(meterJson)))
+			managerPublishTelemetry("meter/fast", meterJson, meterTimestamp);
+		if (Meter.phaseR.getJson(meterJson, sizeof(meterJson)))
+			managerPublishTelemetry("meter/r", meterJson, meterTimestamp);
+		if (Meter.phaseS.getJson(meterJson, sizeof(meterJson)))
+			managerPublishTelemetry("meter/s", meterJson, meterTimestamp);
+		if (Meter.phaseT.getJson(meterJson, sizeof(meterJson)))
+			managerPublishTelemetry("meter/t", meterJson, meterTimestamp);
 
-		getStatus(data);
-		managerPublishTelemetry("status", data, managerNowMs());
+		getStatus(auxiliaryJson);
+		managerPublishTelemetry("status", auxiliaryJson.c_str(), managerNowMs());
 
 		if (batt++ > 4) {
 			batt = 0;
-			Batt.getJson(data);
-			managerPublishTelemetry("battery", data, managerNowMs());
+			Batt.getJson(auxiliaryJson);
+			managerPublishTelemetry("battery", auxiliaryJson.c_str(), managerNowMs());
 
 		}
 	}

@@ -43,7 +43,7 @@ function resetPageScroll() {
 // Muestra una seccion principal de la app sin recargar la pagina.
 // pageId: id de la seccion a mostrar.
 function showAppPage(pageId) {
-    const titles = {home: "Resumen", allMeasures: "Mediciones", history: "Histórico", logs: "Logs", gridEvents: "Eventos", scopePage: "Osciloscopio", settings: "Configuración"};
+    const titles = {home: "Resumen", allMeasures: "Mediciones", history: "Histórico", logs: "Logs", gridEvents: "Eventos", eventHistory: "Historial", scopePage: "Osciloscopio", settings: "Configuración"};
     if (!Object.prototype.hasOwnProperty.call(titles, pageId)) pageId = "home";
     const samePage = showAppPage.current === pageId;
     const initialPage = showAppPage.current == null;
@@ -64,6 +64,7 @@ function showAppPage(pageId) {
     $("#scopePage").toggleClass("d-none", pageId !== "scopePage");
     $("#mainViews > .tab-pane").removeClass("active");
     if (pageId !== "scopePage") $("#" + pageId).addClass("active");
+    if (typeof setEventHistoryActive === "function") setEventHistoryActive(pageId === "eventHistory");
     $(".app-page-link").removeClass("active").removeAttr("aria-current");
     $('.app-page-link[data-page="' + pageId + '"]').addClass("active").attr("aria-current", "page");
     $("#pageTitle").text(titles[pageId]);
