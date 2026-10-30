@@ -7,7 +7,7 @@
 #include <stdlib.h>
 
 using namespace waveEventFormat;
-static waveEventStore* mountedWaveStore = nullptr;
+static std::atomic<waveEventStore*> mountedWaveStore{nullptr};
 
 // Copia length bytes alineados de source a dest usando solo palabras: IRAM no admite accesos de bytes ni float.
 static void copyWaveWords(void* dest, const void* source, size_t length) {
@@ -35,11 +35,13 @@ bool waveEventStore::begin() {
     if (!commands || !ioQueue || !readQueue) return false;
     acquisition = static_cast<slice*>(allocateWaveWords(3 * sizeof(slice)));
     if (!acquisition) return false;
+    memset(recentWaveLinks, 0, sizeof(recentWaveLinks));
+    recentWaveLinkCursor = 0;
     eventSettingsSnapshot settings; eventSettingsGet(settings);
     metrics.requestedPreMs = settings.config.preMs;
     applyConfig(settings.config.waveEnabled, settings.config.waveMask);
-    if (metrics.requestedPreMs < 48 || metrics.requestedPreMs > 288 || metrics.requestedPreMs % 48)
-        metrics.requestedPreMs = 192;
+    if (metrics.requestedPreMs < 48 || metrics.requestedPreMs > maxWavePreMs || metrics.requestedPreMs % 48)
+        metrics.requestedPreMs = maxWavePreMs;
     uint32_t newestId = 0;
     uint16_t newestSlot = 0;
     for (uint16_t block = 0; block < blockCount; ++block) {
@@ -53,9 +55,12 @@ bool waveEventStore::begin() {
             slotState[block * 2] = slotState[block * 2 + 1] = 2;
             slotVersion[block * 2] = legacyVersion;
             commitHeader footer, duplicate;
-            if (read(block, 62, &footer, sizeof(footer), readQueue) && validCommit(footer) && footer.waveId == legacy.waveId &&
-                read(block, 63, &duplicate, sizeof(duplicate), readQueue) && !memcmp(&footer, &duplicate, sizeof(footer)))
+            const bool committed = read(block, 62, &footer, sizeof(footer), readQueue) && validCommit(footer) && footer.waveId == legacy.waveId &&
+                read(block, 63, &duplicate, sizeof(duplicate), readQueue) && !memcmp(&footer, &duplicate, sizeof(footer));
+            if (committed) {
                 committedSlots[(block * 2) / 8] |= 1U << ((block * 2) % 8);
+                cacheRecentLinks(footer, block, 0);
+            }
             blockState[block] = 0;
             if (!newestId || int32_t(legacy.waveId - newestId) > 0) { newestId = legacy.waveId; newestSlot = block * 2; }
             continue;
@@ -71,9 +76,12 @@ bool waveEventStore::begin() {
             if (validPageHeader(page) && page.pageIndex == 0) {
                 ids[slotIndex] = page.waveId; slotState[slotIndex] = 2; slotVersion[slotIndex] = version;
                 commitHeader footer;
-                if (read(block, firstPage + 31, &footer, sizeof(footer), readQueue) && validCommit(footer) &&
-                    footer.waveId == page.waveId && footer.formatVersion == version)
+                const bool committed = read(block, firstPage + 31, &footer, sizeof(footer), readQueue) && validCommit(footer) &&
+                    footer.waveId == page.waveId && footer.formatVersion == version;
+                if (committed) {
                     committedSlots[slotIndex / 8] |= 1U << (slotIndex % 8);
+                    cacheRecentLinks(footer, block, firstPage);
+                }
                 if (!newestId || int32_t(page.waveId - newestId) > 0) { newestId = page.waveId; newestSlot = slotIndex; }
             } else {
                 bool programmed = false;
@@ -107,14 +115,14 @@ bool waveEventStore::begin() {
     metrics.wordHeapBytes = metrics.reservedBytes;
     metrics.enabled = true;
     paused = false;
-    mountedWaveStore = this;
-    if (xTaskCreate(taskEntry, "waveStore", 4096, this, 2, &task) != pdPASS) {
-        mountedWaveStore = nullptr; paused = true; metrics.enabled = false;
+    if (xTaskCreate(taskEntry, "waveStore", taskStackWords, this, 2, &task) != pdPASS) {
+        paused = true; metrics.enabled = false;
         for (auto& item : slots) { free(item.words); item = slot{}; }
         free(acquisition); acquisition = nullptr;
         slotCount = 0;
         return false;
     }
+    mountedWaveStore.store(this);
     DIAG_INFO(DiagnosticModule::storage, "Wave previo=%u/%ums wordHeap=%lu free8=%u largest8=%u",
         metrics.actualPreMs, metrics.requestedPreMs, (unsigned long)metrics.wordHeapBytes,
         heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -330,6 +338,7 @@ void waveEventStore::sealPending(uint64_t nowUs, uint8_t* pageBuffer) {
         if (committed) committedSlots[capture.slotIndex / 8] |= 1U << (capture.slotIndex % 8);
         slotState[capture.slotIndex] = 2;
         blockState[capture.block] = slotState[capture.block * 2] == 2 && slotState[capture.block * 2 + 1] == 2 ? 0 : 1;
+        if (committed) cacheRecentLinks(capture.commit, capture.block, capture.firstPage);
         portEXIT_CRITICAL(&mutex);
         capture.used = false;
     }
@@ -408,12 +417,14 @@ void waveEventStore::run() {
         if (queued >= 0) writeSlot(queued, buffer.page);
         sealPending(esp_timer_get_time(), buffer.page);
         reserveBlocks();
-        if (queued < 0 && active < 0) serviceIndex();
+        if (queued < 0 && active < 0)
+            for (uint8_t count = 0; count < 4; ++count) serviceIndex();
         metrics.pendingLinks = 0;
         for (const auto& capture : pending) if (capture.used) ++metrics.pendingLinks;
         metrics.capturing = active >= 0; metrics.droppedTriggers += triggerDrops.exchange(0);
         if (uint32_t(millis() - stackCheckMs) >= 1000) {
-            metrics.stackFreeBytes = uxTaskGetStackHighWaterMark(nullptr); stackCheckMs = millis();
+            metrics.stackFreeBytes = uint16_t(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t));
+            stackCheckMs = millis();
         }
         portENTER_CRITICAL(&mutex);
         metrics.publishedSlices = published; snapshot = metrics;
@@ -440,6 +451,8 @@ bool waveEventStore::prepareFormat() {
 void waveEventStore::finishFormat(bool success) {
     portENTER_CRITICAL(&mutex);
     for (auto& query : indexQueries) query = indexQuery{};
+    memset(recentWaveLinks, 0, sizeof(recentWaveLinks));
+    recentWaveLinkCursor = 0;
     portEXIT_CRITICAL(&mutex);
     if (!success) { metrics.enabled = false; return; }
     memset(ids, 0, sizeof(ids)); memset(slotState, 0, sizeof(slotState)); memset(slotVersion, 0, sizeof(slotVersion));
@@ -454,9 +467,50 @@ void waveEventStore::finishFormat(bool success) {
     if (task) { metrics.enabled = true; paused = false; }
 }
 
+// Busca un enlace reciente sin leer NAND; eventId/unixUs identifican el FAST y dest recibe la Wave.
+bool waveEventStore::lookupRecentWaveLink(uint32_t eventId, uint64_t unixUs, waveIndexSnapshot& dest) {
+    bool found = false;
+    dest = waveIndexSnapshot{};
+    portENTER_CRITICAL(&mutex);
+    for (auto& cached : recentWaveLinks) {
+        if (cached.eventId != eventId || cached.unixUs != unixUs) continue;
+        const waveIndexEntry& entry = cached.entry;
+        const uint16_t slotIndex = uint16_t(entry.block * 2U + (entry.page == 32 ? 1U : 0U));
+        const bool valid = entry.id && entry.block < blockCount && (entry.page == 0 || entry.page == 32) &&
+            slotIndex < blockCount * 2U && ids[slotIndex] == entry.id && slotState[slotIndex] == 2 &&
+            (committedSlots[slotIndex / 8] & (1U << (slotIndex % 8))) && blockState[entry.block] != 2 && blockState[entry.block] != 3;
+        if (valid) {
+            dest.entries[0] = entry;
+            dest.count = 1;
+            found = true;
+        } else cached.eventId = 0;
+        break;
+    }
+    portEXIT_CRITICAL(&mutex);
+    return found;
+}
+
+// Guarda los enlaces de un commit en el indice RAM; block/firstPage ubican la captura.
+void waveEventStore::cacheRecentLinks(const waveEventFormat::commitHeader& commit, uint16_t block, uint8_t firstPage) {
+    for (uint8_t index = 0; index < commit.linkCount; ++index) {
+        recentWaveLink& cached = recentWaveLinks[recentWaveLinkCursor];
+        const auto& link = commit.links[index];
+        cached.eventId = link.eventId;
+        cached.unixUs = link.unixUs;
+        cached.entry.id = commit.waveId;
+        cached.entry.block = block;
+        cached.entry.page = firstPage;
+        cached.entry.version = commit.formatVersion;
+        cached.entry.triggerUs = commit.triggerUs;
+        cached.entry.endUs = commit.endUs;
+        recentWaveLinkCursor = uint8_t((recentWaveLinkCursor + 1U) % recentWaveLinkCount);
+    }
+}
+
 // Obtiene o inicia la consulta eventId/unixUs; dest recibe una instantanea acotada sin leer NAND.
 waveIndexStatus waveEventStore::lookup(uint32_t eventId, uint64_t unixUs, waveIndexSnapshot& dest) {
     if (paused || !task) return waveIndexStatus::unavailable;
+    if (lookupRecentWaveLink(eventId, unixUs, dest)) return waveIndexStatus::ready;
     const uint32_t now = millis();
     waveIndexStatus status = waveIndexStatus::busy;
     portENTER_CRITICAL(&mutex);
@@ -543,13 +597,15 @@ void waveEventStore::unpin() { portENTER_CRITICAL(&mutex); pinnedBlock = UINT16_
 
 // Publica payload/firstUs/flags solamente si el guardador pudo montar su reserva.
 void waveCapturePublish(const uint8_t* payload, uint64_t firstUs, uint16_t flags) {
-    if (mountedWaveStore) mountedWaveStore->publish(payload, firstUs, flags);
+    if (auto* store = mountedWaveStore.load()) store->publish(payload, firstUs, flags);
 }
 // Solicita captura en firstUs sin acoplar MeterTask al administrador de almacenamiento.
-void waveCaptureTrigger(uint64_t firstUs) { if (mountedWaveStore) mountedWaveStore->trigger(firstUs); }
+void waveCaptureTrigger(uint64_t firstUs) { if (auto* store = mountedWaveStore.load()) store->trigger(firstUs); }
 // Permite al loop principal diferir NVS sin reservar memoria ni esperar una cola.
-bool waveCaptureBusy() { return mountedWaveStore && mountedWaveStore->isAcquiring(); }
+bool waveCaptureBusy() { auto* store = mountedWaveStore.load(); return store && store->isAcquiring(); }
+// Evita lecturas y empaquetado sin consumidor durante el montaje inicial; sin parametros.
+bool waveCaptureReady() { return mountedWaveStore.load() != nullptr; }
 // Enlaza un FAST durable y su referencia temporal con las capturas provisionales que le corresponden.
 void waveCaptureConfirm(uint32_t eventId, uint64_t startUs, uint64_t endUs, uint64_t rootUs, uint64_t unixUs, uint8_t eventMask) {
-    if (mountedWaveStore) mountedWaveStore->confirm(eventId, startUs, endUs, rootUs, unixUs, eventMask);
+    if (auto* store = mountedWaveStore.load()) store->confirm(eventId, startUs, endUs, rootUs, unixUs, eventMask);
 }

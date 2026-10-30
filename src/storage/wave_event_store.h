@@ -6,7 +6,7 @@
 struct waveStoreMetrics {
     uint32_t captures = 0, committed = 0, orphans = 0, gaps = 0, droppedTriggers = 0, failedWrites = 0;
     uint32_t publishedSlices = 0, reservedBytes = 0, nextId = 1, pendingLinks = 0, wordHeapBytes = 0;
-    uint16_t requestedPreMs = 192, actualPreMs = 0, erasedBlocks = 0;
+    uint16_t requestedPreMs = 96, actualPreMs = 0, erasedBlocks = 0;
     uint16_t stackFreeBytes = 0;
     uint16_t occupiedSlots = 0, totalSlots = 0, storedCaptures = 0;
     bool enabled = false, capturing = false;
@@ -92,6 +92,7 @@ private:
     int8_t active = -1;
     waveStoreMetrics metrics;
     waveStoreMetrics snapshot;
+    static constexpr uint16_t taskStackWords = 4 * 1024;
     struct indexQuery {
         waveIndexSnapshot result;
         uint64_t unixUs = 0;
@@ -100,7 +101,15 @@ private:
         bool delivered = false;
         waveIndexStatus status = waveIndexStatus::empty;
     };
+    struct recentWaveLink {
+        uint32_t eventId = 0;
+        uint64_t unixUs = 0;
+        waveIndexEntry entry;
+    };
+    static constexpr uint8_t recentWaveLinkCount = 16;
     indexQuery indexQueries[2];
+    recentWaveLink recentWaveLinks[recentWaveLinkCount];
+    uint8_t recentWaveLinkCursor = 0;
     std::atomic<uint32_t> triggerDrops{0};
     std::atomic<uint32_t> nvsHoldUntilMs{0};
     std::atomic<bool> acquisitionActive{false};
@@ -134,6 +143,10 @@ private:
     void reserveBlocks();
     // Procesa una sola cabecera pendiente fuera del callback HTTP; sin parametros.
     void serviceIndex();
+    // Guarda los enlaces de un commit en el indice RAM; block/firstPage ubican la captura.
+    void cacheRecentLinks(const waveEventFormat::commitHeader& commit, uint16_t block, uint8_t firstPage);
+    // Busca enlaces confirmados recientes; eventId/unixUs identifican el FAST y dest recibe la Wave.
+    bool lookupRecentWaveLink(uint32_t eventId, uint64_t unixUs, waveIndexSnapshot& dest);
 };
 
 // Publica datos del ADE al guardador montado; payload/firstUs/flags describen 16 ms.
@@ -142,5 +155,7 @@ void waveCapturePublish(const uint8_t* payload, uint64_t firstUs, uint16_t flags
 void waveCaptureTrigger(uint64_t firstUs);
 // Indica si la adquisicion Wave necesita evitar escrituras en la flash interna; sin parametros.
 bool waveCaptureBusy();
+// Indica si Wave ya publico una reserva y una tarea listas para recibir muestras; sin parametros.
+bool waveCaptureReady();
 // Vincula un FAST ya persistido con sus Wave; parametros identifican evento, ventana y relojes.
 void waveCaptureConfirm(uint32_t eventId, uint64_t startUs, uint64_t endUs, uint64_t rootUs, uint64_t unixUs, uint8_t eventMask = 1);
