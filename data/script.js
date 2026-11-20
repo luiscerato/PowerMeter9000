@@ -69,6 +69,7 @@ function showAppPage(pageId) {
     $("#mainViews > .tab-pane").removeClass("active");
     if (!capturePage) $("#" + pageId).addClass("active");
     if (typeof setEventHistoryActive === "function") setEventHistoryActive(pageId === "eventHistory");
+    if (typeof setGridCaptureFiltersActive === "function") setGridCaptureFiltersActive(pageId === "gridEvents");
     $(".app-page-link").removeClass("active").removeAttr("aria-current");
     $('.app-page-link[data-page="' + pageId + '"]').addClass("active").attr("aria-current", "page");
     $("#pageTitle").text(titles[pageId]);

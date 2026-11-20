@@ -2,6 +2,7 @@ let gridEventsViewer = {events: [], cache: new Map(), selectedId: null, request:
 
 // Inicializa los controles del visor de capturas persistentes de red; sin parámetros.
 function initGridEventsViewer() {
+    initGridCaptureFilters();
     $("#gridEventsRefresh").on("click", loadGridEventsViewer); $("#gridEventsTest").on("click", createGridEventTest);
     $("#gridEventVoltageToggle").on("click", () => setGridChartVisibility("voltage", !gridEventsViewer.voltageVisible));
     $("#gridEventCurrentToggle").on("click", () => setGridChartVisibility("current", !gridEventsViewer.currentVisible));
@@ -25,12 +26,14 @@ function initGridEventsViewer() {
 // Descarga el índice reciente y actualiza la lista de eventos disponibles; sin parámetros.
 async function loadGridEventsViewer() {
     if (gridEventsViewer.loading) return;
+    ++gridCaptureFilters.run; gridCaptureFilters.controller?.abort(); clearTimeout(gridCaptureFilters.timer);
     gridEventsViewer.loading = true; setGridEventsStatus("Consultando eventos guardados...");
     try {
         const scope = await refreshCaptureCacheScope(new AbortController().signal);
         const identity = scope ? scope.deviceId + ":" + scope.fastEpoch : null;
-        if (identity !== gridEventsViewer.cacheIdentity) gridEventsViewer.cache.clear();
+        if (identity !== gridEventsViewer.cacheIdentity) { gridEventsViewer.cache.clear(); gridCaptureFilters.records.clear(); }
         gridEventsViewer.cacheIdentity = identity;
+        gridEventsViewer.cacheScope = scope;
         const infoResponse = await fetch(board.IP + "/grid-events", {cache: "no-store"});
         if (!infoResponse.ok) throw new Error("No se pudo leer el registro de eventos.");
         const info = await infoResponse.json();
@@ -44,6 +47,7 @@ async function loadGridEventsViewer() {
             setGridEventsStatus("Cargando " + gridEventsViewer.events.length + " de " + info.eventCount + " eventos...");
             to = from - 1; await new Promise((resolve) => setTimeout(resolve, 20));
         }
+        await applyGridCaptureFilters();
         setGridEventsStatus(gridEventsViewer.events.length + " eventos cargados; " + formatGridBytes(info.partitionBytes || 0) + " disponibles.");
     } catch (error) { gridEventsViewer.events = []; renderGridEventsList(); setGridEventsStatus(error.message || "No se pudo cargar el registro.", true); }
     finally { gridEventsViewer.loading = false; }
@@ -53,10 +57,17 @@ async function loadGridEventsViewer() {
 function renderGridEventsList() {
     const list = $("#gridEventsList").empty();
     if (!gridEventsViewer.events.length) return list.append('<div class="text-muted small p-2">No hay eventos persistidos todavía.</div>');
-    gridEventsViewer.events.forEach((event) => {
+    const visible = gridCaptureVisibleEvents();
+    if (!visible.length) list.append('<div class="text-muted small p-2">Sin capturas para estos filtros.</div>');
+    visible.forEach((event) => {
         const when = formatGridTime(event.t);
         const saved = gridEventsViewer.cache.get(event.i), cached = saved && saved.timestamp === event.t ? saved : null, description = Object.prototype.hasOwnProperty.call(event, "k") ? gridPointName(event.k) + (event.l ? " · limitado" : "") : gridStateName(event.p) + " → " + gridStateName(event.s);
-        const details = cached ? gridEventRecords(cached).length + " registros · " + buildGridOverview(cached).map(group => group.name).join(", ") : "Disparador: " + gridRecordSubject(event.y, event.c ? 4 : event.k) + " · " + description;
+        const summary = gridCaptureFilters.records.get(event.i);
+        const matches = summary?.timestamp === event.t ? summary.records.filter(record => gridCaptureFilters.phases.has(record.states.subject))
+            .flatMap(record => gridCaptureRecordTypes(record, summary.startup).filter(type => gridCaptureFilters.types.has(type))
+                .map(type => gridSubjectName(record.states.subject) + ' · ' + gridCaptureTypeNames[type])) : [];
+        const descriptions = [...new Set(matches)];
+        const details = descriptions.length ? descriptions.slice(0, 3).join('; ') + (descriptions.length > 3 ? ' · +' + (descriptions.length - 3) : '') : cached ? gridEventRecords(cached).length + " registros · " + buildGridOverview(cached).map(group => group.name).join(", ") : "Disparador: " + gridRecordSubject(event.y, event.c ? 4 : event.k) + " · " + description;
         list.append($("<button></button>").addClass("list-group-item list-group-item-action py-2").toggleClass("active", gridEventsViewer.selectedId === event.i).attr({type: "button", "aria-current": gridEventsViewer.selectedId === event.i ? "true" : "false"})
             .html('<strong>Captura #' + event.i + '</strong><br><span class="small">' + when + '</span><br><span class="small">' + details + '</span>').on("click", () => loadGridEvent(event)));
     });
@@ -72,11 +83,12 @@ async function loadGridEvent(event) {
     try {
         const scope = await refreshCaptureCacheScope(controller.signal);
         const identity = scope ? scope.deviceId + ":" + scope.fastEpoch : null;
-        if (identity !== gridEventsViewer.cacheIdentity) gridEventsViewer.cache.clear();
+        if (identity !== gridEventsViewer.cacheIdentity) { gridEventsViewer.cache.clear(); gridCaptureFilters.records.clear(); }
         gridEventsViewer.cacheIdentity = identity;
         const decoded = await loadCachedFast(event.i, event.t, scope, controller.signal);
         if (request !== gridEventsViewer.request) return;
         if (!decoded.partial) {
+            rememberGridCaptureRecords(decoded);
             gridEventsViewer.cache.set(event.i, decoded);
             if (gridEventsViewer.cache.size > 12) gridEventsViewer.cache.delete(gridEventsViewer.cache.keys().next().value);
         }
@@ -640,3 +652,181 @@ async function createGridEventTest() {
     try { const response = await fetch(board.IP + "/grid-events/test", {method: "POST", cache: "no-store"}); if (!response.ok) throw new Error(); setGridEventsStatus("Prueba solicitada; espere unos segundos y recargue."); }
     catch (_) { setGridEventsStatus("No se pudo solicitar la captura de prueba.", true); }
 }
+
+const gridCaptureTypeNames = {outage: 'Corte', low: 'Baja V', high: 'Alta V / N', dip: 'DIP', swell: 'Swell',
+    pulse: 'Pico I', current: 'Alta I', abnormal: 'Red anormal', boot: 'Reinicio', normal: 'Normalidad'};
+const gridCaptureFilters = {types: new Set(Object.keys(gridCaptureTypeNames)), phases: new Set([0, 1, 2, 3, 4]),
+    records: new Map(), unit: 'custom', run: 0, controller: null};
+
+// Clasifica record sin perder los retornos; startup identifica observaciones del arranque.
+function gridCaptureRecordTypes(record, startup) {
+    const state = record.states, types = [];
+    if (startup && state.previous === 0 && !state.isPoint) types.push('boot');
+    if (state.isPoint) types.push(({1:'dip', 2:'swell', 3:'pulse'})[state.pointType]);
+    else if (state.isCurrent) types.push(state.current === 5 || state.previous === 5 ? 'current' : 'normal');
+    else {
+        const names = state.subject === 4 ? {1:'normal', 2:'abnormal', 3:'outage'} : {1:'normal', 2:'low', 3:'high', 4:'outage'};
+        const abnormal = [state.previous, state.current].filter(value => value > 1);
+        types.push(...(abnormal.length ? abnormal.map(value => names[value]) : ['normal']));
+    }
+    return types.filter(Boolean);
+}
+
+// Evalua tipo y fase sobre el mismo registro; capture conserva fecha, arranque y transiciones resumidas.
+function gridCaptureMatches(capture, types, phases, from, to) {
+    return capture.records.some(record => {
+        const at = capture.timestamp + record.offsetMs;
+        return at >= from && at <= to && phases.has(record.states.subject) &&
+            gridCaptureRecordTypes(record, capture.startup).some(type => types.has(type));
+    });
+}
+
+// Lee limites inclusivos de los controles; sin parametros, rechaza fechas invalidas.
+function gridCaptureRange() {
+    const fromText = $('#gridCaptureFrom').val(), toText = $('#gridCaptureTo').val();
+    const from = fromText ? Date.parse(fromText) : -Infinity, to = toText ? Date.parse(toText) : Infinity;
+    if (Number.isNaN(from) || Number.isNaN(to) || from >= to) throw Error('Desde debe ser anterior a Hasta.');
+    return {from, to};
+}
+
+// Devuelve las capturas que cumplen los controles actuales; sin parametros ni consultas al ESP.
+function gridCaptureVisibleEvents() {
+    let range;
+    try { range = gridCaptureRange(); } catch (_) { return []; }
+    const all = gridCaptureFilters.types.size === Object.keys(gridCaptureTypeNames).length && gridCaptureFilters.phases.size === 5;
+    return gridEventsViewer.events.filter(event => {
+        const saved = gridCaptureFilters.records.get(event.i);
+        if (saved && saved.timestamp === event.t) return gridCaptureMatches(saved, gridCaptureFilters.types, gridCaptureFilters.phases, range.from, range.to);
+        return all && event.t >= range.from && event.t <= range.to;
+    });
+}
+
+// Conserva solo registros pequenos; event es una captura ya decodificada con su CRC.
+function rememberGridCaptureRecords(event) {
+    gridCaptureFilters.records.set(event.id, {timestamp:event.timestamp, startup:event.startup,
+        records:gridEventRecords(event).map(record => ({offsetMs:record.offsetMs, states:{...record.states}}))});
+}
+
+// Filtra progresivamente reutilizando cache y leyendo faltantes de a uno; sin parametros.
+async function applyGridCaptureFilters() {
+    if (gridCaptureFilters.active === false) return;
+    const token = ++gridCaptureFilters.run;
+    gridCaptureFilters.controller?.abort();
+    const controller = gridCaptureFilters.controller = new AbortController();
+    try {
+        const range = gridCaptureRange(), all = gridCaptureFilters.types.size === Object.keys(gridCaptureTypeNames).length && gridCaptureFilters.phases.size === 5;
+        renderGridEventsList();
+        const candidates = gridEventsViewer.events.filter(event => event.t >= range.from - 32768 && event.t <= range.to + 32768);
+        let checked = 0, failed = 0;
+        for (const entry of candidates) {
+            if (token !== gridCaptureFilters.run) return;
+            const saved = gridCaptureFilters.records.get(entry.i);
+            if ((!all || entry.t < range.from || entry.t > range.to) && (!saved || saved.timestamp !== entry.t)) {
+                $('#gridCaptureFilterStatus').text('Revisando registros ' + (++checked) + ' / ' + candidates.length + '...');
+                try {
+                    const event = await loadCachedFast(entry.i, entry.t, gridEventsViewer.cacheScope, controller.signal);
+                    if (controller.signal.aborted) return;
+                    if (event.id !== entry.i || event.partial) throw Error('Captura incompleta');
+                    rememberGridCaptureRecords(event);
+                } catch (error) { if (controller.signal.aborted) return; ++failed; }
+                renderGridEventsList();
+            }
+        }
+        if (token === gridCaptureFilters.run) $('#gridCaptureFilterStatus').text(gridCaptureVisibleEvents().length + ' de ' + gridEventsViewer.events.length + ' capturas' + (failed ? ' · ' + failed + ' sin verificar; actualice para reintentar' : ''));
+    } catch (error) { if (token === gridCaptureFilters.run) $('#gridCaptureFilterStatus').text(error.message); }
+}
+
+// Persiste los controles del visor por navegador; sin parametros, no guarda muestras.
+function saveGridCaptureFilters() {
+    try { localStorage.setItem('powerMeter.captureFilters', JSON.stringify({types:[...gridCaptureFilters.types], phases:[...gridCaptureFilters.phases],
+        preset:$('#gridCapturePreset').val(), from:$('#gridCaptureFrom').val(), to:$('#gridCaptureTo').val(), unit:gridCaptureFilters.unit})); } catch (_) {}
+}
+
+// Aplica preset a los campos sin descargar; now permite fijar el instante de referencia.
+function setGridCapturePreset(preset, now = new Date()) {
+    if (!preset) return;
+    if (preset === 'all') { $('#gridCaptureFrom, #gridCaptureTo').val(''); gridCaptureFilters.unit = 'custom'; return; }
+    let range;
+    if (preset.startsWith('last-')) range = {from:now.getTime() - Number(preset.slice(5)) * 1000, to:now.getTime(), unit:'custom'};
+    else if (preset === 'lastMonthRolling') {
+        const from = new Date(now), day = from.getDate();
+        from.setDate(1); from.setMonth(from.getMonth() - 1); from.setDate(Math.min(day, new Date(from.getFullYear(), from.getMonth() + 1, 0).getDate()));
+        range = {from:from.getTime(), to:now.getTime(), unit:'custom'};
+    } else {
+        const date = new Date(now);
+        if (preset === 'dayBeforeYesterday') date.setDate(date.getDate() - 2);
+        range = eventHistoryCalendarRange(preset === 'dayBeforeYesterday' ? 'today' : preset, date);
+    }
+    gridCaptureFilters.unit = range.unit;
+    $('#gridCaptureFrom').val(formatHistoryDateInput(new Date(range.from)));
+    $('#gridCaptureTo').val(formatHistoryDateInput(new Date(range.to)));
+}
+
+// Sincroniza botones y programa el filtrado; sin parametros, evita consultas por cada pulsacion rapida.
+function updateGridCaptureFilters() {
+    for (const [group, selected, count] of [['Types',gridCaptureFilters.types,Object.keys(gridCaptureTypeNames).length], ['Phases',gridCaptureFilters.phases,5]])
+        $('#gridCapture' + group + ' button').each(function () {
+            const key = this.dataset.captureKey;
+            $(this).attr('aria-pressed', String(key === 'all' ? selected.size === count : selected.has(group === 'Phases' ? Number(key) : key)));
+        });
+    saveGridCaptureFilters();
+    $('#gridCaptureFilterStatus').text('Filtrando...');
+    gridCaptureFilters.controller?.abort();
+    clearTimeout(gridCaptureFilters.timer);
+    gridCaptureFilters.timer = setTimeout(applyGridCaptureFilters, 180);
+}
+
+// Crea filtros compactos con los periodos del Historico; sin parametros.
+function initGridCaptureFilters() {
+    $('#gridCapturePreset').append('<option value="all">Todo el registro</option><option value="">Personalizado</option>', $('#historyPreset').children().clone()).val('all');
+    for (const [group, labels, selected] of [['Types',gridCaptureTypeNames,gridCaptureFilters.types], ['Phases',{'4':'Red','0':'R','1':'S','2':'T','3':'N'},gridCaptureFilters.phases]]) {
+        for (const [key,label] of [['all','Todas'], ...Object.entries(labels)])
+            $('<button type="button" class="btn btn-outline-secondary">').text(label).attr({'data-capture-key':key, 'aria-pressed':'true'})
+                .appendTo('#gridCapture' + group).on('click', () => {
+                    const value = group === 'Phases' ? Number(key) : key;
+                    if (key === 'all') {
+                        const enabled = selected.size === Object.keys(labels).length;
+                        selected.clear(); if (!enabled) for (const name of Object.keys(labels)) selected.add(group === 'Phases' ? Number(name) : name);
+                    }
+                    else if (selected.has(value)) selected.delete(value); else selected.add(value);
+                    updateGridCaptureFilters();
+                });
+    }
+    try {
+        const saved = JSON.parse(localStorage.getItem('powerMeter.captureFilters'));
+        if (saved) {
+            for (const [key,known] of [['types',Object.keys(gridCaptureTypeNames)], ['phases',[0,1,2,3,4]]]) if (Array.isArray(saved[key])) {
+                gridCaptureFilters[key].clear(); for (const value of saved[key].filter(value => known.includes(value))) gridCaptureFilters[key].add(value);
+            }
+            if ($('#gridCapturePreset option').toArray().some(option => option.value === saved.preset)) {
+                $('#gridCapturePreset').val(saved.preset);
+                if (saved.preset) setGridCapturePreset(saved.preset);
+                else if (Number.isFinite(Date.parse(saved.from)) && Date.parse(saved.from) < Date.parse(saved.to)) {
+                    $('#gridCaptureFrom').val(saved.from); $('#gridCaptureTo').val(saved.to);
+                    gridCaptureFilters.unit = ['day','week','month','year','custom'].includes(saved.unit) ? saved.unit : 'custom';
+                }
+            }
+        }
+    } catch (_) {}
+    $('#gridCapturePreset').on('change', function () { setGridCapturePreset(this.value); updateGridCaptureFilters(); });
+    $('#gridCaptureFrom, #gridCaptureTo').on('change', () => { $('#gridCapturePreset').val(''); gridCaptureFilters.unit = 'custom'; updateGridCaptureFilters(); });
+    $('[data-capture-move]').on('click', function () {
+        try {
+            const range = {...gridCaptureRange(), unit:gridCaptureFilters.unit}, direction = Number(this.dataset.captureMove);
+            if (!Number.isFinite(range.from) || !Number.isFinite(range.to)) return;
+            const moved = direction ? shiftEventHistoryPeriod(range, direction) : range.unit === 'custom' ?
+                {...range, to:Date.now(), from:Date.now() - (range.to - range.from)} : eventHistoryCalendarRange(({day:'today',week:'thisWeek',month:'thisMonth',year:'thisYear'})[range.unit]);
+            $('#gridCaptureFrom').val(formatHistoryDateInput(new Date(moved.from))); $('#gridCaptureTo').val(formatHistoryDateInput(new Date(moved.to)));
+            $('#gridCapturePreset').val(!direction && range.unit !== 'custom' ? ({day:'today',week:'thisWeek',month:'thisMonth',year:'thisYear'})[range.unit] : ''); updateGridCaptureFilters();
+        } catch (error) { $('#gridCaptureFilterStatus').text(error.message); }
+    });
+    updateGridCaptureFilters();
+}
+
+// Cancela el analisis al salir de Eventos; active indica si la vista esta visible.
+function setGridCaptureFiltersActive(active) {
+    gridCaptureFilters.active = active;
+    if (!active) { ++gridCaptureFilters.run; clearTimeout(gridCaptureFilters.timer); gridCaptureFilters.controller?.abort(); }
+}
+
+if (typeof module !== 'undefined') module.exports = {gridCaptureRecordTypes, gridCaptureMatches};

@@ -25,6 +25,22 @@ Periodo inicial: semana actual de lunes a domingo. La reconstruccion se ejecuta 
 
 ## Controles y filtros
 
+### Filtros del visor Eventos (develop)
+
+El visor de capturas FAST incorpora una barra superior con tipos, entradas, fechas
+completas, atajos Ultimos/Calendario y navegacion de periodo. Todo el registro mantiene
+el alcance inicial anterior; las preferencias se conservan por navegador.
+Todas permite activar o desactivar el grupo completo de tipos o entradas.
+
+Los filtros de tipo y fase se evaluan sobre el mismo registro, incluyendo transiciones
+secundarias y retornos, no solo el disparador del indice. Las capturas necesarias se
+leen de a una mediante la cache comun. El navegador conserva resumenes de registros,
+sin agregar RAM al ESP. Las capturas que no pudieron verificarse se informan aparte.
+
+La vista actual sigue siendo de eventos FAST. Una futura vista Oscilografias requiere
+un catalogo Wave independiente; no equivale a filtrar eventos con alguna Wave asociada.
+Antes de esa etapa sigue pendiente corregir las respuestas incompletas del indice Wave.
+
 - Primera fila: periodo, desde y hasta. Las fechas muestran dia/mes y hora de forma compacta; al tocarlas se abre el control nativo con fecha/hora completas, incluidos los segundos guardados.
 - Segunda fila: periodo anterior/actual/siguiente, Todos / Ninguno, entrada y los iconos de actualizar/detener. Las dos filas caben sin desplazamiento horizontal en movil.
 - Debajo, Eventos y Estados son accesos rapidos exclusivos: muestran solo ese grupo. Cada tipo individual alterna su visibilidad sin cambiar los demas: DIP, swell, pico I, corte, baja V, alta V / neutro, alta I y red anormal. Todos activa todos los tipos; Ninguno los oculta. Los botones indican que esta seleccionado.

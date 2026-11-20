@@ -616,10 +616,25 @@ bootApp();
                     </div>
                 </div>
 				<div class="tab-pane" id="gridEvents" role="region" aria-labelledby="gridEvents-tab">
+                    <div id="gridCaptureFilters" class="gridCaptureFilters p-2">
+                        <div id="gridCaptureTypes" class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Tipos de evento"></div>
+                        <div class="gridCaptureFilterLine">
+                            <div id="gridCapturePhases" class="btn-group btn-group-sm" role="group" aria-label="Entradas"></div>
+                            <select id="gridCapturePreset" class="form-select form-select-sm" aria-label="Periodo de capturas"></select>
+                            <label>Desde <input id="gridCaptureFrom" type="datetime-local" step="1" class="form-control form-control-sm"></label>
+                            <label>Hasta <input id="gridCaptureTo" type="datetime-local" step="1" class="form-control form-control-sm"></label>
+                            <div class="btn-group btn-group-sm" role="group" aria-label="Desplazar periodo de capturas">
+                                <button class="btn btn-outline-secondary" type="button" data-capture-move="-1" title="Periodo anterior" aria-label="Periodo anterior">&#8592;</button>
+                                <button class="btn btn-outline-secondary" type="button" data-capture-move="0" title="Periodo actual" aria-label="Periodo actual">&#9678;</button>
+                                <button class="btn btn-outline-secondary" type="button" data-capture-move="1" title="Periodo siguiente" aria-label="Periodo siguiente">&#8594;</button>
+                            </div>
+                        </div>
+                        <small id="gridCaptureFilterStatus" class="text-muted" role="status"></small>
+                    </div>
                     <div class="row p-2">
                         <div class="col-sm-12 col-md-4 col-lg-3 mb-2">
                             <div class="border rounded p-2">
-                                <div class="d-flex justify-content-between align-items-center mb-2"><strong>Capturas</strong><div class="btn-group btn-group-sm"><button id="gridEventsTest" class="btn btn-outline-warning" type="button">Prueba</button><button id="gridEventsRefresh" class="btn btn-outline-secondary" type="button">Recargar</button></div></div>
+                                <div class="d-flex justify-content-between align-items-center mb-2"><strong>Capturas</strong><div class="btn-group btn-group-sm"><button id="gridEventsTest" class="btn btn-outline-warning" type="button">Prueba</button><button id="gridEventsRefresh" class="btn btn-outline-secondary" type="button" title="Actualizar capturas" aria-label="Actualizar capturas">&#8635;</button></div></div>
                                 <div id="gridEventsStatus" class="small text-muted mb-2" role="status">Seleccione Eventos para cargar las capturas.</div>
                                 <div id="gridEventsList" class="list-group list-group-flush" style="max-height: 64vh; overflow-y: auto;"></div>
                             </div>
