@@ -617,9 +617,8 @@ bootApp();
                 </div>
 				<div class="tab-pane" id="gridEvents" role="region" aria-labelledby="gridEvents-tab">
                     <div id="gridCaptureFilters" class="gridCaptureFilters p-2">
-                        <div id="gridCaptureTypes" class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Tipos de evento"></div>
-                        <div class="gridCaptureFilterLine">
-                            <div id="gridCapturePhases" class="btn-group btn-group-sm" role="group" aria-label="Entradas"></div>
+                        <div class="gridCaptureFilterLine gridCapturePeriod">
+                            <strong class="gridCaptureFilterLabel">Período de análisis</strong>
                             <select id="gridCapturePreset" class="form-select form-select-sm" aria-label="Periodo de capturas"></select>
                             <label>Desde <input id="gridCaptureFrom" type="datetime-local" step="1" class="form-control form-control-sm"></label>
                             <label>Hasta <input id="gridCaptureTo" type="datetime-local" step="1" class="form-control form-control-sm"></label>
@@ -627,6 +626,16 @@ bootApp();
                                 <button class="btn btn-outline-secondary" type="button" data-capture-move="-1" title="Periodo anterior" aria-label="Periodo anterior">&#8592;</button>
                                 <button class="btn btn-outline-secondary" type="button" data-capture-move="0" title="Periodo actual" aria-label="Periodo actual">&#9678;</button>
                                 <button class="btn btn-outline-secondary" type="button" data-capture-move="1" title="Periodo siguiente" aria-label="Periodo siguiente">&#8594;</button>
+                            </div>
+                        </div>
+                        <div class="gridCaptureFilterLine gridCaptureSelections">
+                            <div class="gridCaptureFilterGroup">
+                                <span class="gridCaptureFilterLabel">Filtrar por fases</span>
+                                <div id="gridCapturePhases" class="btn-group btn-group-sm" role="group" aria-label="Filtrar por fases"></div>
+                            </div>
+                            <div class="gridCaptureFilterGroup gridCaptureEventTypes">
+                                <span class="gridCaptureFilterLabel">Tipo de evento</span>
+                                <div id="gridCaptureTypes" class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Tipo de evento"></div>
                             </div>
                         </div>
                         <small id="gridCaptureFilterStatus" class="text-muted" role="status"></small>

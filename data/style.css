@@ -480,12 +480,20 @@ input[type=range][orient=vertical] {
 .eventHistoryPoints { position: relative; }
 .gridCaptureFilters { border-bottom: 1px solid #dee2e6; }
 .gridCaptureFilterLine { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.gridCapturePeriod { margin-top: 0; }
+.gridCaptureFilterLabel { font-size: 12px; white-space: nowrap; }
+.gridCaptureFilterGroup { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.gridCaptureSelections { gap: 8px 20px; }
+.gridCaptureEventTypes { flex: 1 1 580px; }
+.gridCaptureEventTypes .btn-group { flex: 1 1 auto; }
 .gridCaptureFilterLine > select { width: auto; max-width: 180px; }
 .gridCaptureFilterLine > label { display: flex; align-items: center; gap: 4px; margin: 0; font-size: 12px; min-width: 0; }
 .gridCaptureFilterLine input { width: 205px; font-size: 12px; }
 .gridCaptureFilters button { font-size: 12px; }
 .gridCaptureFilters button[aria-pressed="true"] { background: #167d86; border-color: #167d86; color: #fff; }
 @media (max-width: 575px) {
+    .gridCapturePeriod > .gridCaptureFilterLabel { flex-basis: 100%; }
+    .gridCaptureFilterGroup { flex-basis: 100%; }
     .gridCaptureFilterLine > label { flex: 1 1 100%; }
     .gridCaptureFilterLine input { flex: 1; width: 0; min-width: 0; }
     .gridCaptureFilterLine > select { flex: 1; width: 0; min-width: 120px; max-width: none; }
