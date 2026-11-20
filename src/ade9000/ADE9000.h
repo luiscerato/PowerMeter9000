@@ -894,7 +894,8 @@ public:
 	void readSwellLevels(struct VoltageRMSRegs* Data);
 
 	//Escribe la caliración por defector del medidor
-    void restoreCalibration();
+    // Restaura y verifica los valores de fabrica en NVS; sin parametros.
+    bool restoreCalibration();
 
 
 private:

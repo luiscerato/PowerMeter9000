@@ -1,4 +1,5 @@
 $(document).ready(function () {
+    powerQuality.init();
     setupNav();
     setupFooter();
     initMeterUI();
@@ -43,7 +44,8 @@ function resetPageScroll() {
 // Muestra una seccion principal de la app sin recargar la pagina.
 // pageId: id de la seccion a mostrar.
 function showAppPage(pageId) {
-    const titles = {home: "Resumen", allMeasures: "Mediciones", history: "Histórico", logs: "Logs", gridEvents: "Eventos", eventHistory: "Historial", scopePage: "Osciloscopio", settings: "Configuración"};
+    if (typeof pauseHistoryCacheRequest === "function") pauseHistoryCacheRequest();
+    const titles = {home: "Resumen", allMeasures: "Mediciones", history: "Histórico", logs: "Logs", gridEvents: "Eventos", eventHistory: "Historial", scopePage: "Osciloscopio", qualityPage: "Calidad de energía", settings: "Configuración"};
     if (!Object.prototype.hasOwnProperty.call(titles, pageId)) pageId = "home";
     const samePage = showAppPage.current === pageId;
     const initialPage = showAppPage.current == null;
@@ -60,10 +62,12 @@ function showAppPage(pageId) {
     if (typeof setLogsViewerActive === "function") setLogsViewerActive(pageId === "logs");
     if (samePage) return;
     showAppPage.current = pageId;
-    $("#meterPage").toggleClass("d-none", pageId === "scopePage");
+    const capturePage = pageId === "scopePage" || pageId === "qualityPage";
+    $("#meterPage").toggleClass("d-none", capturePage);
     $("#scopePage").toggleClass("d-none", pageId !== "scopePage");
+    $("#qualityPage").toggleClass("d-none", pageId !== "qualityPage");
     $("#mainViews > .tab-pane").removeClass("active");
-    if (pageId !== "scopePage") $("#" + pageId).addClass("active");
+    if (!capturePage) $("#" + pageId).addClass("active");
     if (typeof setEventHistoryActive === "function") setEventHistoryActive(pageId === "eventHistory");
     $(".app-page-link").removeClass("active").removeAttr("aria-current");
     $('.app-page-link[data-page="' + pageId + '"]').addClass("active").attr("aria-current", "page");
@@ -72,7 +76,8 @@ function showAppPage(pageId) {
 	if (typeof setMeterPollingActive === "function") setMeterPollingActive(pageId === "home" || pageId === "allMeasures");
     const menu = document.getElementById("navbarNavAltMarkup");
     if (menu.classList.contains("show")) bootstrap.Collapse.getOrCreateInstance(menu, {toggle: false}).hide();
-    if (pageId == "scopePage") {
+    if (typeof powerQuality !== "undefined") powerQuality.setActive(capturePage, pageId === "qualityPage");
+    if (capturePage) {
         initScopeUI();
     } else {
         if (typeof Scope != "undefined" && Scope.mode == "scope") Scope.stop();

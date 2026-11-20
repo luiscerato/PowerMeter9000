@@ -13,7 +13,8 @@ struct WebFsUploadRequest {
 };
 
 static StorageManager* storageManager = nullptr;
-static constexpr uint8_t webFsReadSessionCount = 4;
+// La carga de la interfaz es secuencial; dos sesiones alcanzan y preservan heap para WiFi.
+static constexpr uint8_t webFsReadSessionCount = 2;
 static WebFsReadSession webFsReadSessions[webFsReadSessionCount];
 
 static const char recoveryPage[] PROGMEM = R"HTML(

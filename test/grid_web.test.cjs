@@ -70,7 +70,10 @@ async function run() {
         await page.addStyleTag({path: path.join(root, 'data/style.css')});
         await page.addScriptTag({path: path.join(root, 'data/lib/jquery-3.6.4.min.js')});
         await page.addScriptTag({path: path.join(root, 'data/lib/bootstrap.bundle.min.js')});
+        await page.addScriptTag({path: path.join(root, 'data/app_appearance.js')});
+        await page.addScriptTag({path: path.join(root, 'data/history_cache.js')});
         await page.addScriptTag({path: path.join(root, 'data/index.js')});
+        await page.addScriptTag({path: path.join(root, 'data/network_settings.js')});
         const html = fs.readFileSync(path.join(root, 'data/index.html'), 'utf8');
         await page.evaluate(html => {
             const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -117,7 +120,7 @@ async function run() {
         assert.match(await page.textContent('#waveConfigMetrics'),/Oscilografías guardadas17/);
         await page.uncheck('#waveSaveEnabled');
         await page.click('#waveConfigForm button[type=submit]');
-        await page.waitForFunction(() => document.getElementById('waveConfigStatus').textContent.startsWith('Guardado.'));
+        await page.waitForFunction(() => document.getElementById('waveConfigStatus').textContent === 'Guardado y aplicado sin reiniciar.');
         assert.equal(wavePosts,1); assert.equal(waveSaveEnabled,false); assert.equal(wavePointMask,6);
         await page.click('#waveConfigRefresh');
         await page.waitForFunction(() => document.getElementById('waveConfigStatus').textContent === 'Nuevas capturas deshabilitadas');

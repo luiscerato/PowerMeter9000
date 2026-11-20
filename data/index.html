@@ -7,17 +7,56 @@
         <meta http-equiv="Pragma" content="no-cache" />
         <meta http-equiv="Expires" content="0" />
         <link rel="icon" type="image/png" href="favicon.png" />
+        <style>
+            .powerBrand { display: inline-flex; align-items: center; gap: 12px; color: #203737; text-decoration: none; font-family: system-ui, sans-serif; }
+            .powerBrandMark { width: 48px; height: 48px; flex: 0 0 auto; color: #087e83; }
+            .powerBrandName { display: block; font-size: 19px; font-weight: 750; line-height: 1.15; }
+            .powerBrandModel { display: block; margin-top: 4px; color: #677b7b; font-size: 10px; font-weight: 500; }
+            #bootLoader { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #f4f6f6; z-index: 9999; padding: 20px; font-family: system-ui, sans-serif; color: #203737; }
+            .bootContent { width: min(100%, 340px); }
+            .bootBrand { justify-content: center; width: 100%; margin-bottom: 32px; gap: 18px; }
+            .bootBrand .powerBrandMark { width: 72px; height: 72px; }
+            .bootBrand .powerBrandName { font-size: 28px; }
+            .bootBrand .powerBrandModel { font-size: 11px; margin-top: 7px; }
+            .bootTrack { height: 4px; background: #dbe5e5; border-radius: 2px; overflow: hidden; }
+            #bootFill { width: 0; height: 100%; background: #087e83; }
+            .bootStatusLine { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 10px 0 18px; font-size: 12px; }
+            #bootStatus { min-width: 0; overflow-wrap: anywhere; }
+            #bootPercent { color: #677b7b; font-variant-numeric: tabular-nums; }
+            .bootDetails { font-size: 11px; color: #677b7b; }
+            .bootDetails summary { cursor: pointer; padding: 6px 0; }
+            #bootProgress { box-sizing: border-box; width: 100%; height: 150px; margin-top: 8px; padding: 8px; border: 1px solid #ccd8d8; border-radius: 4px; background: #fff; color: #415757; font: 10px/1.5 Consolas, monospace; resize: vertical; }
+            #bootLoader[data-error] #bootStatus { color: #b52d2d; }
+            #bootLoader[data-error] #bootFill { background: #b52d2d; }
+        </style>
     </head>
     <body>
-        <div id="bootLoader" style="position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #f5f5f5; z-index: 9999; padding: 1rem;">
-    <textarea id="bootProgress" readonly style="width: min(92vw, 720px); height: min(70vh, 360px); padding: 1rem; font-family: Consolas, monospace; resize: none;">Iniciando carga...
-</textarea>
-</div>
+        <div id="bootLoader">
+            <div class="bootContent">
+                <div class="powerBrand bootBrand">
+                    <svg class="powerBrandMark" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 17V5h12m30 0h12v12M5 47v12h12m30 0h12V47"/><path d="M9 32c8-25 15-25 23 0s15 25 23 0"/></svg>
+                    <div><span class="powerBrandName">POWER<br>METER</span><span class="powerBrandModel">ADE9000</span></div>
+                </div>
+                <div id="bootBar" class="bootTrack" role="progressbar" aria-label="Carga de la aplicacion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="bootFill"></div></div>
+                <div class="bootStatusLine"><span id="bootStatus" role="status">Iniciando...</span><span id="bootPercent" aria-hidden="true">0%</span></div>
+                <details id="bootDetails" class="bootDetails"><summary>Detalle de carga</summary><textarea id="bootProgress" readonly aria-label="Registro de carga">Iniciando carga...
+</textarea></details>
+            </div>
+        </div>
 <script>
 const bootStyles = ["lib/bootstrap.min.css","lib/jquery.simplegauge.css","style.css"];
-const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","board.js","scope.js","logs_ui.js","index.js","history_ui.js","grid_events_ui.js","event_history_period.js","event_history.js","capture_cache.js","event_history_preview.js","event_statistics.js","wave_events_ui.js","scope_ui.js","script.js"];
-// Cambiar esta version solo cuando se actualice alguna dependencia de lib/.
-const bootLibraryBuild = "vendor-1";
+const bootScripts = ["lib/jquery-3.6.4.min.js","lib/bootstrap.bundle.min.js","lib/jquery.simplegauge.js","lib/canvasjs.min.js","board.js","chart_tooltips.js","app_appearance.js","scope.js","scope_fft_vendor.js","scope_fft.js","logs_ui.js","index.js","network_settings.js","history_ui.js","history_cache.js","grid_events_ui.js","event_history_period.js","event_history.js","capture_cache.js","event_history_preview.js","event_statistics.js","wave_events_ui.js","scope_ui.js","script.js"];
+// Cambiar esta version cuando cambien las librerias o su formato de distribucion.
+const bootLibraryBuild = "vendor-2";
+let bootLoaded = 0;
+
+// Actualiza el avance por recurso terminado; no recibe parametros ni agrega solicitudes HTTP.
+function bootAdvance() {
+    const percent = Math.round(++bootLoaded * 100 / (bootStyles.length + bootScripts.length));
+    document.getElementById("bootFill").style.width = percent + "%";
+    document.getElementById("bootPercent").textContent = percent + "%";
+    document.getElementById("bootBar").setAttribute("aria-valuenow", percent);
+}
 
 // Agrega una linea al progreso de carga.
 // message: texto que se muestra en el textarea.
@@ -25,6 +64,7 @@ function bootLog(message) {
     const box = document.getElementById("bootProgress");
     box.value += message + "\n";
     box.scrollTop = box.scrollHeight;
+    document.getElementById("bootStatus").textContent = message;
 }
 
 // Carga un archivo CSS y espera a que termine.
@@ -35,7 +75,7 @@ function loadStyle(path) {
         const link = document.createElement("link");
         link.rel = "stylesheet";
         link.href = cacheBust(path);
-        link.onload = () => resolve();
+        link.onload = () => { bootAdvance(); resolve(); };
         link.onerror = () => reject(new Error(path));
         document.head.appendChild(link);
     });
@@ -48,7 +88,7 @@ function loadScript(path) {
         bootLog("Cargando script: " + path);
         const script = document.createElement("script");
         script.src = cacheBust(path);
-        script.onload = () => resolve();
+        script.onload = () => { bootAdvance(); resolve(); };
         script.onerror = () => reject(new Error(path));
         document.body.appendChild(script);
     });
@@ -61,7 +101,7 @@ function cacheBust(path) {
     return path + (path.includes("?") ? "&" : "?") + "v=" + bootLibraryBuild;
 }
 
-// Carga todos los archivos de la app de a uno.
+// Carga los archivos de a uno para no saturar el servidor HTTP/WebFS del ESP32.
 async function bootApp() {
     try {
         for (const path of bootStyles) await loadStyle(path);
@@ -70,6 +110,8 @@ async function bootApp() {
         document.getElementById("appRoot").style.display = "";
         document.getElementById("bootLoader").style.display = "none";
     } catch (error) {
+        document.getElementById("bootLoader").setAttribute("data-error", "true");
+        document.getElementById("bootDetails").open = true;
         bootLog("ERROR cargando: " + error.message);
         bootLog("Recargue la pagina para intentar nuevamente.");
     }
@@ -81,7 +123,10 @@ bootApp();
         <div id="navbar"><nav id="codeNavBar" class="navbar navbar-expand-md navbar-light appSidebar" aria-label="Navegación principal">
     <div class="container-fluid">
         <div class="sidebarHeader">
-            <a class="navbar-brand" href="#home">PowerMeter <small class="d-block text-muted">ADE9000</small></a>
+            <a class="navbar-brand powerBrand" href="#home" aria-label="Power Meter ADE9000, resumen">
+                <svg class="powerBrandMark" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 17V5h12m30 0h12v12M5 47v12h12m30 0h12V47"/><path d="M9 32c8-25 15-25 23 0s15 25 23 0"/></svg>
+                <span><span class="powerBrandName">POWER<br>METER</span><span class="powerBrandModel">ADE9000</span></span>
+            </a>
             <button id="sidebarToggle" class="btn btn-sm btn-outline-secondary sidebarToggle" type="button" aria-label="Contraer menú" aria-expanded="true" title="Contraer menú">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3zm0 6h18v2H3zm0 6h18v2H3zM7 8l-4 4 4 4v-3h5v-2H7z"/></svg>
             </button>
@@ -399,20 +444,36 @@ bootApp();
                     <section class="logsViewer" aria-label="Registro de diagnóstico">
                         <div class="logsToolbar">
                             <div>
-                                <div id="logsTitle" class="fw-semibold">RAM reciente</div>
-                                <div id="logsStatus" class="small text-muted" role="status" aria-live="polite">Cargando registros recientes...</div>
+                                <div id="logsTitle" class="fw-semibold">Registro de diagnóstico</div>
+                                <div id="logsStatus" class="small text-muted" role="status" aria-live="polite">Esperando apertura de la vista...</div>
                             </div>
                             <div class="logsActions">
-                                <button id="logsNand" class="btn btn-sm btn-outline-primary" type="button">Leer RAM + NAND</button>
-                                <button id="logsPrevious" class="btn btn-sm btn-outline-secondary" type="button">Cargar anteriores</button>
-                                <button id="logsStats" class="btn btn-sm btn-outline-secondary" type="button">Actualizar uso</button>
+                                <button id="logsPrevious" class="btn btn-sm btn-outline-secondary" type="button">Cargar más</button>
+                                <button id="logsPreviousBoot" class="btn btn-sm btn-outline-secondary" type="button">Arranque anterior</button>
+                                <button id="logsExport" class="btn btn-sm btn-outline-primary" type="button">Exportar</button>
                                 <button id="logsFormat" class="btn btn-sm btn-outline-danger" type="button">Formatear registro</button>
                                 <button id="logsClear" class="btn btn-sm btn-outline-secondary" type="button">Limpiar vista</button>
                                 <label class="form-check form-switch mb-0 logsFollow"><input id="logsFollow" class="form-check-input" type="checkbox" checked><span class="form-check-label">Seguir nuevos</span></label>
                             </div>
                         </div>
                         <div id="logsStorageStats" class="small text-muted mb-2" role="status" aria-live="polite">Consultando uso de la partición de logs...</div>
-                        <textarea id="logsOutput" class="logsOutput" readonly spellcheck="false" aria-label="Mensajes del logger" placeholder="Los mensajes aparecerán aquí."></textarea>
+                        <div id="logsOutput" class="logsOutput" role="log" aria-label="Mensajes del logger" aria-live="off" tabindex="0"></div>
+                        <details class="logsConfigPanel">
+                            <summary>Configuración del logger</summary>
+                            <div class="logsConfigGlobal">
+                                <label>General
+                                    <select id="logsGlobalLevel" class="form-select form-select-sm">
+                                        <option value="off">OFF</option><option value="error">ERROR</option><option value="warn">WARNING</option>
+                                        <option value="info">INFO</option><option value="verbose">VERBOSE</option><option value="debug">DEBUG</option>
+                                    </select>
+                                </label>
+                                <label class="form-check"><input id="logsOutputSerial" class="form-check-input" type="checkbox"><span class="form-check-label">Salida serie</span></label>
+                                <label class="form-check"><input id="logsOutputNand" class="form-check-input" type="checkbox"><span class="form-check-label">Guardar en NAND</span></label>
+                                <button id="logsConfigSave" class="btn btn-sm btn-primary" type="button">Guardar general</button>
+                                <span id="logsConfigStatus" class="small text-muted" role="status" aria-live="polite"></span>
+                            </div>
+                            <div id="logsModuleLevels" class="logsModuleLevels"></div>
+                        </details>
                         <div class="small text-muted mt-1">El formateo borra solo la partición de diagnóstico; histórico y eventos quedan intactos.</div>
                     </section>
                 </div>
@@ -433,10 +494,10 @@ bootApp();
                             <div class="historyRangeActions">
                                 <select id="historyPreset" class="form-select form-select-sm historyPreset" aria-label="Períodos predefinidos">
                                     <optgroup label="Últimos">
-                                        <option value="last-60">Último minuto</option><option value="last-300">Últimos 5 minutos</option><option value="last-1800">Últimos 30 minutos</option><option value="last-3600">Última hora</option><option value="last-7200">Últimas 2 horas</option><option value="last-21600">Últimas 6 horas</option><option value="last-86400">Último día</option><option value="last-604800">Última semana</option>
+                                        <option value="last-60">Último minuto</option><option value="last-300">Últimos 5 minutos</option><option value="last-1800">Últimos 30 minutos</option><option value="last-3600">Última hora</option><option value="last-7200">Últimas 2 horas</option><option value="last-21600">Últimas 6 horas</option><option value="last-86400">Último día</option><option value="last-604800">Últimos 7 días</option><option value="lastMonthRolling">Último mes</option>
                                     </optgroup>
                                     <optgroup label="Calendario">
-                                        <option value="today">Hoy</option><option value="yesterday">Ayer</option><option value="dayBeforeYesterday">Anteayer</option><option value="lastWeek">Semana pasada</option>
+                                        <option value="today">Hoy</option><option value="yesterday">Ayer</option><option value="dayBeforeYesterday">Anteayer</option><option value="thisWeek">Esta semana</option><option value="lastWeek">Semana pasada</option><option value="thisMonth">Este mes</option><option value="lastMonth">Mes pasado</option>
                                     </optgroup>
                                 </select>
                                 <div class="btn-group btn-group-sm" role="group" aria-label="Desplazar intervalo">
@@ -446,65 +507,72 @@ bootApp();
                                 <button id="historyLoadButton" class="btn btn-sm btn-primary" type="button">Cargar</button>
                             </div>
                         </div>
-						<div class="d-flex flex-wrap gap-1 mb-2" role="group" aria-label="Gráficas históricas"><button class="btn btn-sm btn-outline-primary active historyChartToggle" type="button" data-chart="voltage" aria-pressed="true">Voltajes</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="current" aria-pressed="false">Corrientes</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="activePower" aria-pressed="false">P activa</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="reactivePower" aria-pressed="false">P reactiva</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="apparentPower" aria-pressed="false">P aparente</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="energy" aria-pressed="false">Energía</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="powerFactor" aria-pressed="false">FP</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="frequency" aria-pressed="false">Frecuencia</button><button class="btn btn-sm btn-outline-primary historyChartToggle" type="button" data-chart="connectivity" aria-pressed="false">Estados</button></div>
+                        <div id="historyChartSelectors" class="d-flex flex-wrap align-items-center gap-1 mb-2" role="group" aria-label="Gráficas históricas"></div>
                         <div id="historyViewerStatus" class="small text-muted mb-2" role="status">Seleccione un intervalo para consultar el histórico.</div>
-						<div id="historyChartVoltage" class="historyChart"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
-						<div id="historyChartCurrent" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
-						<div id="historyChartActivePower" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
-						<div id="historyChartReactivePower" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
-						<div id="historyChartApparentPower" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
-						<div id="historyChartEnergy" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
-						<div id="historyChartPowerFactor" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
-						<div id="historyChartFrequency" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
-						<div id="historyChartConnectivity" class="historyChart d-none"><div class="text-muted p-3">Sin muestras para mostrar.</div></div>
+                        <div id="historyChartList"></div>
                     </div>
                 </div>
                 <div class="tab-pane" id="settings" role="region" aria-labelledby="settings-tab"></div>
                 <div class="tab-pane" id="eventHistory" role="region" aria-labelledby="eventHistory-tab">
                     <div class="p-2 eventHistoryViewer">
-                        <div class="eventHistoryRangeScroll"><div class="eventHistoryControls">
-                            <label>Desde<input id="eventHistoryFrom" class="form-control form-control-sm" type="datetime-local" step="1"></label>
-                            <label>Hasta<input id="eventHistoryTo" class="form-control form-control-sm" type="datetime-local" step="1"></label>
+                        <div class="eventHistoryControls">
                             <select id="eventHistoryPreset" class="form-select form-select-sm" aria-label="Periodo del historial"><option value="">Personalizado</option><option value="today">Hoy</option><option value="yesterday">Ayer</option><option value="thisWeek">Esta semana</option><option value="lastWeek">La semana pasada</option><option value="thisMonth">Este mes</option><option value="lastMonth">El mes pasado</option><option value="thisYear">Este año</option></select>
-                            <div class="btn-group btn-group-sm" role="group" aria-label="Navegar periodos">
+                            <label class="eventHistoryDate"><span>Desde</span><span id="eventHistoryFromLabel" class="eventHistoryDateValue"></span><input id="eventHistoryFrom" aria-label="Desde" type="datetime-local" step="1"></label>
+                            <label class="eventHistoryDate"><span>Hasta</span><span id="eventHistoryToLabel" class="eventHistoryDateValue"></span><input id="eventHistoryTo" aria-label="Hasta" type="datetime-local" step="1"></label>
+                            <div class="btn-group btn-group-sm eventHistoryPeriodNav" role="group" aria-label="Navegar periodos">
                                 <button id="eventHistoryPrevious" class="btn btn-outline-secondary" type="button" title="Periodo anterior" aria-label="Periodo anterior"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 5.4 14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg></button>
                                 <button id="eventHistoryCurrent" class="btn btn-outline-secondary" type="button" title="Periodo actual" aria-label="Periodo actual"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2m0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8m1-13h-2v6l5 3 1-1.7-4-2.3z"/></svg></button>
                                 <button id="eventHistoryNext" class="btn btn-outline-secondary" type="button" title="Periodo siguiente" aria-label="Periodo siguiente"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 18.6 10 20l8-8-8-8-1.4 1.4 6.6 6.6z"/></svg></button>
                             </div>
-                            <button id="eventHistoryLoad" class="btn btn-primary btn-sm" type="button">Analizar</button>
-                            <button id="eventHistoryStop" class="btn btn-outline-secondary btn-sm" type="button" disabled>Detener</button>
-                        </div></div>
-                        <div class="d-flex justify-content-end my-2"><select id="eventHistoryLane" class="form-select form-select-sm eventHistoryLaneFilter" aria-label="Entrada del historial">
-                                <option value="all">Todas las entradas</option><option value="4:V">Red</option>
-                                <option value="0:V">Fase R</option><option value="1:V">Fase S</option><option value="2:V">Fase T</option><option value="3:V">Neutro-tierra</option>
-                                <option value="0:A">Corriente R</option><option value="1:A">Corriente S</option><option value="2:A">Corriente T</option><option value="3:A">Corriente neutro</option>
-                            </select></div>
-                        <div id="eventHistoryStatus" class="small text-muted my-2" role="status" aria-live="polite">Ultima semana</div>
+                        </div>
+                        <div class="eventHistoryToolbar">
+                        <div class="eventHistoryActions">
+                            <select id="eventHistoryLane" class="form-select form-select-sm eventHistoryLaneFilter" aria-label="Entrada de la linea temporal">
+                                <option value="all">Todas</option><option value="4:V">Red</option>
+                                <option value="0:V">Fase R</option><option value="1:V">Fase S</option><option value="2:V">Fase T</option><option value="3:V">Neutro</option>
+                            </select>
+                            <button class="btn btn-outline-secondary eventHistoryFilterAll" type="button" data-history-group="all" aria-pressed="true" title="Mostrar todos los tipos">Todos</button>
+                            <button class="btn btn-outline-secondary eventHistoryFilterAll" type="button" data-history-group="none" aria-pressed="false" title="Ocultar todos los tipos">Ninguno</button>
+                            <button id="eventHistoryLoad" class="btn btn-primary btn-sm" type="button" title="Analizar / actualizar" aria-label="Analizar / actualizar"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.8-4.2L13 11h8V3z"/></svg></button>
+                            <button id="eventHistoryStop" class="btn btn-outline-secondary btn-sm" type="button" disabled title="Detener analisis" aria-label="Detener analisis"><svg class="controlIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg></button>
+                        </div>
+                        <div class="eventHistoryFilters" aria-label="Tipos de registros">
+                            <div id="eventHistoryFilterPoints" role="group" aria-label="Eventos de linea"><button class="btn btn-outline-secondary eventHistoryFilterGroup" type="button" data-history-group="points" aria-pressed="false" title="Mostrar solo eventos de linea">Eventos</button></div>
+                            <div id="eventHistoryFilterStates" role="group" aria-label="Estados de linea"><button class="btn btn-outline-secondary eventHistoryFilterGroup" type="button" data-history-group="states" aria-pressed="false" title="Mostrar solo estados de linea">Estados</button></div>
+                        </div>
+                        </div>
+                        <div id="eventHistoryStatus" class="small text-muted my-1" role="status" aria-live="polite">Ultima semana</div>
                         <div id="eventHistoryCacheStatus" class="small text-muted"></div>
                         <progress id="eventHistoryProgress" class="eventHistoryProgress" max="1" value="0" aria-label="Progreso del analisis"></progress>
                         <div id="eventHistoryWarning" class="alert alert-warning alert-dismissible small py-2 d-none" role="status"><span id="eventHistoryWarningText"></span><button type="button" class="btn-close py-2" data-bs-dismiss="alert" aria-label="Cerrar aviso" title="Cerrar aviso"></button></div>
                         <div id="eventHistoryTimeline" class="eventHistoryTimeline" aria-label="Linea temporal por entrada"></div>
                         <div id="eventHistoryAxis" class="eventHistoryAxis small text-muted"></div>
-                        <div class="eventHistoryLegend small"><span>Normal registrado</span><span>Bajo / anormal</span><span>Sin tension / corte</span><span>Alto</span><span class="eventHistoryLegendPoint" style="--event-color:#c58b16">DIP</span><span class="eventHistoryLegendPoint" style="--event-color:#c94d83">Swell</span><span class="eventHistoryLegendPoint" style="--event-color:#16859b">Sobrecorriente</span><span class="eventHistoryLegendUnknown">Sin datos reconstruidos</span><span class="eventHistoryLegendPartial">Rayado: parcial o sin cierre</span></div>
-                        <div id="eventHistorySummary" class="small text-muted my-3"></div>
+                        <div class="eventHistoryLegend small"><span data-history-legend="normal">Normal registrado</span><span data-history-legend="low">Baja tensión</span><span data-history-legend="abnormal">Red anormal</span><span data-history-legend="outage">Sin tensión / corte</span><span data-history-legend="high">Alta tensión</span><span data-history-legend="current">Alta corriente</span><span class="eventHistoryLegendPoint" data-history-legend="dip" style="--event-color:#c58b16">DIP</span><span class="eventHistoryLegendPoint" data-history-legend="swell" style="--event-color:#c94d83">Swell</span><span class="eventHistoryLegendPoint" data-history-legend="pulse" style="--event-color:#16859b">Pico de corriente</span><span class="eventHistoryLegendUnknown">Sin datos reconstruidos</span><span class="eventHistoryLegendPartial">Rayado: parcial o sin cierre</span></div>
+                        <div id="eventHistorySummary" class="small text-muted my-1"></div>
                         <div id="eventHistoryNote" class="small text-muted mb-2"></div>
-                        <ul class="nav nav-tabs mb-3" role="tablist">
-                            <li class="nav-item" role="presentation"><button id="eventHistoryEvents-tab" class="nav-link active" data-bs-toggle="tab" data-bs-target="#eventHistoryEventsPane" type="button" role="tab" aria-selected="true" aria-controls="eventHistoryEventsPane">Eventos</button></li>
-                            <li class="nav-item" role="presentation"><button id="eventHistoryStats-tab" class="nav-link" data-bs-toggle="tab" data-bs-target="#eventHistoryStatsPane" type="button" role="tab" aria-selected="false" aria-controls="eventHistoryStatsPane">Estadísticas</button></li>
+                        <ul class="nav nav-tabs mb-1" role="tablist">
+                            <li class="nav-item" role="presentation"><button id="eventHistoryStats-tab" class="nav-link active" data-bs-toggle="tab" data-bs-target="#eventHistoryStatsPane" type="button" role="tab" aria-selected="true" aria-controls="eventHistoryStatsPane">Estadísticas</button></li>
+                            <li class="nav-item" role="presentation"><button id="eventHistoryEvents-tab" class="nav-link" data-bs-toggle="tab" data-bs-target="#eventHistoryEventsPane" type="button" role="tab" aria-selected="false" aria-controls="eventHistoryEventsPane">Lista</button></li>
                         </ul>
                         <div class="tab-content">
-                        <div id="eventHistoryEventsPane" class="tab-pane active" role="tabpanel" aria-labelledby="eventHistoryEvents-tab">
+                        <div id="eventHistoryEventsPane" class="tab-pane" role="tabpanel" aria-labelledby="eventHistoryEvents-tab">
                             <div id="eventHistoryDetail" class="eventHistoryDetail mb-3 d-none"></div>
                             <div class="table-responsive"><table class="table table-sm eventHistoryTable"><thead><tr><th>Inicio</th><th>Entrada</th><th>Condicion</th><th>Final</th><th>Duracion</th></tr></thead><tbody id="eventHistoryRows"></tbody></table></div>
                         </div>
-                        <section id="eventHistoryStatsPane" class="tab-pane eventStatistics" role="tabpanel" aria-labelledby="eventHistoryStats-tab">
-                            <h2 id="eventStatisticsTitle">Estadisticas</h2>
-                            <div id="eventStatisticsStatus" class="small text-muted mb-2" role="status"></div>
-                            <div class="eventStatisticsControls my-3">
+                        <section id="eventHistoryStatsPane" class="tab-pane active eventStatistics" role="tabpanel" aria-labelledby="eventHistoryStats-tab">
+                            <div class="eventStatisticsControls">
                                 <label>Agrupar por<select id="eventStatisticsUnit" class="form-select form-select-sm"><option value="auto">Automatico</option><option value="hour">Hora</option><option value="day">Dia</option><option value="week">Semana</option></select></label>
-                                <label>Entrada<select id="eventStatisticsSubject" class="form-select form-select-sm"><option value="4">Red</option><option value="0">Fase R</option><option value="1">Fase S</option><option value="2">Fase T</option><option value="3">Neutro-tierra / corriente neutro</option></select></label>
+                                <div class="eventStatisticsSubjects" role="group" aria-label="Entradas para estadísticas">
+                                    <button class="btn btn-outline-secondary" type="button" data-stat-subject="red" aria-pressed="false">Red</button>
+                                    <button class="btn btn-outline-secondary" type="button" data-stat-subjects="all" aria-pressed="true">Todas</button>
+                                    <button class="btn btn-outline-secondary" type="button" data-stat-subject="0" aria-label="Fase R" aria-pressed="true">R</button>
+                                    <button class="btn btn-outline-secondary" type="button" data-stat-subject="1" aria-label="Fase S" aria-pressed="true">S</button>
+                                    <button class="btn btn-outline-secondary" type="button" data-stat-subject="2" aria-label="Fase T" aria-pressed="true">T</button>
+                                    <button class="btn btn-outline-secondary" type="button" data-stat-subject="3" aria-label="Neutro" aria-pressed="true">N</button>
+                                </div>
                             </div>
-                            <ul class="nav nav-pills mb-3" role="tablist">
+                            <div id="eventStatisticsStatus" class="small text-muted my-1" role="status"></div>
+                            <ul class="nav nav-pills mb-1" role="tablist">
                                 <li class="nav-item" role="presentation"><button id="eventStatisticsCharts-tab" class="nav-link active" data-bs-toggle="tab" data-bs-target="#eventStatisticsChartsPane" type="button" role="tab" aria-selected="true" aria-controls="eventStatisticsChartsPane">Gráficos</button></li>
                                 <li class="nav-item" role="presentation"><button id="eventStatisticsTables-tab" class="nav-link" data-bs-toggle="tab" data-bs-target="#eventStatisticsTablesPane" type="button" role="tab" aria-selected="false" aria-controls="eventStatisticsTablesPane">Tablas</button></li>
                             </ul>
@@ -601,11 +669,75 @@ bootApp();
 				</div>
             </div>
         </div>
+        <div id="qualityPage" class="appPage container-fluid d-none" role="region" aria-label="Calidad de energía">
+            <div class="qualityWorkspace">
+            <div id="qualitySpectrum">
+            <div class="qualityToolbar" id="qualityChannels" aria-label="Seleccion de señales"></div>
+            <div class="qualityCaptureControls" id="qualityRanges" aria-label="Rangos de captura y escalas visuales">
+                <div class="qualityRangeGroup" id="qualityVoltageControls"><label for="scopeFftVoltage" title="Rango de captura automatico: cinco divisiones RMS, conversion a pico y 10% de margen">Tensión</label></div>
+                <div class="qualityRangeGroup" id="qualityCurrentControls"><label for="scopeFftCurrent" title="Rango de captura automatico: cinco divisiones RMS, conversion a pico y 10% de margen">Corriente</label></div>
+            </div>
+            <div id="qualityClipping" class="small text-danger d-none" role="status"></div>
+            </div>
+            <aside class="qualityReadings" aria-label="Mediciones y armonicos">
+            <details class="qualitySection qualityAnalysisDetails" id="qualityMeasurements" open>
+                <summary>Mediciones del equipo <small class="text-muted" id="qualityAdeStatus" role="status">Esperando mediciones...</small></summary>
+                <div class="table-responsive"><table class="table table-sm qualityTable"><thead><tr><th>Fase</th><th>Vrms</th><th>Irms</th><th>P</th><th>FP</th><th>THD V</th><th>THD I</th></tr></thead><tbody id="qualityAdeRows"></tbody></table></div>
+            </details>
+            <details class="qualitySection qualityAnalysisDetails" id="qualityAnalysis" open>
+                <summary>Resumen FFT <small class="text-muted">· THD-F H2–H40</small></summary>
+                <div class="table-responsive"><table class="table table-sm qualityTable"><thead><tr><th>Señal</th><th title="RMS de alterna calculado sobre la misma ventana que la FFT">RMS ventana AC</th><th>H1 RMS</th><th>H2–H40 RMS</th><th>THD-F</th><th>Dominante</th><th>Hz</th><th>Estado</th></tr></thead><tbody id="qualityAnalysisRows"><tr><td colspan="8">Esperando muestras...</td></tr></tbody></table></div>
+                <small class="text-muted">Las mediciones del equipo y la captura usan ventanas diferentes. THD excluye continua, ruido e interarmónicos; no es una medición certificada.</small>
+            </details>
+            <details class="qualitySection qualityAnalysisDetails" id="qualityHarmonics" aria-label="Armonicos de las señales seleccionadas" open>
+                <summary>Armónicos <small class="text-muted" id="qualityHarmonicStatus"></small></summary>
+                <div class="table-responsive qualityHarmonicScroll"><table class="table table-sm qualityTable qualityHarmonicTable"><thead id="qualityHarmonicHead"></thead><tbody id="qualityHarmonicRows"></tbody></table></div>
+            </details>
+            </aside>
+            </div>
+        </div>
         <div id="scopePage" class="appPage container-fluid d-none" role="region" aria-labelledby="navscope">
             <div class="row p-2" id="scopeUI">
+                <div id="scopeQualityNotice" class="small text-muted d-none">Adquisición controlada por Calidad de energía · ventana fija de 50 ms · ajustes bloqueados</div>
                 <div class="col-sm-12 col-md-9 p-1 pt-2 pb-2">
                     <div class="card p-1">
                         <div id="chartContainer" style="height: 600px"></div>
+                        <section class="scopeFft" aria-label="Espectro de frecuencia">
+                            <div class="scopeFftToolbar">
+                                <button type="button" id="scopeFftReset" class="btn btn-sm btn-outline-secondary" title="Restablecer zoom FFT" aria-label="Restablecer zoom FFT">↺</button>
+                                <button type="button" id="scopeFftExpand" class="btn btn-sm btn-outline-secondary" title="Ampliar FFT" aria-label="Ampliar FFT" aria-pressed="false">⛶</button>
+                                <select id="scopeFftRange" class="form-select form-select-sm" aria-label="Frecuencia maxima FFT">
+                                    <option value="500">0–500 Hz</option><option value="1000" selected>0–1 kHz</option>
+                                    <option value="2000">0–2 kHz</option><option value="4000">0–4 kHz</option>
+                                </select>
+                                <select id="scopeFftVoltage" class="form-select form-select-sm" aria-label="Escala de voltaje FFT" title="V RMS/div; el rango de captura se calcula automaticamente con margen."></select>
+                                <select id="scopeFftCurrent" class="form-select form-select-sm" aria-label="Escala de corriente FFT" title="A RMS/div; el rango de captura se calcula automaticamente con margen."></select>
+                            </div>
+                            <div id="scopeFftChart"></div>
+                            <div class="scopeFftFooter"><small id="scopeFftStatus" class="text-muted" role="status">Esperando muestras...</small><small id="qualityCaptureStatus" class="text-muted" role="status"></small></div>
+                        </section>
+                        <section class="qualitySection" aria-label="Referencia del equipo"><strong>Mediciones del equipo</strong><small id="scopeAdeStatus" class="text-muted ms-2"></small><div class="table-responsive"><table class="table table-sm qualityTable"><thead><tr><th>Fase</th><th>Vrms</th><th>Irms</th><th>P</th><th>FP</th></tr></thead><tbody id="scopeAdeRows"></tbody></table></div></section>
+                        <section class="scopeMetrics" aria-labelledby="scopeMetricsTitle">
+                            <div class="scopeMetricsHeader">
+                                <div>
+                                    <strong id="scopeMetricsTitle">Mediciones de ventana</strong>
+                                    <small id="scopeMetricsWindow" class="text-muted">Esperando muestras...</small>
+                                </div>
+                                <strong id="scopeMetricsTotal" class="scopeMetricsTotal">Potencia activa total: --</strong>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-sm scopeMetricsTable">
+                                    <thead><tr><th>Fase</th><th>Curvas</th><th title="Voltaje pico a pico">Vpp</th><th title="Voltaje RMS">Vrms</th><th title="Corriente pico a pico">Ipp</th><th title="Corriente RMS">Irms</th><th title="Potencia activa">P</th><th title="Potencia reactiva estimada">Q</th><th title="Potencia aparente">S</th><th title="Factor de potencia">FP</th><th title="Frecuencia">Hz</th></tr></thead>
+                                    <tbody id="scopeMetricsRows">
+                                        <tr><th>R</th><td colspan="10" class="text-muted">Esperando muestras...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="scopeMetricsFooter">
+                                <small>V/I en color: visible; gris: oculta; tenue: no disponible. Métricas sobre todas las señales de la ventana; Q es estimada.</small>
+                                <small id="scopeMetricsStatus" class="scopeMetricsStatus" role="status"></small>
+                            </div>
+                        </section>
                     </div>
                 </div>
 
@@ -730,10 +862,6 @@ bootApp();
                                 <div>
                                     <label class="label">Tiempo</label>
                                     <select class="form-select" aria-label="Tiempo" id="selectTimeDiv">
-                                        <option value="0.01">0.01ms/div</option>
-                                        <option value="0.1">0.1ms/div</option>
-                                        <option value="1">1ms/div</option>
-                                        <option value="2">2ms/div</option>
                                         <option value="5">5ms/div</option>
                                         <option selected value="10">10ms/div</option>
                                         <option value="20">20ms/div</option>
@@ -751,7 +879,7 @@ bootApp();
                             <div>
                                 <div class="mb-2 mt-1">
                                     <label for="rangeTrigger" class="w-25">Nivel</label>
-                                    <input type="range" id="rangeTrigger" min="-1000" max="1000" value="0" class="w-50" />
+                                    <input type="number" id="rangeTrigger" min="-1000" max="1000" step="any" value="0" class="form-control form-control-sm w-50" inputmode="decimal" aria-label="Nivel del trigger" />
                                     <label id="lblTrigger" class="">25ms</label>
                                 </div>
                             </div>

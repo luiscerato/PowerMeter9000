@@ -57,10 +57,12 @@ void sendJson(AsyncWebServerRequest* request, int code, const JsonWriter& json) 
     response->addHeader("Cache-Control", "no-store"); request->send(response);
 }
 
-// Publica una respuesta breve de error; request/code/error identifican la causa.
-void sendError(AsyncWebServerRequest* request, int code, const char* error) {
-    char buffer[112]; JsonWriter json(buffer, sizeof(buffer));
-    json.objBegin(); json.objAppendString("error", error); json.objEnd(); sendJson(request, code, json);
+// Publica error JSON; request/code/error definen respuesta y key es el campo rechazado si se conoce.
+void sendError(AsyncWebServerRequest* request, int code, const char* error, const char* key = nullptr) {
+    char buffer[256]; JsonWriter json(buffer, sizeof(buffer));
+    json.objBegin(); json.objAppendString("error", error);
+    if (key) json.objAppendString("key", key);
+    json.objEnd(); sendJson(request, code, json);
 }
 
 // Interpreta text como numero finito, sin aceptar espacios iniciales ni sufijos.
@@ -80,6 +82,7 @@ void appendSave(JsonWriter& json, const eventSettingsSnapshot& settings) {
 void sendConfig(AsyncWebServerRequest* request, const eventSettingsSnapshot& settings, const char* group) {
     char buffer[1024]; JsonWriter json(buffer, sizeof(buffer));
     json.objBegin(); json.objAppendUInt("rev", settings.revision); appendSave(json, settings);
+    json.objAppendBool("restartRequired", settings.restartRequired);
     const auto* bytes = reinterpret_cast<const uint8_t*>(&settings.config);
     for (const char* name : groups) {
         if (group && strcmp(group, name)) continue;
@@ -123,14 +126,14 @@ void postConfig(AsyncWebServerRequest* request, const eventSettingsSnapshot& cur
         }
         uint8_t fieldIndex = 0;
         for (; fieldIndex < sizeof(fields) / sizeof(fields[0]); ++fieldIndex) if (param->name() == fields[fieldIndex].key) break;
-        if (fieldIndex == sizeof(fields) / sizeof(fields[0])) { sendError(request, 400, "unknown_field"); return; }
-        if (seen & (1UL << fieldIndex)) { sendError(request, 400, "duplicate_field"); return; }
+        if (fieldIndex == sizeof(fields) / sizeof(fields[0])) { sendError(request, 400, "unknown_field", param->name().c_str()); return; }
+        if (seen & (1UL << fieldIndex)) { sendError(request, 400, "duplicate_field", fields[fieldIndex].key); return; }
         seen |= 1UL << fieldIndex;
         const auto& field = fields[fieldIndex]; double value = 0;
         if (!parseNumber(param->value(), value) || value < 0 || value > UINT32_MAX ||
             (field.type != fieldType::number && floor(value) != value) ||
             ((field.type == fieldType::toggle || field.type == fieldType::mask) && value > 1) ||
-            (field.type == fieldType::pre && value > UINT16_MAX)) { sendError(request, 400, "invalid_value"); return; }
+            (field.type == fieldType::pre && value > UINT16_MAX)) { sendError(request, 400, "invalid_value", field.key); return; }
         auto* dest = reinterpret_cast<uint8_t*>(&config) + field.offset;
         switch (field.type) {
             case fieldType::number: *reinterpret_cast<float*>(dest) = value; break;
@@ -141,6 +144,8 @@ void postConfig(AsyncWebServerRequest* request, const eventSettingsSnapshot& cur
         }
     }
     if (!seen) { sendError(request, 400, "fields_required"); return; }
+    const char* invalidKey = eventSettingsInvalidKey(config);
+    if (invalidKey) { sendError(request, 400, "invalid_config", invalidKey); return; }
     uint32_t next = 0;
     const auto result = eventSettingsQueue(config, uint32_t(revision), &next);
     if (result != eventQueueResult::accepted) {

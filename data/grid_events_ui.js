@@ -194,7 +194,8 @@ function decodeGridSettings(view) {
         overCurrent: value(52), currentHysteresis: view.getUint16(54, true) / 100,
         dipMs: view.getUint8(56) * 10, swellMs: view.getUint8(57) * 10, ocMs: view.getUint8(58) * 10, flags: view.getUint8(59),
         neutralHigh: value(60), neutralHysteresis: value(62), neutralMs: time(64), neutralRecoveryMs: time(66),
-        preMs: time(68), postMs: time(70), pages: view.getUint8(72), windowMs: time(74)};
+        preMs: time(68), postMs: time(70), pages: view.getUint8(72), windowMs: time(74),
+        resetReason: (view.getUint16(76, true) & 0xff00) === 0xb000 ? view.getUint16(76, true) & 255 : null};
 }
 
 // Lee los 156 bytes de contexto RMS; view contiene la pagina raiz con CRC validado.
@@ -282,16 +283,84 @@ function gridPreHistoryMissing(event) {
     return event.preSampleCount + 1 < expectedMs / 10 || -event.samples[0].relativeMs + 20 < expectedMs;
 }
 
+// Crea puntos visuales periodicos; samples conserva los originales y periodMs indica la cadencia nominal.
+function gridRegularSamples(samples, periodMs) {
+    let anchor = null, count = 0, previous = null;
+    return samples.map(sample => {
+        const valid = ["vr", "vs", "vt", "vn", "ir", "is", "it", "inn"].some(key => Number.isFinite(sample[key]));
+        if (!valid) { anchor = null; previous = null; return {...sample}; }
+        // Un hueco amplio o un separador inicia otro tramo; no comprimir datos ausentes.
+        if (anchor === null || previous !== null && sample.relativeMs - previous > periodMs * 3) {
+            anchor = sample.relativeMs; count = 0;
+        }
+        previous = sample.relativeMs;
+        return {...sample, relativeMs: anchor + count++ * periodMs};
+    });
+}
+
+// Prepara FAST nominal por transicion; event conserva muestras, referencias y frecuencia del contexto.
+function gridFastDisplaySamples(event) {
+    const frequency = event.snapshot?.frequency?.[0];
+    const period = frequency >= 55 && frequency <= 70 ? 1000 / 120 : 10;
+    const records = [{offsetMs: 0, states: event.states, previousDurationMs: event.previousDurationMs}, ...(event.transitions || [])];
+    const times = new Set();
+    for (const record of records) {
+        times.add(record.offsetMs);
+        if (record.states?.isPoint && record.previousDurationMs > 0)
+            times.add(record.offsetMs + record.previousDurationMs);
+    }
+    const valid = event.samples.filter(sample => Number.isFinite(sample.relativeMs) &&
+        ["vr", "vs", "vt", "vn", "ir", "is", "it", "inn"].some(key => Number.isFinite(sample[key])));
+    const anchors = [...times].filter(Number.isFinite).sort((a, b) => a - b).map(time => {
+        let closest = null;
+        for (const sample of valid)
+            if (!closest || Math.abs(sample.relativeMs - time) < Math.abs(closest.relativeMs - time)) closest = sample;
+        return closest && Math.abs(closest.relativeMs - time) <= period * 1.5 ? {time, raw: closest.relativeMs} : null;
+    }).filter(Boolean);
+    if (!anchors.length) return gridRegularSamples(event.samples, period);
+    const points = [], slots = new Map(), validSamples = new Set(valid);
+    let previous = null;
+    for (const sample of event.samples) {
+        if (!validSamples.has(sample)) { previous = null; continue; }
+        let anchor = anchors[0];
+        for (const candidate of anchors)
+            if (Math.abs(sample.relativeMs - candidate.raw) < Math.abs(sample.relativeMs - anchor.raw)) anchor = candidate;
+        const slot = Math.round((sample.relativeMs - anchor.raw) / period);
+        const at = anchor.time + slot * period, distance = Math.abs(sample.relativeMs - anchor.raw - slot * period);
+        // Las marcas guardadas solo ubican la lectura en una casilla nominal; no estiran su intervalo.
+        const key = anchor.time + ":" + slot;
+        const saved = slots.get(key);
+        if (saved) {
+            if (distance < saved.distance) { saved.sample = {...sample, relativeMs: at}; saved.distance = distance; }
+            continue;
+        }
+        // Cambiar la referencia de sincronismo no implica perder datos entre dos lecturas validas.
+        const entry = {sample: {...sample, relativeMs: at}, distance,
+            split: previous === null || sample.relativeMs - previous > period * 3};
+        points.push(entry); slots.set(key, entry);
+        previous = sample.relativeMs;
+    }
+    points.sort((a, b) => a.sample.relativeMs - b.sample.relativeMs);
+    const result = [];
+    for (const entry of points) {
+        const last = result[result.length - 1];
+        if (last && entry.split)
+            result.push({relativeMs: (last.relativeMs + entry.sample.relativeMs) / 2});
+        result.push(entry.sample);
+    }
+    return result;
+}
+
 // Presenta las gráficas Fast RMS y la secuencia de transiciones; event contiene la captura decodificada.
 function renderGridEvent(event) {
     const subject = gridRecordSubject(event.states.subject, event.states.pointType), previous = gridStateName(event.states.previous, event.states.subject), current = gridStateName(event.states.current, event.states.subject), when = event.estimatedTime ? "Hora estimada" : formatGridTime(event.timestamp), voltage = event.states.subject === 4 ? "" : " " + formatGridVoltage(event.previousVoltage, 2) + " → " + formatGridVoltage(event.currentVoltage, 2) + " V.", duration = event.startup ? "Duración previa no disponible" : "Estado previo durante " + formatGridDuration(event.previousDurationMs);
-    const startup = event.startup ? " Estado reconstruido al iniciar" + (gridStartupReason(event) ? " (" + gridStartupReason(event) + ")" : "") + "." : "";
+    const startup = event.startup ? " Registro de arranque; no implica un corte previo" + (gridStartupReason(event) ? " (" + gridStartupReason(event) + ")" : "") + "." : "";
     const partial = event.partial ? " Captura incompleta: " + event.invalidPages + " página(s) con CRC o cabecera inválidos." : "";
     const timing = event.timingEstimated ? " La escala temporal incluye intervalos estimados." : "";
     const description = event.states.isPoint ? gridPointName(event.states.pointType) + ". Duración observada: " + formatGridDuration(event.previousDurationMs) + (event.states.limited ? " (captura limitada)." : ".") : previous + " → " + current + ". " + duration + "." + (event.states.isCurrent ? voltage.replace(" V.", " A.") : voltage);
     const dropped = event.timeStatus & 64 ? " Se agotó el espacio de marcas: faltan entradas." : "";
     const synthetic = (event.timeStatus & 128 ? " Prueba artificial." : "") + (gridPreHistoryMissing(event) ? " Historial FAST anterior al disparo insuficiente." : "");
-    const first = event.samples[0], last = event.samples[event.samples.length - 1];
+    const displaySamples = gridFastDisplaySamples(event), first = displaySamples[0], last = displaySamples[displaySamples.length - 1];
     $("#gridEventSummary").text("Captura #" + event.id + " · " + when + " · " + event.samples.length + " muestras" + (first && last ? " · " + formatGridDuration(last.relativeMs - first.relativeMs) + " cubiertos" : ""));
     $("#gridEventTrigger").text("Disparador: " + subject + " · " + description);
     $("#gridEventWarnings").text((startup + partial + timing + dropped + synthetic).trim()).toggleClass("d-none", !(startup + partial + timing + dropped + synthetic).trim());
@@ -303,16 +372,22 @@ function renderGridEvent(event) {
     renderGridSettings(event.settings);
     const voltageSeries = [["R", "vr", "#d9534f"], ["S", "vs", "#5cb85c"], ["T", "vt", "#337ab7"]];
     if (event.hasNeutral) voltageSeries.push(["Neutro-tierra", "vn", "#00838f"]);
+    if (typeof appPhaseColor === 'function') for (const signal of voltageSeries) signal[2] = appPhaseColor(signal[1].slice(1));
     if (gridEventsViewer.voltageChart) gridEventsViewer.voltageChart.destroy();
     if (gridEventsViewer.currentChart) gridEventsViewer.currentChart.destroy();
-    gridEventsViewer.voltageChart = createGridChart("gridEventVoltageChart", "Voltaje RMS", "V", voltageSeries, event.samples);
-    gridEventsViewer.currentChart = createGridChart("gridEventCurrentChart", "Corriente RMS", "A", [["R", "ir", "#d9534f"], ["S", "is", "#5cb85c"], ["T", "it", "#337ab7"], ["N", "inn", "#6c757d"]], event.samples);
+    gridEventsViewer.voltageChart = createGridChart("gridEventVoltageChart", "Voltaje RMS", "V", voltageSeries, displaySamples);
+    gridEventsViewer.currentChart = createGridChart("gridEventCurrentChart", "Corriente RMS", "A", [["R", "ir", "#d9534f"], ["S", "is", "#5cb85c"], ["T", "it", "#337ab7"], ["N", "inn", "#6c757d"]], displaySamples);
     setGridChartNavigationMode(gridEventsViewer.panMode);
     refreshGridCharts();
 }
 
 // Describe el motivo de arranque codificado en event.timeStatus.
 function gridStartupReason(event) {
+    if (event.startup && event.settings?.resetReason != null) {
+        const reasons = {0: "causa desconocida", 1: "encendido", 2: "reset externo", 3: "reinicio por software", 4: "fallo / panic",
+            5: "watchdog de interrupciones", 6: "watchdog de tarea", 7: "watchdog", 8: "salida de reposo", 9: "brownout", 10: "reset SDIO"};
+        return reasons[event.settings.resetReason] || "reset " + event.settings.resetReason;
+    }
     const flags = event.timeStatus;
     if (flags & 4) return "brownout";
     if (flags & 2) return "encendido";
@@ -434,9 +509,16 @@ function resetGridChartRange() {
 
 // Construye un gráfico Fast RMS; elementId identifica el contenedor y series define nombre, campo y color.
 function createGridChart(elementId, title, unit, series, samples) {
-    const data = series.map(([name, key, color]) => ({type: "line", name: name, showInLegend: true, markerSize: 0, color: color, dataPoints: samples.map((sample) => ({x: sample.relativeMs, y: sample[key]}))}));
+    const data = series.map(([name, key, color]) => ({type: "line", name: name, appPhase:key === 'inn' ? 'N' : key.slice(1).toUpperCase(), appVariant:unit === 'A' ? .22 : 0,
+        showInLegend: true, markerSize: 0, color: typeof appPhaseColor === 'function' ? appPhaseColor(key === 'inn' ? 'N' : key.slice(1),unit === 'A' ? .22 : 0) : color, connectNullData: false, dataPoints: samples.map((sample) => ({x: sample.relativeMs, y: sample[key] ?? null}))}));
     let chart;
-    chart = new CanvasJS.Chart(elementId, {animationEnabled: false, zoomEnabled: true, axisX: {title: "Tiempo relativo (ms)", stripLines: gridEventsViewer.showMarkers && samples.length ? gridRecordMarkers(gridEventsViewer.records, null, samples[0].relativeMs, samples[samples.length - 1].relativeMs) : []}, axisY: {title: title, suffix: " " + unit, includeZero: false, gridDashType: "dot"}, legend: {cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(chart), data: data});
+    chart = new CanvasJS.Chart(elementId, {animationEnabled: false, zoomEnabled: true,
+        toolTip: chartTooltip.options({title: "FAST RMS #" + gridEventsViewer.selectedId, unit,
+            markers: () => gridEventsViewer.records.map(record => ({at: record.offsetMs, priority: record.states.subject === 4 ? 0 : 1,
+                label: gridRecordSubject(record.states.subject, record.states.pointType) + " · " + (record.states.isPoint ? gridPointName(record.states.pointType) :
+                    gridStateName(record.states.previous, record.states.subject) + " → " + gridStateName(record.states.current, record.states.subject)),
+                durationMs: record.states.isPoint ? record.previousDurationMs : 0}))}),
+        axisX: {title: "Tiempo relativo (ms)", stripLines: gridEventsViewer.showMarkers && samples.length ? gridRecordMarkers(gridEventsViewer.records, null, samples[0].relativeMs, samples[samples.length - 1].relativeMs) : []}, axisY: {title: title, suffix: " " + unit, includeZero: false, gridDashType: "dot"}, legend: {cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(chart), data: data});
     chart.zoomEnabled = !gridEventsViewer.panMode;
     chart.panEnabled = gridEventsViewer.panMode;
     return chart;

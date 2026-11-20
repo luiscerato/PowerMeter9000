@@ -11,6 +11,9 @@ static_assert(GridEventFormat::rootSampleOffset + GridEventFormat::preTriggerSam
 static_assert(GridEventFormat::continuationSampleOffset + GridEventFormat::continuationSamples * sizeof(fastRMSData_t) <= GridEventFormat::pageSize, "Continuation samples overflow");
 
 struct GridEventStoreMetrics {
+	uint32_t mountReadyMs = 0;
+	uint32_t writeReadyMs = 0;
+	uint32_t firstObserveMs = 0;
 	uint32_t recoveredEvents = 0;
 	uint32_t acceptedEvents = 0;
 	uint32_t discardedCandidates = 0;
@@ -68,6 +71,9 @@ public:
 
 	// Copia metricas del Store; metrics recibe la instantanea actual.
 	void getMetrics(GridEventStoreMetrics& metrics) const;
+
+	// Informa count estados descartados al llenarse la cola temprana y marca la captura parcial.
+	void recordDroppedStates(uint32_t count);
 
 	// Escanea las cabeceras y devuelve el catalogo actual; catalog recibe el resumen.
 	bool getCatalog(GridEventCatalog& catalog);
@@ -251,6 +257,9 @@ private:
 	// Recupera el mayor eventId y la primera pagina disponible sin depender de un journal mutable.
 	bool recoverCursor();
 
+	// Prepara el primer destino de escritura, esperando solo un borrado NAND pendiente; sin parametros.
+	bool prepareStartupWrite();
+
 	// Lee solo la cabecera raiz de page; valid y erased describen su estado.
 	bool readHeader(uint16_t block, uint8_t page, GridEventFormat::ListHeader& header, bool& valid, bool& erased);
 
@@ -272,6 +281,9 @@ private:
 // Expone el Store Grid montado para la adquisicion sin acoplarla a StorageManager.
 void gridEventStoreObserve(const phaseState& r, const phaseState& s, const phaseState& t, gridCondition overall,
 	float vr, float vs, float vt, const meterValues& meter, const gridSettings& settings, uint32_t sampleMs);
+
+// Indica si el Store ya recupero y preparo su primer destino NAND; sin parametros.
+bool gridEventStoreReadyForCapture();
 
 // Entrega una muestra Fast al Store Grid montado.
 void gridEventStorePushFastSample(const fastRMSData_t& sample, uint32_t sampleMs);

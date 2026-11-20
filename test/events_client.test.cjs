@@ -16,9 +16,13 @@ function client(mode='ok') {
             if(path==='/events/config'&&options.method==='POST') {
                 if(mode==='conflict')return response(409,{error:'rev_conflict'});
                 revision=2;seq=2;
+                for(const [path,value] of options.body)if(path!=='rev') {
+                    const [group,key]=path.split('.');config[group][key]=Number(value);
+                }
+                if(mode==='mismatch')config.rec.dip=1;
                 return response(202,{ok:true,rev:2});
             }
-            if(path==='/events/config')return response(200,{...config,rev:revision===2&&polled>1&&mode==='ok'?2:1});
+            if(path==='/events/config')return response(200,{...config,rev:revision===2&&polled>1&&['ok','mismatch'].includes(mode)?2:1});
             if(path==='/events/status') {
                 if(new URL(url).searchParams.get('since')===String(seq)&&mode==='unchanged')return response(204,null);
                 ++polled;
@@ -43,6 +47,12 @@ test('fallo NVS se informa sin declararlo guardado ni volver a escribir',async()
     await assert.rejects(context.saveEventConfig({'wave.pre':288}),/configuración anterior/);
     assert.equal(calls.filter(call=>call.method==='POST').length,1);
     await assert.rejects(context.saveEventConfig({'wave.pre':288}),/Recargue/);
+    assert.equal(calls.filter(call=>call.method==='POST').length,1);
+});
+
+test('revision confirmada pero valores distintos detiene el guardado',async()=>{
+    const {context,calls}=client('mismatch');await context.readEventsConfig();
+    await assert.rejects(context.saveEventConfig({'rec.dip':0}),/No coincide lo guardado: rec.dip/);
     assert.equal(calls.filter(call=>call.method==='POST').length,1);
 });
 test('revision vieja exige recargar antes de otro intento',async()=>{

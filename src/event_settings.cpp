@@ -3,6 +3,7 @@
 #include "storage/storage_manager.h"
 #include "storage/wave_event_format.h"
 #include <Preferences.h>
+#include <string.h>
 extern StorageManager storageManager;
 
 namespace {
@@ -17,6 +18,7 @@ portMUX_TYPE settingsMutex = portMUX_INITIALIZER_UNLOCKED;
 eventSettingsSnapshot current;
 eventSettingsData pending;
 uint32_t lastRevision = 1;
+uint16_t bootPreMs = maxWavePreMs;
 }
 
 // Comprueba data sin modificarla ni persistir valores fuera de rango.
@@ -27,7 +29,37 @@ bool validEventSettings(const eventSettingsData& data) {
         point.dipConfirmMs == limitEventConfirmMs(point.dipConfirmMs) &&
         point.swellConfirmMs == limitEventConfirmMs(point.swellConfirmMs) &&
         point.overCurrentConfirmMs == limitEventConfirmMs(point.overCurrentConfirmMs) &&
-        data.preMs >= 48 && data.preMs <= 288 && data.preMs % 48 == 0 && data.waveMask <= 7;
+        data.preMs >= 48 && data.preMs <= maxWavePreMs && data.preMs % 48 == 0 && data.waveMask <= 7;
+}
+
+// Identifica el primer campo que invalida la configuración completa; data contiene el candidato recibido.
+const char* eventSettingsInvalidKey(const eventSettingsData& data) {
+    if (validEventSettings(data)) return nullptr;
+    const auto& grid = data.grid;
+    const auto& point = data.points;
+    const char* lowKeys[] = {"volt.lowR", "volt.lowS", "volt.lowT"};
+    const char* highKeys[] = {"volt.highR", "volt.highS", "volt.highT"};
+    if (!(grid.noVoltage >= 1 && grid.noVoltage <= 100)) return "volt.loss";
+    if (!(grid.hysteresis >= 0 && grid.hysteresis <= 50)) return "volt.hyst";
+    for (size_t i = 0; i < 3; ++i) {
+        if (!(grid.phases[i].lowVoltage > grid.noVoltage + grid.hysteresis)) return lowKeys[i];
+        if (!(grid.phases[i].highVoltage > grid.phases[i].lowVoltage + 2 * grid.hysteresis && grid.phases[i].highVoltage <= 500)) return highKeys[i];
+    }
+    if (grid.lossConfirmMs < 20 || grid.lossConfirmMs > 2000) return "time.loss";
+    if (grid.voltageConfirmMs != eventPointLimitMs() || grid.capturePages != eventCapturePages) return "time.loss";
+    if (grid.recoveryConfirmMs < 20 || grid.recoveryConfirmMs > 1000) return "time.back";
+    if (!grid.neutral.enabled || !(grid.neutral.highVoltage >= 0.025f && grid.neutral.highVoltage <= 409.55f)) return "neut.high";
+    if (!(grid.neutral.hysteresis >= 0 && grid.neutral.hysteresis < grid.neutral.highVoltage)) return "neut.hyst";
+    if (grid.neutral.confirmMs < 20 || grid.neutral.confirmMs > 2000) return "neut.wait";
+    if (grid.neutral.recoveryMs < 20 || grid.neutral.recoveryMs > 1000) return "neut.back";
+    if (!isfinite(point.overCurrent) || point.overCurrent <= 0 || point.overCurrent > 163.82f) return "curr.high";
+    if (!isfinite(point.currentHysteresis) || point.currentHysteresis < 0 || point.currentHysteresis >= point.overCurrent) return "curr.hyst";
+    if (point.dipConfirmMs != limitEventConfirmMs(point.dipConfirmMs)) return "time.dip";
+    if (point.swellConfirmMs != limitEventConfirmMs(point.swellConfirmMs)) return "time.swell";
+    if (point.overCurrentConfirmMs != limitEventConfirmMs(point.overCurrentConfirmMs)) return "time.oc";
+    if (data.preMs < 48 || data.preMs > maxWavePreMs || data.preMs % 48) return "wave.pre";
+    if (data.waveMask > 7) return "wave.dip";
+    return "config";
 }
 
 // Recupera ajustes antiguos en dest solo durante la migracion inicial, sin cambiarlos en NVS.
@@ -50,9 +82,9 @@ static void loadPreviousEventSettings(eventSettingsData& dest) {
         if (!validEventSettings(dest)) point = eventCaptureConfig{};
     }
     if (prefs.begin("wave", true)) {
-        dest.preMs = prefs.getUShort("preMs", 192); dest.waveEnabled = prefs.getBool("saveEnabled", true);
+        dest.preMs = prefs.getUShort("preMs", 96); dest.waveEnabled = prefs.getBool("saveEnabled", true);
         dest.waveMask = prefs.getUChar("pointMask", 7) & 7U; prefs.end();
-        if (dest.preMs < 48 || dest.preMs > 288 || dest.preMs % 48) dest.preMs = 192;
+        if (dest.preMs < 48 || dest.preMs > maxWavePreMs || dest.preMs % 48) dest.preMs = maxWavePreMs;
     }
 }
 
@@ -70,11 +102,14 @@ void eventSettingsBegin() {
     if (!found) { record = settingsRecord{}; loadPreviousEventSettings(record.config); }
     current.config = record.config; current.revision = record.revision;
     lastRevision = record.revision;
+    bootPreMs = record.config.preMs;
 }
 
 // Copia dest bajo una seccion critica breve; no abre Preferences.
 void eventSettingsGet(eventSettingsSnapshot& dest) {
-    portENTER_CRITICAL(&settingsMutex); dest = current; portEXIT_CRITICAL(&settingsMutex);
+    portENTER_CRITICAL(&settingsMutex);
+    dest = current; dest.restartRequired = current.config.preMs != bootPreMs;
+    portEXIT_CRITICAL(&settingsMutex);
 }
 
 // Reserva un cambio completo data con control optimista de revision.
@@ -107,7 +142,10 @@ void eventSettingsPoll() {
     record.crc = waveEventFormat::crc32(&record, offsetof(settingsRecord, crc));
     Preferences prefs;
     const bool opened = prefs.begin("events", false);
-    const bool saved = opened && prefs.putBytes("cfg", &record, sizeof(record)) == sizeof(record);
+    settingsRecord stored{};
+    const bool written = opened && prefs.putBytes("cfg", &record, sizeof(record)) == sizeof(record);
+    const bool saved = written && prefs.getBytes("cfg", &stored, sizeof(stored)) == sizeof(stored) &&
+        memcmp(&record, &stored, sizeof(record)) == 0;
     if (opened) prefs.end();
     if (saved) {
         meterQueueEventSettings(record.config.grid, record.config.points);

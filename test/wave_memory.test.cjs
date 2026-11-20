@@ -18,6 +18,7 @@ assert.match(assembly,/\bl32i(?:\.n)?\b/); assert.match(assembly,/\bs32i(?:\.n)?
 assert.doesNotMatch(assembly,/\b(?:l8ui|s8i|l16ui|s16i|lsi|ssi)\b|memcpy/);
 assert.match(source,/MALLOC_CAP_EXEC \| MALLOC_CAP_32BIT/);
 assert.doesNotMatch(source,/ESP\.getFreeHeap\(\)|reinterpret_cast<packetHeader\*>\(item\./);
-assert.match(source,/copyWaveWords\(pageBuffer, item.words \+ page \* 512, 2048\)/);
-assert.match(source,/packetIndex \* 2 \+ page, pageBuffer, 2048/);
+assert.match(source,/copyWaveWords\(pageBuffer, header, sizeof\(\*header\)\)/);
+assert.match(source,/copyWaveWords\(pageBuffer \+ sizeof\(\*header\), item.words, pagePayloadBytes\)/);
+assert.match(source,/capture\.firstPage \+ packetIndex, pageBuffer, pageBytes/);
 console.log('PASS: copia real solo con L32I/S32I, IRAM sin accesos byte/float y pagina NAND en DRAM.');

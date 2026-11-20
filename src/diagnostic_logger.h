@@ -6,6 +6,7 @@
 #include <freertos/semphr.h>
 #include <freertos/stream_buffer.h>
 #include <freertos/task.h>
+#include <stdarg.h>
 
 enum class DiagnosticLevel : uint8_t { none, error, warn, info, verbose, debug };
 
@@ -13,6 +14,11 @@ namespace DiagnosticModule {
 constexpr uint32_t logger = 1000;
 constexpr uint32_t main = 1001;
 constexpr uint32_t storage = 1002;
+constexpr uint32_t wifi = 1003;
+constexpr uint32_t mqtt = 1004;
+constexpr uint32_t tcp = 1005;
+constexpr uint32_t health = 1006;
+constexpr uint8_t count = 7;
 }
 
 namespace DiagnosticFlags {
@@ -49,13 +55,14 @@ struct DiagnosticLoggerMetrics {
 	uint32_t serialDrops = 0;
 	uint8_t queueHighWater = 0;
 	uint8_t queueUsed = 0;
+	uint16_t stackFreeWords = 0;
 };
 
 struct DiagnosticLoggerConfig {
 	DiagnosticLevel globalLevel = DiagnosticLevel::info;
 	bool serialEnabled = true;
 	bool nandEnabled = true;
-	uint8_t moduleLevels[3] = { 0xFF, 0xFF, 0xFF };
+	uint8_t moduleLevels[DiagnosticModule::count] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 };
 
 class DiagnosticStore;
@@ -66,7 +73,9 @@ public:
 	static constexpr uint8_t queueLength = 32;
 	static constexpr uint8_t textPerChunk = 80;
 	static constexpr uint8_t maxParts = 4;
-	static constexpr uint8_t recentChunkCount = 64;
+	// La NAND conserva el historial completo; RAM solo necesita una ventana reciente.
+	static constexpr uint8_t recentChunkCount = 16;
+	static constexpr uint16_t taskStackWords = 3072;
 
 	// Crea la cola y carga opciones; sin parametros.
 	bool begin();
@@ -98,11 +107,18 @@ public:
 	// Formatea y envia fragmentos; moduleId, level, sourceLine y format describen el mensaje.
 	void log(uint32_t moduleId, DiagnosticLevel level, uint16_t sourceLine, const char* format, ...);
 
+	// Encola moduleId/level/sourceLine/format esperando como maximo timeoutMs; no llamar desde ISR ni MeterTask.
+	bool logWait(uint32_t moduleId, DiagnosticLevel level, uint16_t sourceLine, uint32_t timeoutMs,
+		const char* format, ...);
+
 	// Envia al UART solo los bytes disponibles; llamar desde loop.
 	void pollSerial();
 
 	// Copia contadores actuales en metrics.
 	void getMetrics(DiagnosticLoggerMetrics& metrics) const;
+
+	// Devuelve palabras libres minimas de la pila del consumidor; sin parametros.
+	uint16_t getStackFreeWords() const;
 
 	// Copia un tramo por after o before; devuelve el rango reciente y si el cursor quedo atras.
 	uint8_t getRecentChunks(uint32_t after, uint32_t before, DiagnosticRecentChunk* output, uint8_t capacity,
@@ -130,14 +146,15 @@ public:
 	static uint8_t getModuleCount();
 
 private:
-	static constexpr uint16_t serialBufferSize = 1024;
-	static constexpr uint8_t moduleCount = 3;
+	static constexpr uint16_t serialBufferSize = 512;
+	static constexpr uint8_t moduleCount = DiagnosticModule::count;
 	static constexpr uint8_t inheritLevel = 0xFF;
+	static constexpr size_t queueDataBytes = queueLength * sizeof(DiagnosticChunk);
 	StaticQueue_t queueControl;
-	uint8_t* queueData = nullptr;
+	alignas(4) uint8_t queueData[queueDataBytes] = {};
 	QueueHandle_t queue = nullptr;
 	StaticStreamBuffer_t serialControl;
-	uint8_t* serialData = nullptr;
+	alignas(4) uint8_t serialData[serialBufferSize + 1] = {};
 	StreamBufferHandle_t serialBuffer = nullptr;
 	TaskHandle_t task = nullptr;
 	volatile bool formatTaskRunning = false;
@@ -145,7 +162,8 @@ private:
 	SemaphoreHandle_t storeAccess = nullptr;
 	DiagnosticStore* store = nullptr;
 	uint8_t globalLevel = uint8_t(DiagnosticLevel::info);
-	uint8_t moduleLevels[moduleCount] = { inheritLevel, inheritLevel, inheritLevel };
+	uint8_t moduleLevels[moduleCount] = { inheritLevel, inheritLevel, inheritLevel, inheritLevel,
+		inheritLevel, inheritLevel, inheritLevel };
 	bool serialOutput = true;
 	bool nandOutput = true;
 	mutable portMUX_TYPE stateMutex = portMUX_INITIALIZER_UNLOCKED;
@@ -179,6 +197,10 @@ private:
 
 	// Acumula count fragmentos perdidos sin producir otro log.
 	void recordQueueLoss(uint32_t count);
+
+	// Formatea y encola un mensaje usando waitTicks por fragmento; args contiene sus parametros.
+	bool enqueueMessage(uint32_t moduleId, DiagnosticLevel level, uint16_t sourceLine,
+		const char* format, va_list args, TickType_t waitTicks);
 };
 
 extern DiagnosticLogger diagnosticLogger;
@@ -187,6 +209,12 @@ extern DiagnosticLogger diagnosticLogger;
 	const uint32_t diagnosticModuleId = (moduleId); \
 	if (diagnosticLogger.isEnabled(diagnosticModuleId, (logLevel))) \
 		diagnosticLogger.log(diagnosticModuleId, (logLevel), __LINE__, __VA_ARGS__); \
+} while (false)
+
+#define DIAG_LOG_WAIT(moduleId, logLevel, timeoutMs, ...) do { \
+	const uint32_t diagnosticModuleId = (moduleId); \
+	if (diagnosticLogger.isEnabled(diagnosticModuleId, (logLevel))) \
+		diagnosticLogger.logWait(diagnosticModuleId, (logLevel), __LINE__, (timeoutMs), __VA_ARGS__); \
 } while (false)
 
 #define DIAG_ERROR(moduleId, ...) DIAG_LOG(moduleId, DiagnosticLevel::error, __VA_ARGS__)

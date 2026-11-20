@@ -51,8 +51,8 @@ function initScopeUI() {
 
     //Trigger
     $("#rangeTrigger").change(() => {
-        let value = parseInt($("#rangeTrigger")[0].value);
-        Scope.setOptions({triggerLevel: value});
+        let value = parseFloat($("#rangeTrigger")[0].value);
+        if (Number.isFinite(value)) Scope.setOptions({triggerLevel: value});
         updateTrigger();
     });
     $("#selectTriggerCh").change(() => {
@@ -77,7 +77,8 @@ function initScopeUI() {
         else if (status.state == "connecting") $("#btnStartStop").text("Conectando");
         else $("#btnStartStop").text("Iniciar");
 
-        if (status.state == "ready") $("#lblSpeed").text((Scope.bandWidth / 1024).toFixed(2) + "kb/s");
+        if (status.state == "ready" && !Scope.Data.configSynced) $("#lblSpeed").text("Sincronizando...");
+        else if (status.state == "ready") $("#lblSpeed").text((Scope.bandWidth / 1024).toFixed(2) + "kb/s");
         else $("#lblSpeed").text("");
     }, 500);
 }
@@ -87,6 +88,9 @@ function initScopeChart() {
     let ws = board.IP + "/ws";
     Scope.stop();
     Scope.begin("chartContainer", board.getWebSocketURL(ws), "scope");
+    ScopeFft.begin("scopeFftChart");
+    Scope.start();
+    updateUI();
 }
 
 //Actualizar todos los elementos de la UI según el estado del  osciloscopio
@@ -95,10 +99,13 @@ function initScopeChart() {
 //  Escalas
 //  Trigger
 function updateUI() {
+    $("#scopeUI input, #scopeUI select").prop("disabled", !Scope.Data.configSynced || Boolean(Scope.qualityLocked));
+    $("#scopeQualityNotice").toggleClass("d-none", !Scope.qualityLocked);
     updateScales();
     updateSwitchsChannels();
     updateBtnsChannels();
     updateTrigger();
+    if (typeof powerQuality !== "undefined") powerQuality.syncControls();
 }
 
 function onBtnsChannels(ch) {
@@ -161,9 +168,25 @@ function updateSwitchsChannels() {
 
 function updateScales() {
     let scales = Scope.getDivScales();
-    $("#selectVoltage").val(scales.Voltage);
-    $("#selectCurrent").val(scales.Current);
-    $("#selectTimeDiv").val(scales.Time);
+    setScopeScaleValue("#selectVoltage", scales.Voltage, "V/div");
+    setScopeScaleValue("#selectCurrent", scales.Current, "A/div");
+    setScopeScaleValue("#selectTimeDiv", scales.Time, "ms/div");
+}
+
+// Selecciona el valor del ESP o agrega una opcion exacta si no existe en la lista.
+// selector: select HTML. value: valor remoto. unit: unidad para mostrar en la opcion.
+function setScopeScaleValue(selector, value, unit) {
+    const select = $(selector);
+    select.find("option[data-remote-scale]").remove();
+    const tolerance = Math.max(0.000001, Math.abs(value) * 0.000001);
+    const match = select.find("option").toArray().find((option) => Math.abs(Number(option.value) - value) <= tolerance);
+    if (match) {
+        select.val(match.value);
+        return;
+    }
+    const option = new Option(`${value} ${unit}`, String(value));
+    option.dataset.remoteScale = "true";
+    select.append(option).val(option.value);
 }
 
 function updateTrigger() {
@@ -179,7 +202,7 @@ function updateTrigger() {
     $("#rangeTrigger").val(info.Value);
     $("#rangeTrigger").prop("min", info.minValue);
     $("#rangeTrigger").prop("max", info.maxValue);
-    $("#lblTrigger").text(`${info.Value.toFixed(3)}${info.unit}`);
+    $("#lblTrigger").text(info.unit);
 
-    $("#radioTriggerEdge").val(info.Edge);
+    $(`input[name='radioTriggerEdge'][value='${info.Edge}']`).prop("checked", true);
 }

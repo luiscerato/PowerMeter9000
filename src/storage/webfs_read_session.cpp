@@ -8,6 +8,11 @@ bool WebFsReadSession::begin(WebFsStore& store, const WebFsFile& file)
 {
 	if (active || taskHandle || file.bank == WebFsBank::none || !file.entry.storedSize ||
 		file.entry.dataOffset % WebFsFormat::pageSize) return false;
+	// Reserva buffers y pila solo cuando queda margen suficiente para no presionar AsyncTCP.
+	if (!memoryHasRoom(2048, bufferCount * WebFsFormat::pageSize + 12 * 1024)) {
+		memoryReportState("WebFS download deferred", bufferCount * WebFsFormat::pageSize);
+		return false;
+	}
 	releaseBuffers();
 	freeQueue = xQueueCreateStatic(bufferCount, sizeof(uint8_t), freeQueueData, &freeQueueStorage);
 	readyQueue = xQueueCreateStatic(bufferCount, sizeof(uint8_t), readyQueueData, &readyQueueStorage);

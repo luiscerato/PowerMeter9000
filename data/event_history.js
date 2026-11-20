@@ -1,4 +1,78 @@
-const eventHistory = {captures: [], failures: [], controller: null, run: 0, loaded: false, selected: null, range: null, result: null, periodUnit: "week", readQueue: Promise.resolve()};
+const eventHistory = {captures: [], failures: [], controller: null, run: 0, loaded: false, selected: null, range: null, result: null, periodUnit: "week", readQueue: Promise.resolve(), lane: "all"};
+const eventHistoryTypes = [
+    {key: "dip", label: "DIP", group: "points"}, {key: "swell", label: "Swell", group: "points"},
+    {key: "pulse", label: "Pico I", group: "points"}, {key: "outage", label: "Corte", group: "states"},
+    {key: "low", label: "Baja V", group: "states"}, {key: "high", label: "Alta V / N", group: "states"},
+    {key: "current", label: "Alta I", group: "states"}, {key: "abnormal", label: "Red anormal", group: "states"}
+];
+eventHistory.types = new Set(eventHistoryTypes.map(type => type.key));
+
+// Identifica el tipo de item reconstruido; normalidad y estados desconocidos devuelven null.
+function eventHistoryType(item) {
+    if (item.point) return ({1: "dip", 2: "swell", 3: "pulse"})[item.point];
+    if (item.current) return item.state === 5 ? "current" : null;
+    return (item.subject === 4 ? {2: "abnormal", 3: "outage"} : {2: "low", 3: "high", 4: "outage"})[item.state];
+}
+
+// Devuelve los tipos compatibles con la entrada de la linea temporal; no recibe parametros.
+function eventHistoryAvailableTypes() {
+    if (eventHistory.lane === "all") return eventHistoryTypes;
+    const subject = Number(eventHistory.lane.split(":")[0]);
+    return eventHistoryTypes.filter(type => subject === 4 ?
+        ["outage", "abnormal"].includes(type.key) : type.key !== "abnormal");
+}
+
+// Cambia la entrada de la linea temporal; lane es una fase, Red o "all".
+function selectEventHistoryLane(lane) {
+    eventHistory.lane = lane;
+    $("#eventHistoryLane").val(lane);
+    updateEventHistoryTypeControls();
+    renderEventHistory();
+}
+
+// Resume los grupos visibles a partir de los tipos seleccionados; no recibe parametros.
+function eventHistoryKind() {
+    const available = eventHistoryAvailableTypes();
+    const states = available.some(type => type.group === "states" && eventHistory.types.has(type.key));
+    const points = available.some(type => type.group === "points" && eventHistory.types.has(type.key));
+    return states ? points ? "all" : "states" : points ? "points" : "none";
+}
+
+// Sincroniza botones de tipos y grupos con la entrada seleccionada; no recibe parametros.
+function updateEventHistoryTypeControls() {
+    const available = eventHistoryAvailableTypes(), availableKeys = new Set(available.map(type => type.key));
+    $("[data-history-type]").each(function () {
+        const key = this.dataset.historyType;
+        $(this).toggle(availableKeys.has(key)).attr("aria-pressed", String(eventHistory.types.has(key)));
+    });
+    for (const group of ["points", "states"]) {
+        const keys = available.filter(type => type.group === group).map(type => type.key);
+        const target = $("#eventHistoryFilter" + (group === "points" ? "Points" : "States"));
+        target.toggle(!!keys.length);
+        target.find("[data-history-group]").toggle(!!keys.length).attr("aria-pressed", String(keys.length > 0 && keys.every(key => eventHistory.types.has(key))));
+    }
+    const all = available.map(type => type.key), selected = all.filter(key => eventHistory.types.has(key));
+    $("[data-history-group='all']").attr("aria-pressed", String(all.length > 0 && selected.length === all.length));
+    $("[data-history-group='none']").attr("aria-pressed", String(selected.length === 0));
+}
+
+// Cambia filtros; states/points son grupos exclusivos y key alterna un tipo individual.
+function selectEventHistoryTypes(group, key) {
+    const available = eventHistoryAvailableTypes();
+    if (key && available.some(type => type.key === key)) {
+        if (eventHistory.types.has(key)) eventHistory.types.delete(key);
+        else eventHistory.types.add(key);
+    } else {
+        const keys = available.filter(type => group === "all" || group === "none" || type.group === group).map(type => type.key);
+        if (group === "states" || group === "points") for (const type of available) eventHistory.types.delete(type.key);
+        for (const type of keys) {
+            if (group === "none") eventHistory.types.delete(type);
+            else eventHistory.types.add(type);
+        }
+    }
+    updateEventHistoryTypeControls();
+    renderEventHistory();
+}
 
 // Reduce una captura a sus registros; event es el resultado del decodificador Grid con CRC.
 function summarizeEventHistory(event) {
@@ -9,11 +83,10 @@ function summarizeEventHistory(event) {
 
 // Reconstruye tramos por entrada; captures son resumenes, from/to delimitan fechas Unix en ms.
 function buildEventHistory(captures, from, to) {
-    const lanes = new Map(), seen = new Map(), barriers = [], intervals = [];
+    const lanes = new Map(), seen = new Map(), intervals = [];
     let excluded = 0;
     for (const capture of captures) {
         if (capture.estimated || !Number.isFinite(capture.timestamp) || capture.timestamp < 946684800000 || capture.synthetic) { ++excluded; continue; }
-        if (capture.startup) barriers.push(capture.timestamp);
         for (const record of capture.records) {
             const state = record.states, at = capture.timestamp + record.offsetMs;
             if (state.subject > 4 || !Number.isFinite(at)) continue;
@@ -22,16 +95,24 @@ function buildEventHistory(captures, from, to) {
             const key = [lane, Math.round(at * 10), state.isPoint ? state.pointType : 0, state.previous, state.current, record.previousDurationMs].join(":");
             const existing = seen.get(key);
             if (existing) { existing.ids.add(capture.id); continue; }
-            const observation = {...record, at, lane, ids: new Set([capture.id]), startup: !!(capture.startup && record.root),
-                uncertain: capture.partial || capture.dropped};
+            const observation = {...record, at, lane, ids: new Set([capture.id]), startup: !!(capture.startup && !state.isPoint && state.previous === 0),
+                uncertain: !!(capture.partial || capture.dropped)};
             seen.set(key, observation);
             if (!lanes.has(lane)) lanes.set(lane, []);
             lanes.get(lane).push(observation);
         }
     }
-    barriers.sort((a, b) => a - b);
     for (const [lane, observations] of lanes) {
         observations.sort((a, b) => a.at - b.at);
+        // Los offsets secundarios pierden fracciones de ms; la secuencia resuelve ese empate.
+        for (let first = 0; first < observations.length;) {
+            let end = first + 1;
+            const at = observations[first].at;
+            while (end < observations.length && observations[end].at - at < 1) ++end;
+            const group = observations.slice(first, end).sort((a, b) => Math.min(...a.ids) - Math.min(...b.ids) || a.at - b.at);
+            for (let index = 0; index < group.length; ++index) observations[first + index] = {...group[index], at};
+            first = end;
+        }
         let pending = null;
         for (const observation of observations) {
             const state = observation.states, duration = observation.previousDurationMs;
@@ -41,45 +122,47 @@ function buildEventHistory(captures, from, to) {
                     uncertain: observation.uncertain || state.limited, ids: [...observation.ids]});
                 continue;
             }
+            // Un arranque observa el estado, no inicia otra averia si sigue siendo el mismo.
+            if (pending && (observation.startup || state.previous === pending.state) && state.current === pending.state) {
+                pending.ids = [...new Set([...pending.ids, ...observation.ids])];
+                pending.uncertain ||= observation.uncertain;
+                continue;
+            }
             let previous = null;
             if (state.previous > 0 && duration > 0 && !observation.startup) {
                 previous = {lane, subject: state.subject, current: !!state.isCurrent, state: state.previous, point: 0,
                     start: observation.at - duration, end: observation.at, startKnown: true, endKnown: true,
                     uncertain: observation.uncertain, ids: [...observation.ids]};
-                const restart = barriers.filter(at => at > previous.start + 10 && at <= previous.end).pop();
-                if (restart != null) { previous.start = restart; previous.startKnown = false; previous.uncertain = true; }
             }
             if (pending) {
-                const continuous = previous && previous.state === pending.state && Math.abs(previous.start - pending.start) <= 30 && previous.startKnown;
+                const continuous = observation.startup || state.previous === pending.state;
                 if (continuous) {
-                    previous.ids = [...new Set([...pending.ids, ...previous.ids])];
-                    previous.uncertain ||= pending.uncertain;
+                    if (previous && pending.start >= observation.at) pending.start = previous.start;
+                    pending.end = observation.at;
+                    pending.endKnown = true;
+                    pending.uncertain ||= observation.uncertain;
+                    pending.ids = [...new Set([...pending.ids, ...observation.ids])];
+                    intervals.push(pending);
+                    previous = null;
                 } else {
                     pending.end = Math.max(pending.start, Math.min(observation.at, previous ? previous.start : observation.at));
                     pending.uncertain = true;
-                    appendEventHistoryState(intervals, pending, barriers);
+                    intervals.push(pending);
                 }
                 pending = null;
             }
             if (previous) intervals.push(previous);
             if (state.current > 0) pending = {lane, subject: state.subject, current: !!state.isCurrent, state: state.current, point: 0,
-                start: observation.at, end: to, startKnown: !observation.startup, endKnown: false,
-                uncertain: observation.uncertain || observation.startup, ids: [...observation.ids]};
+                start: observation.at, end: Math.min(to, Date.now()), startKnown: !observation.startup, endKnown: false,
+                sequence: true, uncertain: observation.uncertain, ids: [...observation.ids]};
         }
-        if (pending) appendEventHistoryState(intervals, pending, barriers);
+        if (pending) intervals.push(pending);
     }
     const visible = intervals.filter(item => item.end >= from && item.start <= to).map(item => ({...item,
         key: [item.lane, item.point, item.state, Math.round(item.start * 10)].join(":"),
         ids: item.ids.sort((a, b) => b - a)}));
     visible.sort((a, b) => b.start - a.start || a.lane.localeCompare(b.lane));
     return {intervals: visible, excluded, records: seen.size};
-}
-
-// Agrega state a intervals sin prolongarlo mas alla del primer reinicio registrado en barriers.
-function appendEventHistoryState(intervals, state, barriers) {
-    const restart = barriers.find(at => at > state.start && at <= state.end);
-    if (restart != null) { state.end = restart; state.endKnown = false; state.uncertain = true; }
-    intervals.push(state);
 }
 
 // Inicializa controles y periodo por defecto de siete dias; no recibe parametros.
@@ -96,11 +179,22 @@ function initEventHistory() {
     $("#eventHistoryPrevious").on("click", () => moveEventHistoryPeriod(-1));
     $("#eventHistoryNext").on("click", () => moveEventHistoryPeriod(1));
     $("#eventHistoryCurrent").on("click", () => moveEventHistoryPeriod(0));
-    $("#eventHistoryFrom, #eventHistoryTo").on("input change", () => { eventHistory.periodUnit = "custom"; $("#eventHistoryPreset").val(""); });
+    $("#eventHistoryFrom, #eventHistoryTo").on("input change", () => { eventHistory.periodUnit = "custom"; $("#eventHistoryPreset").val(""); syncEventHistoryDates(); })
+        .on("click", function () { if (this.showPicker) { try { this.showPicker(); } catch (_) { /* El control nativo sigue editable. */ } } });
     $("#eventHistoryLoad").on("click", loadEventHistory);
     $("#eventHistoryStop").on("click", () => stopEventHistory());
-    $("#eventHistoryLane").on("change", renderEventHistory);
+    for (const group of ["points", "states"]) {
+        const target = $("#eventHistoryFilter" + (group === "points" ? "Points" : "States"));
+        for (const type of eventHistoryTypes.filter(type => type.group === group)) target.append($("<button>")
+            .attr({type: "button", "data-history-type": type.key, "aria-pressed": "true", title: "Mostrar / ocultar: " + type.label})
+            .addClass("btn btn-outline-secondary").text(type.label).on("click", () => selectEventHistoryTypes(null, type.key)));
+    }
+    $("[data-history-group]").on("click", function () { selectEventHistoryTypes(this.dataset.historyGroup); });
+    $("#eventHistoryLane").on("change", function () { selectEventHistoryLane(this.value); });
+    updateEventHistoryTypeControls();
     initEventHistoryTimelineLayout();
+    restoreEventHistoryPreferences();
+    $("#eventHistory").on("change input click", "input, select, button", saveEventHistoryPreferences);
 }
 
 // Formatea date como fecha local para el control datetime-local.
@@ -126,6 +220,7 @@ function setEventHistoryActive(active) {
 
 // Lee JSON o binario con plazo y cancelacion; path es la ruta, signal cancela y binary elige bytes.
 async function fetchEventHistory(path, signal, binary = false) {
+    if (typeof pauseHistoryCacheRequest === "function") pauseHistoryCacheRequest();
     const previous = eventHistory.readQueue;
     let release;
     eventHistory.readQueue = new Promise(resolve => { release = resolve; });
@@ -182,7 +277,8 @@ async function loadEventHistory() {
     $("#eventHistoryLoad").prop("disabled", true); $("#eventHistoryStop").prop("disabled", false);
     $("#eventHistoryStatus").text("Consultando indice..."); $("#eventHistoryProgress").prop("value", 0).removeAttr("max");
     renderEventHistory();
-    let examined = 0, boundaryLoaded = false, followingBoundary = null;
+    let examined = 0, followingBoundary = null;
+    const contextLanes = new Set();
     try {
         const cacheScope = await refreshCaptureCacheScope(controller.signal);
         if (run !== eventHistory.run) return;
@@ -199,11 +295,14 @@ async function loadEventHistory() {
                 if (controller.signal.aborted) throw new DOMException("Cancelado", "AbortError");
                 ++examined;
                 if (!entry.e && entry.t > to + 32768 && (!followingBoundary || entry.t < followingBoundary.t)) followingBoundary = entry;
-                // Una captura anterior aporta contexto del limite, sin descargar todo el archivo historico.
-                const boundary = !entry.e && entry.t < from - 32768 && !boundaryLoaded;
+                // Un DIP previo no define el estado de red: buscar contexto por entrada.
+                const boundary = !entry.e && entry.t < from - 32768 &&
+                    ["0:V", "1:V", "2:V", "3:V", "4:V"].some(lane => !contextLanes.has(lane));
                 if (boundary || entry.e || entry.t >= from - 32768 && entry.t <= to + 32768) {
                     await appendEventHistoryCapture(entry, controller.signal, run);
-                    if (boundary) boundaryLoaded = true;
+                    if (boundary) for (const item of eventHistory.captures.find(item => item.id === entry.i)?.records || []) {
+                        if (!item.states.isPoint) contextLanes.add(item.states.subject + (item.states.isCurrent ? ":A" : ":V"));
+                    }
                     if (run !== eventHistory.run) return;
                 }
                 $("#eventHistoryProgress").val(examined);
@@ -229,6 +328,7 @@ async function loadEventHistory() {
 
 // Devuelve un nombre por estado o puntual; item es un tramo reconstruido.
 function eventHistoryName(item) {
+    if (item.restart) return "Reinicio";
     return item.point ? gridPointName(item.point) : item.subject === 3 && !item.current && item.state === 3 ? "Neutro alto" : gridStateName(item.state, item.subject);
 }
 
@@ -274,6 +374,16 @@ function initEventHistoryTimelineLayout() {
     observer.observe(document.getElementById("eventHistoryTimeline"));
 }
 
+// Filtra intervalos sin mutarlos; kind elige estados/eventos, lanes son entradas y types son tipos visibles.
+function filterEventHistoryIntervals(intervals, kind = "all", lanes = "all", types = null) {
+    const subjects = lanes instanceof Set ? new Set([...lanes].map(lane => Number(lane.split(":")[0]))) :
+        lanes === "all" ? null : new Set([Number(lanes.split(":")[0])]);
+    const states = types && eventHistoryTypes.some(type => type.group === "states" && types.has(type.key));
+    return intervals.filter(item => (!subjects || subjects.has(item.subject)) &&
+        (kind === "none" ? false : kind === "states" ? !item.point : kind === "points" ? !!item.point : true) &&
+        (!types || types.has(eventHistoryType(item)) || states && !item.point && item.state === 1));
+}
+
 // Pinta cronologia y lista con los resumenes actuales; no recibe parametros.
 function renderEventHistory() {
     if (!eventHistory.range) return;
@@ -281,12 +391,15 @@ function renderEventHistory() {
     disposeEventHistoryTooltips();
     const {from, to} = eventHistory.range;
     const result = eventHistory.result = buildEventHistory(eventHistory.captures, from, to);
-    const filter = $("#eventHistoryLane").val() || "all";
-    const entries = result.intervals.filter(item => filter === "all" || item.lane === filter);
+    const kind = eventHistoryKind();
+    const availableTypes = eventHistoryAvailableTypes(), selectedTypes = new Set(availableTypes.filter(type => eventHistory.types.has(type.key)).map(type => type.key));
+    const entries = filterEventHistoryIntervals(result.intervals, kind, eventHistory.lane, selectedTypes);
+    if (!entries.some(item => item.key === eventHistory.selected)) eventHistory.selected = null;
     const episodes = entries.filter(item => item.point || item.state > 1);
     const quality = eventHistory.captures.filter(item => item.partial || item.dropped).length;
     const startups = eventHistory.captures.filter(item => item.startup).length;
-    $("#eventHistorySummary").text(episodes.length + " tramos / eventos · " + result.records + " registros" + (startups ? " · " + startups + " arranques registrados" : ""));
+    const description = kind === "states" ? " estados" : kind === "points" ? " eventos puntuales" : " tramos / eventos";
+    $("#eventHistorySummary").text(episodes.length + description + " · " + result.records + " registros leidos" + (startups ? " · " + startups + " arranques registrados" : ""));
     $("#eventHistoryNote").text(result.excluded ? result.excluded + " capturas de prueba o sin hora fiable excluidas del calendario." : "");
     const warnings = [];
     if (eventHistory.failures.length) warnings.push("No se pudieron leer: #" + eventHistory.failures.join(", #"));
@@ -295,22 +408,45 @@ function renderEventHistory() {
     $("#eventHistoryWarningText").text(warnings.join(" · "));
     $("#eventHistoryWarning").toggleClass("d-none", !warnings.length || eventHistory.dismissedWarning === eventHistory.warningKey);
     const timeline = $("#eventHistoryTimeline").empty();
-    const laneNames = ["4:V", "0:V", "1:V", "2:V", "3:V", ...[...new Set(entries.map(item => item.lane))].filter(lane => lane.endsWith(":A"))];
-    for (const lane of laneNames.filter(lane => filter === "all" || lane === filter)) {
+    timeline.toggleClass("pointsOnly", kind === "points" || kind === "none");
+    $("#eventHistory .eventHistoryLegend").attr("data-kind", kind);
+    $("#eventHistory .eventHistoryLegend [data-history-legend]").each(function () {
+        const key = this.dataset.historyLegend, visible = key === "normal" ? availableTypes.some(type => type.group === "states" && selectedTypes.has(type.key)) : selectedTypes.has(key);
+        $(this).toggleClass("d-none", !visible);
+    });
+    $("#eventHistory .eventHistoryLegendUnknown").text(eventHistoryTypes.some(type => type.group === "states" && !eventHistory.types.has(type.key)) ? "Sin datos / estados ocultos" : "Sin datos reconstruidos");
+    const laneNames = ["4:V", "0:V", "1:V", "2:V", "3:V"].filter(lane => (eventHistory.lane === "all" || eventHistory.lane === lane) && kind !== "none" &&
+        (kind !== "points" || entries.some(item => item.subject === Number(lane[0]))));
+    for (const lane of laneNames) {
         const row = $("<div>").addClass("eventHistoryLane"), track = $("<div>").addClass("eventHistoryTrack");
         const plot = $("<div>").addClass("eventHistoryLanePlot"), points = $("<div>").addClass("eventHistoryPoints");
-        row.append($("<span>").addClass("eventHistoryLaneLabel").text(eventHistoryLaneName(lane)), plot.append(points, track)); timeline.append(row);
-        for (const item of entries.filter(item => item.lane === lane && !item.point).reverse()) {
+        row.append($("<span>").addClass("eventHistoryLaneLabel").text(lane === "3:V" ? "Neutro" : eventHistoryLaneName(lane)), plot.append(points, track)); timeline.append(row);
+        for (const item of entries.filter(item => item.subject === Number(lane[0]) && !item.point && (!item.current || item.state > 1)).reverse()) {
             const left = Math.max(from, item.start), right = Math.min(to, item.end);
             const label = eventHistoryTooltip(item);
             const button = $("<button>").attr({type: "button", title: label, "aria-label": label, "aria-pressed": item.key === eventHistory.selected ? "true" : "false"})
-                .css({left: (left - from) / (to - from) * 100 + "%", width: Math.max(0, right - left) / (to - from) * 100 + "%", backgroundColor: eventHistoryColor(item)})
-                .toggleClass("uncertain", !item.startKnown || !item.endKnown || item.uncertain)
+                .css({left: "min(" + (left - from) / (to - from) * 100 + "%, calc(100% - 4px))", width: "max(" + Math.max(0, right - left) / (to - from) * 100 + "%, " + (item.state > 1 ? 4 : 0) + "px)", backgroundColor: eventHistoryColor(item), zIndex: item.state > 1 ? 1 : 0})
+                .toggleClass("uncertain", !!item.uncertain)
+                .toggleClass("eventHistoryCurrentState", !!item.current)
                 .attr("data-history-tooltip", "true").on("click", () => openEventHistoryPreview(item.key));
             track.append(button);
         }
-        const markers = layoutEventHistoryPoints(entries.filter(item => item.lane === lane && item.point), from, to, Math.max(1, track[0].clientWidth));
+        const markers = layoutEventHistoryPoints(entries.filter(item => item.subject === Number(lane[0]) && item.point), from, to, Math.max(1, track[0].clientWidth));
+        const restarts = kind === "points" ? [] : eventHistory.captures.filter(item => item.startup && !item.estimated && !item.synthetic && item.timestamp >= from && item.timestamp <= to);
+        const restartMarkers = layoutEventHistoryPoints(restarts.map(item => ({start: item.timestamp, ids: [item.id]})), from, to, Math.max(1, track[0].clientWidth));
         points.css("height", markers.length ? 14 : 0);
+        for (const marker of restartMarkers) {
+            const ids = marker.items.flatMap(item => item.ids), id = ids[ids.length - 1];
+            const label = "Reinicio · " + formatEventHistoryTime(marker.items[0].start) + " · " + ids.map(id => "#" + id).join(", ");
+            track.append($("<button>").addClass("eventHistoryRestart").attr({type: "button", title: label, "aria-label": label,
+                "data-history-tooltip": "true", "data-event-ids": ids.join(" ")}).css({left: marker.left + marker.size / 2 - 5})
+                .on("click", () => {
+                    const at = restarts.find(item => item.id === id).timestamp;
+                    const item = {key: "restart:" + id + ":" + lane, restart: true, lane, subject: Number(lane[0]),
+                        start: at, end: at, startKnown: true, endKnown: true, ids, state: 1, point: 0, current: false};
+                    openEventHistoryPreview(item.key, "start", item);
+                }));
+        }
         for (const marker of markers) {
             const ids = [...new Set(marker.items.flatMap(item => item.ids))], colors = [...new Set(marker.items.map(eventHistoryColor))];
             const label = marker.items.length === 1 ? eventHistoryTooltip(marker.items[0]) :
@@ -342,10 +478,11 @@ function renderEventHistory() {
         const end = item.endKnown ? $("<button>").attr({type: "button", title: eventHistoryTooltip(item), "data-history-tooltip": "true"}).addClass("btn btn-link btn-sm p-0 text-start").text(formatEventHistoryTime(item.end)).on("click", () => openEventHistoryPreview(item.key, "end")) : "Sin retorno registrado";
         row.append($("<td>").append(start), $("<td>").text(eventHistoryLaneName(item.lane)), $("<td>").append(button),
             $("<td>").append(end),
-            $("<td>").text(item.startKnown && item.endKnown ? formatGridDuration(item.end - item.start) : "Sin cierre completo"));
+            $("<td>").text(item.startKnown && item.endKnown || item.sequence && !item.uncertain ?
+                formatGridDuration(item.end - item.start) + (item.endKnown ? "" : " · hasta limite consultado") : "Sin cierre completo"));
         table.append(row);
     }
-    if (!episodes.length) table.append($("<tr>").append($("<td>").attr("colspan", 5).addClass("text-muted").text(eventHistory.controller ? "Analizando registros..." : "No hay eventos reconstruidos en este intervalo.")));
+    if (!episodes.length) table.append($("<tr>").append($("<td>").attr("colspan", 5).addClass("text-muted").text(kind === "none" ? "Seleccione los tipos de registro que desea ver." : eventHistory.controller ? "Analizando registros..." : "No hay eventos para los filtros seleccionados.")));
     renderEventHistoryDetail();
     renderEventStatistics();
     initEventHistoryTooltips();
@@ -362,7 +499,9 @@ function renderEventHistoryDetail() {
     const item = eventHistory.result.intervals.find(item => item.key === eventHistory.selected), target = $("#eventHistoryDetail").empty();
     if (!item) { target.addClass("d-none"); return; }
     target.removeClass("d-none").append($("<strong>").text(eventHistoryLaneName(item.lane) + " · " + eventHistoryName(item)),
-        $("<div>").addClass("small text-muted").text(item.uncertain || !item.startKnown || !item.endKnown ? "Tramo parcial: no se pudo verificar toda la continuidad." : "Inicio y final reconstruidos con las transiciones y su duracion registrada."));
+        $("<div>").addClass("small text-muted").text(item.uncertain ? "Tramo parcial: registros incompletos o contradictorios." :
+            item.sequence ? "Tiempo reconstruido entre cambios de estado. Los reinicios no interrumpen el ultimo estado registrado." :
+            "Inicio reconstruido con la duracion previa: no se dispone de su transicion inicial."));
     const links = $("<div>").addClass("d-flex flex-wrap gap-2 mt-2");
     for (const id of item.ids) links.append($("<button>").addClass("btn btn-sm btn-outline-secondary").attr("type", "button").text("Ver captura #" + id).on("click", () => {
         const capture = eventHistory.captures.find(capture => capture.id === id);
@@ -371,4 +510,4 @@ function renderEventHistoryDetail() {
     target.append(links);
 }
 
-if (typeof module !== "undefined") module.exports = {buildEventHistory, layoutEventHistoryPoints};
+if (typeof module !== "undefined") module.exports = {buildEventHistory, layoutEventHistoryPoints, filterEventHistoryIntervals};

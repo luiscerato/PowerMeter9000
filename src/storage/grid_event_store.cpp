@@ -2,15 +2,23 @@
 #include "store_format_guard.h"
 #include "wave_event_store.h"
 #include "../manager_api.h"
-#include "../grid_events.h"
+#include "../boot_timing.h"
 #include <algorithm>
 #include <cstring>
 #include <sys/time.h>
 #include <esp_system.h>
 
-static GridEventStore* mountedGridEventStore = nullptr;
+static std::atomic<GridEventStore*> mountedGridEventStore{nullptr};
 static constexpr uintptr_t eraseCompletionContext = GridEventFormat::maxPagesPerEvent;
 static std::atomic<uint8_t> gridTestRequested{0};
+struct earlyGridState {
+	uint32_t sampleMs, startedMs[3];
+	float voltages[3];
+	uint8_t states[4];
+};
+static earlyGridState earlyStates[8];
+static uint8_t earlyRead = 0, earlyCount = 0;
+static uint32_t earlyDropped = 0;
 constexpr uint32_t GridEventStore::captureArmMs;
 
 GridEventStore::GridEventStore(NandPartition& gridPartition) : partition(gridPartition) {}
@@ -31,6 +39,7 @@ void GridEventStore::finishFormat(bool success)
 // Prepara colas, reconstruye el cursor y publica esta instancia para MeterTask.
 bool GridEventStore::begin()
 {
+	if (mountedGridEventStore.load() == this) mountedGridEventStore.store(nullptr);
 	if (!partition.isEnabled()) return false;
 	if (capture.pages) free(capture.pages);
 	capture = Capture{};
@@ -55,8 +64,27 @@ bool GridEventStore::begin()
 	storeMetrics.captureActive = false;
 	storeMetrics.rootPending = false;
 	storeMetrics.nextEventId = nextEventId;
+	storeMetrics.mountReadyMs = millis();
+	if (!prepareStartupWrite()) return false;
+	storeMetrics.writeReadyMs = millis();
 	gridTestRequested = 0;
-	mountedGridEventStore = this;
+	mountedGridEventStore.store(this);
+	return true;
+}
+
+// Comprueba espacio para la captura maxima y completa el borrado antes de publicar el Store; sin parametros.
+bool GridEventStore::prepareStartupWrite()
+{
+	capture.pageCount = GridEventFormat::maxPagesPerEvent;
+	const bool ready = ensureWritableBlock();
+	if (!ready && !capture.erasePending) return false;
+	if (!ready) {
+		NandIoResult result;
+		if (xQueueReceive(completionQueue, &result, pdMS_TO_TICKS(250)) != pdPASS ||
+			reinterpret_cast<uintptr_t>(result.context) != eraseCompletionContext || !result.success) return false;
+		blockHasData[currentBlock] = false;
+	}
+	capture = Capture{};
 	return true;
 }
 
@@ -66,6 +94,8 @@ void GridEventStore::observe(const phaseState& r, const phaseState& s, const pha
 {
 	StoreFormatGuard guard(formatPaused, activeCalls);
 	if (!guard) return;
+	if (r.state == phaseCondition::unknown || s.state == phaseCondition::unknown ||
+		t.state == phaseCondition::unknown || overall == gridCondition::unknown) return;
 	poll();
 	bool testIdle = !capture.active;
 	for (const auto& point : points) testIdle &= !point.active;
@@ -103,6 +133,8 @@ void GridEventStore::observe(const phaseState& r, const phaseState& s, const pha
 	const phaseState* phases[] = { &r, &s, &t };
 	const float voltages[] = { vr, vs, vt };
 	if (!statesReady) {
+		storeMetrics.firstObserveMs = millis();
+		Serial.printf("[boot] grid firstObserveMs=%lu\n", static_cast<unsigned long>(storeMetrics.firstObserveMs));
 		for (uint8_t index = 0; index < 3; ++index) {
 			observedStates[index] = uint8_t(phases[index]->state);
 			observedStartedMs[index] = phases[index]->changedAtMs;
@@ -120,64 +152,36 @@ void GridEventStore::observe(const phaseState& r, const phaseState& s, const pha
 	observeNeutral(meter, settings, sampleMs);
 }
 
-// Abre una captura inicial cuando el arranque electrico o un cambio frente a NVS lo justifica.
+// Registra cada arranque con estado anterior desconocido, sin inferir un corte ni recuperar NVS.
 // phases/overall son estados nuevos; voltages/meter/settings contextualizan el evento.
 void GridEventStore::startStartupCapture(const phaseState* phases[3], gridCondition overall, const float voltages[3],
 	const meterValues& meter, const gridSettings& settings, uint32_t sampleMs)
 {
 	const esp_reset_reason_t reason = esp_reset_reason();
-	const bool electrical = reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT;
-	const uint8_t previousGrid = gridEventsStartupState(3);
-	const bool gridChanged = previousGrid && previousGrid != uint8_t(overall);
-	if (!electrical && !gridChanged) {
-		bool phaseChanged = false;
-		for (uint8_t index = 0; index < 3; ++index)
-			phaseChanged |= gridEventsStartupState(index) && gridEventsStartupState(index) != uint8_t(phases[index]->state);
-		if (!phaseChanged) return;
-	}
 	Candidate candidate;
 	candidate.active = true;
 	candidate.subject = GridEventFormat::Subject::grid;
-	candidate.previousState = previousGrid;
+	candidate.previousState = 0;
 	candidate.currentState = uint8_t(overall);
-	if (!electrical && !gridChanged) {
-		for (uint8_t index = 0; index < 3; ++index) {
-			const uint8_t previous = gridEventsStartupState(index);
-			if (!previous || previous == uint8_t(phases[index]->state)) continue;
-			candidate.subject = GridEventFormat::Subject(index);
-			candidate.previousState = previous;
-			candidate.currentState = uint8_t(phases[index]->state);
-			candidate.currentVoltage = voltages[index];
-			break;
-		}
-	}
 	candidate.startedMs = sampleMs;
 	candidate.previousVoltage = NAN;
 	if (candidate.subject == GridEventFormat::Subject::grid) candidate.currentVoltage = NAN;
 	candidate.sourceFlags = reason == ESP_RST_BROWNOUT ? GridEventFormat::startupBrownout :
 		reason == ESP_RST_POWERON ? GridEventFormat::startupPowerOn : GridEventFormat::startupRecovered;
 	snapshotSettings(candidate.settings, settings);
+	candidate.settings.reserved = GridEventFormat::startupReasonMarker | uint16_t(reason);
 	candidate.capturePages = settings.capturePages;
 	snapshotMeter(candidate.meter, meter);
-	armCapture(candidate, sampleMs);
+	// Al recuperar un estado temprano, el anillo ya contiene las lecturas acumuladas durante el montaje NAND.
+	armCapture(candidate, millis());
 	confirmCandidate(candidate, sampleMs, sampleMs);
 	for (uint8_t index = 0; index < 3; ++index) {
-		const uint8_t previous = gridEventsStartupState(index);
-		if (!previous || previous == uint8_t(phases[index]->state) || candidate.subject == GridEventFormat::Subject(index)) continue;
 		Candidate phaseChange = candidate;
 		phaseChange.subject = GridEventFormat::Subject(index);
-		phaseChange.previousState = previous;
+		phaseChange.previousState = 0;
 		phaseChange.currentState = uint8_t(phases[index]->state);
 		phaseChange.currentVoltage = voltages[index];
 		addTransition(phaseChange, sampleMs);
-	}
-	if (candidate.subject != GridEventFormat::Subject::grid && gridChanged) {
-		Candidate gridChange = candidate;
-		gridChange.subject = GridEventFormat::Subject::grid;
-		gridChange.previousState = previousGrid;
-		gridChange.currentState = uint8_t(overall);
-		gridChange.currentVoltage = NAN;
-		addTransition(gridChange, sampleMs);
 	}
 }
 
@@ -221,6 +225,7 @@ void GridEventStore::poll()
 		capture.pageWritten[pageIndex] = true;
 		++storeMetrics.writtenPages;
 		if (pageIndex == 0) {
+			bootTimingEnd(bootPhase::firstEventPage);
 			capture.rootWritten = true;
 			blockHasData[currentBlock] = true;
 		}
@@ -288,6 +293,13 @@ void GridEventStore::getMetrics(GridEventStoreMetrics& metrics) const
 	metrics.nextEventId = nextEventId;
 	metrics.captureActive = capture.active;
 	metrics.rootPending = capture.rootAssigned && !capture.rootWritten;
+}
+
+// Mantiene visible la perdida de count cambios tempranos sin inventar continuidad entre ellos.
+void GridEventStore::recordDroppedStates(uint32_t count)
+{
+	storeMetrics.droppedRecords += count;
+	if (capture.active) capture.root.timeStatus |= GridEventFormat::recordsDropped;
 }
 
 // Escanea la NAND para resumir los identificadores disponibles, sin conservar un indice RAM.
@@ -633,7 +645,7 @@ bool GridEventStore::appendRecord(const GridEventFormat::Transition& record)
 void GridEventStore::observeEvents(const meterValues& meter, const gridSettings& settings, uint32_t sampleMs)
 {
 	StoreFormatGuard guard(formatPaused, activeCalls);
-	if (!guard || !gridEventsReadyForStorage()) return;
+	if (!guard || !statesReady) return;
 	poll();
 	eventCaptureConfig config;
 	meterGetEventCaptureConfig(config);
@@ -1108,25 +1120,55 @@ bool GridEventStore::isNewerEventId(uint32_t candidate, uint32_t current)
 void gridEventStoreObserve(const phaseState& r, const phaseState& s, const phaseState& t, gridCondition overall,
 	float vr, float vs, float vt, const meterValues& meter, const gridSettings& settings, uint32_t sampleMs)
 {
-	if (mountedGridEventStore) mountedGridEventStore->observe(r, s, t, overall, vr, vs, vt, meter, settings, sampleMs);
+	if (overall == gridCondition::unknown || r.state == phaseCondition::unknown ||
+		s.state == phaseCondition::unknown || t.state == phaseCondition::unknown) return;
+	auto* store = mountedGridEventStore.load();
+	if (!store) {
+		earlyGridState item{sampleMs, {r.changedAtMs, s.changedAtMs, t.changedAtMs}, {vr, vs, vt},
+			{uint8_t(r.state), uint8_t(s.state), uint8_t(t.state), uint8_t(overall)}};
+		if (earlyCount && !memcmp(earlyStates[(earlyRead + earlyCount - 1U) % 8U].states, item.states, sizeof(item.states))) return;
+		if (earlyCount == 8) { earlyRead = (earlyRead + 1U) % 8U; --earlyCount; ++earlyDropped; }
+		earlyStates[(earlyRead + earlyCount++) % 8U] = item;
+		return;
+	}
+	while (earlyCount) {
+		const earlyGridState& item = earlyStates[earlyRead];
+		phaseState phases[3];
+		for (uint8_t index = 0; index < 3; ++index) {
+			phases[index].state = phases[index].pending = phaseCondition(item.states[index]);
+			phases[index].changedAtMs = item.startedMs[index];
+		}
+		store->observe(phases[0], phases[1], phases[2], gridCondition(item.states[3]),
+			item.voltages[0], item.voltages[1], item.voltages[2], meter, settings, item.sampleMs);
+		if (earlyDropped) { store->recordDroppedStates(earlyDropped); earlyDropped = 0; }
+		earlyRead = (earlyRead + 1U) % 8U;
+		--earlyCount;
+	}
+	store->observe(r, s, t, overall, vr, vs, vt, meter, settings, sampleMs);
+}
+
+// Publica disponibilidad real despues de recuperar el cursor y completar el borrado inicial; sin parametros.
+bool gridEventStoreReadyForCapture()
+{
+	return mountedGridEventStore.load() != nullptr;
 }
 
 // Reenvia una muestra Fast al Store montado; sampleMs conserva el instante monotónico exacto.
 void gridEventStorePushFastSample(const fastRMSData_t& sample, uint32_t sampleMs)
 {
-	if (mountedGridEventStore) mountedGridEventStore->pushFastSample(sample, sampleMs);
+	if (auto* store = mountedGridEventStore.load()) store->pushFastSample(sample, sampleMs);
 }
 
 // Entrega los detectores al Store montado; se llama solo desde el turno FAST de MeterTask.
 void gridEventStoreObserveEvents(const meterValues& meter, const gridSettings& settings, uint32_t sampleMs)
 {
-	if (mountedGridEventStore) mountedGridEventStore->observeEvents(meter, settings, sampleMs);
+	if (auto* store = mountedGridEventStore.load()) store->observeEvents(meter, settings, sampleMs);
 }
 
 // Marca una captura artificial que sera creada por MeterTask en su siguiente ciclo.
 bool gridEventStoreRequestTest(uint8_t type)
 {
-	if (!mountedGridEventStore || type < 1 || type > 5) return false;
+	if (!mountedGridEventStore.load() || type < 1 || type > 5) return false;
 	uint8_t expected = 0;
 	return gridTestRequested.compare_exchange_strong(expected, type);
 }

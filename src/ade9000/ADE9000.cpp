@@ -209,69 +209,35 @@ void ADE9000::loadCalibration()
 }
 
 
-void ADE9000::restoreCalibration()
+// Guarda y relee los registros predeterminados y factores de neutro; sin parametros.
+bool ADE9000::restoreCalibration()
 {
-    Serial.printf("Restaurando calibracion de fábrica!!");
-    preferences.begin("ADE9000", false);
-    preferences.putFloat("neutralRms", 1);
-    preferences.putFloat("neutralFast", 1);
-
-    preferences.putInt("APHCAL0", 0xfc46300c);
-    preferences.putInt("BPHCAL0", 0xfc780c4d);
-    preferences.putInt("CPHCAL0", 0xfc266bec);
-    preferences.putInt("NPHCAL", 0xfc4c3817);
-
-    //Cargar current gain
-    preferences.putInt("AIGAIN", 0x1417b6);
-    preferences.putInt("BIGAIN", 0xf9ee4);
-    preferences.putInt("CIGAIN", 0x1b5e40);
-    preferences.putInt("NIGAIN", 0x1e6815);
-    //Cargar voltage gain
-    preferences.putInt("AVGAIN", 0xcba12);
-    preferences.putInt("BVGAIN", 0xab86d);
-    preferences.putInt("CVGAIN", 0x112b60);
-
-    //Current offset
-    preferences.putInt("AIRMSOS", 0);
-    preferences.putInt("BIRMSOS", 0);
-    preferences.putInt("CIRMSOS", 0);
-    preferences.putInt("NIRMSOS", 0);
-    //Voltage offset
-    preferences.putInt("AVRMSOS", 0);
-    preferences.putInt("BVRMSOS", 0);
-    preferences.putInt("CVRMSOS", 0);
-
-    //Offset Fundamental
-    preferences.putInt("AIFRMSOS", 0);
-    preferences.putInt("BIFRMSOS", 0);
-    preferences.putInt("CIFRMSOS", 0);
-
-    preferences.putInt("AVFRMSOS", 0);
-    preferences.putInt("BVFRMSOS", 0);
-    preferences.putInt("CVFRMSOS", 0);
-
-    //Offsets one cicle
-    preferences.putInt("AIRMSONEOS", 0);
-    preferences.putInt("BIRMSONEOS", 0);
-    preferences.putInt("CIRMSONEOS", 0);
-    preferences.putInt("NIRMSONEOS", 0);
-
-    preferences.putInt("AVRMSONEOS", 0);
-    preferences.putInt("BVRMSONEOS", 0);
-    preferences.putInt("CVRMSONEOS", 0);
-
-    //Offsets 1012 cicles
-    preferences.putInt("AIRMS1012OS", 0);
-    preferences.putInt("BIRMS1012OS", 0);
-    preferences.putInt("CIRMS1012OS", 0);
-    preferences.putInt("NIRMS1012OS", 0);
-
-    preferences.putInt("AVRMS1012OS", 0);
-    preferences.putInt("BVRMS1012OS", 0);
-    preferences.putInt("CVRMS1012OS", 0);
-
-    preferences.end();
-    Serial.printf("Listo! Debe reinicar para que los cambios tengan efecto completamente!");
+    static const struct { const char* key; uint32_t value; } defaults[] = {
+        {"APHCAL0",0xfc46300c},{"BPHCAL0",0xfc780c4d},{"CPHCAL0",0xfc266bec},{"NPHCAL",0xfc4c3817},
+        {"AIGAIN",0x1417b6},{"BIGAIN",0xf9ee4},{"CIGAIN",0x1b5e40},{"NIGAIN",0x1e6815},
+        {"AVGAIN",0xcba12},{"BVGAIN",0xab86d},{"CVGAIN",0x112b60},
+        {"AIRMSOS",0},{"BIRMSOS",0},{"CIRMSOS",0},{"NIRMSOS",0},{"AVRMSOS",0},{"BVRMSOS",0},{"CVRMSOS",0},
+        {"AIFRMSOS",0},{"BIFRMSOS",0},{"CIFRMSOS",0},{"AVFRMSOS",0},{"BVFRMSOS",0},{"CVFRMSOS",0},
+        {"AIRMSONEOS",0},{"BIRMSONEOS",0},{"CIRMSONEOS",0},{"NIRMSONEOS",0},
+        {"AVRMSONEOS",0},{"BVRMSONEOS",0},{"CVRMSONEOS",0},
+        {"AIRMS1012OS",0},{"BIRMS1012OS",0},{"CIRMS1012OS",0},{"NIRMS1012OS",0},
+        {"AVRMS1012OS",0},{"BVRMS1012OS",0},{"CVRMS1012OS",0}
+    };
+    Preferences options;
+    if (!options.begin("ADE9000", false)) return false;
+    bool saved = true;
+    for (const auto& item : defaults) {
+        const int32_t value = static_cast<int32_t>(item.value);
+        const bool written = options.putInt(item.key, value) == sizeof(value);
+        saved &= written && options.isKey(item.key) && options.getInt(item.key) == value;
+    }
+    for (const char* key : {"neutralRms", "neutralFast"}) {
+        const bool written = options.putFloat(key, 1) == sizeof(float);
+        saved &= written && options.isKey(key) && options.getFloat(key) == 1;
+    }
+    options.end();
+    Serial.println(saved ? "Calibracion restaurada y verificada; reiniciar para aplicar." : "Error restaurando calibracion NVS.");
+    return saved;
 }
 
 void ADE9000::printCalibration()

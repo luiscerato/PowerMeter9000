@@ -5,8 +5,9 @@ const eventHistoryPreview = {controller: null, token: 0, event: null, item: null
 // Describe un tramo para hover y foco; item contiene entrada, limites y capturas fuente.
 function eventHistoryTooltip(item) {
     return eventHistoryLaneName(item.lane) + " · " + eventHistoryName(item) + (item.startKnown ? "\nInicio: " : "\nObservado desde (inicio desconocido): ") + formatEventHistoryTime(item.start) +
-        "\nFinal: " + (item.endKnown ? formatEventHistoryTime(item.end) : "Sin retorno registrado") +
-        "\nDuracion: " + (item.startKnown && item.endKnown ? formatGridDuration(item.end - item.start) : "Tramo parcial") +
+        "\nFinal: " + (item.endKnown ? formatEventHistoryTime(item.end) : item.uncertain ? "Sin cierre verificable" : "Ultimo estado hasta " + formatEventHistoryTime(item.end)) +
+        "\nDuracion: " + (item.startKnown && item.endKnown || item.sequence && !item.uncertain ?
+            formatGridDuration(item.end - item.start) + (item.endKnown ? "" : " hasta limite consultado") : "Tramo parcial") +
         "\nCapturas: " + item.ids.map(id => "#" + id).join(", ") + "\nClic para ver informacion y graficas";
 }
 
@@ -97,9 +98,9 @@ function closeEventHistoryPreview() {
     cancelEventHistoryPreview();
 }
 
-// Abre un tramo sin salir de Historial; key es su identificador y edge el borde que interesa inspeccionar.
-function openEventHistoryPreview(key, edge = "start") {
-    const item = eventHistory.result?.intervals.find(item => item.key === key);
+// Abre un tramo; key lo identifica, edge elige el borde y source permite inspeccionar un reinicio independiente.
+function openEventHistoryPreview(key, edge = "start", source = null) {
+    const item = source || eventHistory.result?.intervals.find(item => item.key === key);
     if (!item) return;
     cancelEventHistoryPreview(); disposeEventHistoryTooltips();
     eventHistory.selected = key; eventHistoryPreview.item = item; eventHistoryPreview.edge = edge;
@@ -124,7 +125,8 @@ function eventHistorySignalDefinitions(wave = false) {
         ["V T", "vt", "#337ab7", "voltage", 2], ["V N", "vn", "#c94d83", "voltage", 3],
         ["I R", "ir", "#d9534f", "current", 0], ["I S", "is", "#278447", "current", 1],
         ["I T", "it", "#337ab7", "current", 2], ["I N", "inn", "#6c757d", "current", 3]]
-        .filter(signal => !wave || signal[1] !== "vn");
+        .filter(signal => !wave || signal[1] !== "vn")
+        .map(signal => typeof appPhaseColor === 'function' ? [signal[0],signal[1],appPhaseColor(['R','S','T','N'][signal[4]],signal[3] === 'current' ? .22 : 0),signal[3],signal[4]] : signal);
 }
 
 // Cambia senales: selection es el conjunto actual, keys las afectadas y replace selecciona solo esas claves.
@@ -331,7 +333,9 @@ function renderEventHistoryPreview() {
         for (const marker of state.markers) stripLines.push({value: marker.at, color: "#999", lineDashType: "dash", thickness: 1});
         const chart = new CanvasJS.Chart(target, {signalTarget: target, animationEnabled: false, zoomEnabled: !state.pan, panEnabled: state.pan,
             axisX: {title: "Tiempo desde el inicio del evento (ms)", viewportMinimum: limits[0], viewportMaximum: limits[1], stripLines},
-            axisY: {title: state.item.current ? "Corriente (A)" : "Tension (V)"}, toolTip: {shared: true},
+            axisY: {title: state.item.current ? "Corriente (A)" : "Tension (V)"},
+            toolTip: chartTooltip.options({title: wave ? "Oscilografía" : "FAST RMS", digits: wave ? 3 : 2, origin,
+                markers: () => state.markers.map(marker => ({...marker, label: eventHistoryMarkerName(marker), priority: marker.state.subject === 4 ? 0 : 1}))}),
             legend: {fontSize: 10, verticalAlign: "top", horizontalAlign: "left", cursor: "pointer", itemclick: event => {
                 state.signals = toggleEventHistorySignals(state.signals, [event.dataSeries.signalKey]); updateEventHistorySignals();
             }}, rangeChanged: event => {
@@ -344,7 +348,9 @@ function renderEventHistoryPreview() {
                 renderEventHistoryPreviewSections();
                 if ($("#eventHistoryPreviewLink").prop("checked")) setEventHistoryPreviewRange(range, chart);
             }, data: eventHistorySignalDefinitions(wave).map(([name, key, color, kind]) => ({type: "line", name, color,
-                signalKey: key, signalKind: kind, visible: state.signals.has(key), lineDashType: kind === "current" ? "dash" : "solid",
+                signalKey: key, signalKind: kind, signalUnit: kind === "current" ? "A" : "V",
+                shortName: (kind === "current" ? "I " : "V ") + (key === "inn" ? "N" : key.slice(1).toUpperCase()),
+                visible: state.signals.has(key), lineDashType: kind === "current" ? "dash" : "solid",
                 showInLegend: true, markerSize: 0, connectNullData: false,
                 dataPoints: samples.map(point => ({x: point.relativeMs, y: point[key] ?? null}))}))});
         state.charts.push(chart);
@@ -371,7 +377,7 @@ async function loadEventHistoryPreviewCapture() {
                 const stamp = eventHistory.captures.find(capture => capture.id === id)?.timestamp;
                 const event = await loadCachedFast(id, stamp, scope, controller.signal);
                 if (token !== state.token) return;
-                state.events.push(event); state.fastSegments.push({timestamp: event.timestamp, samples: event.samples});
+                state.events.push(event); state.fastSegments.push({timestamp: event.timestamp, samples: gridFastDisplaySamples(event)});
                 state.event = state.events.find(event => event.id === selected) || state.events[0];
                 $("#eventHistoryPreviewDetails").prop("disabled", false);
                 renderEventHistoryPreview();
@@ -394,7 +400,7 @@ async function loadEventHistoryPreviewCapture() {
                         $("#eventHistoryPreviewWaveStatus").text("Leyendo oscilografia #" + capture.id + "...");
                         const wave = await loadCachedWave(event, capture, scope, controller.signal);
                         if (token !== state.token) return;
-                        state.waves.push(wave); state.waveSegments.push({timestamp: event.timestamp, samples: wave.samples});
+                        state.waves.push(wave); state.waveSegments.push({timestamp: event.timestamp, samples: gridRegularSamples(wave.samples, 0.125)});
                         renderEventHistoryPreview();
                     } catch (error) {
                         if (controller.signal.aborted) throw error;

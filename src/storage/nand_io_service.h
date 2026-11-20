@@ -71,6 +71,7 @@ struct NandIoMetrics {
 	uint32_t recentWindowStartedUs = 0;
 	uint32_t recentReadBytes = 0;
 	uint32_t recentWrittenBytes = 0;
+	uint16_t stackFreeWords = 0;
 	NandOperation lastOperation = NandOperation::readPage;
 	NandIoError lastError = NandIoError::none;
 };
@@ -86,7 +87,7 @@ public:
 	explicit NandIoService(WinbondSpiNand& nandDriver);
 
 	// Crea las colas y la tarea de servicio; taskPriority, stackWords y core definen la tarea FreeRTOS.
-	bool begin(UBaseType_t taskPriority = 2, uint16_t stackWords = 4096, BaseType_t core = tskNO_AFFINITY);
+	bool begin(UBaseType_t taskPriority = 2, uint16_t stackWords = 3072, BaseType_t core = tskNO_AFFINITY);
 
 	// Encola una operacion sin esperar su ejecucion; request conserva su buffer hasta la finalizacion.
 	bool submit(const NandIoRequest& request);

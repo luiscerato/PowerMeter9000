@@ -10,6 +10,8 @@ const expected=[...mapped,'wave.pre','wave.on','wave.dip','wave.swell','wave.oc'
 assert.deepEqual(keys.sort(),expected);
 assert.equal(new Set(keys).size,27);
 assert.match(source,/char buffer\[1024\]/);assert.match(source,/char buffer\[768\]/);
+assert.match(source,/sendError\(request, 400, "invalid_value", field\.key\)/);
+assert.match(source,/eventSettingsInvalidKey\(config\)/);
 assert.doesNotMatch(source,/Preferences|putBytes|\.reserve\(|new\s+\w/);
 for(const error of ['duplicate_field','unknown_field','invalid_config','rev_conflict','save_busy','invalid_since','unknown_group'])
     assert.ok(source.includes('"'+error+'"'),error);

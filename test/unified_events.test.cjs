@@ -40,7 +40,7 @@ async function browserCheck() {
             page.on('pageerror',error => errors.push(error.message));
             await page.setContent('<html lang="es"><body><div class="container-fluid" id="host"></div></body></html>');
             for (const name of ['lib/bootstrap.min.css','style.css']) await page.addStyleTag({path:path.join(root,'data',name)});
-            for (const name of ['lib/jquery-3.6.4.min.js','lib/canvasjs.min.js','grid_events_ui.js','wave_events_ui.js','capture_cache.js']) await page.addScriptTag({path:path.join(root,'data',name)});
+            for (const name of ['lib/jquery-3.6.4.min.js','lib/canvasjs.min.js','chart_tooltips.js','grid_events_ui.js','wave_events_ui.js','capture_cache.js']) await page.addScriptTag({path:path.join(root,'data',name)});
             await page.evaluate(({html,bytes}) => {
                 const doc = new DOMParser().parseFromString(html,'text/html'), section = doc.getElementById('gridEvents');
                 section.classList.add('active'); document.getElementById('host').append(section);
@@ -120,7 +120,10 @@ async function browserCheck() {
                 return {selected,partialRequests,cached:gridEventsViewer.cache.size};
             },Array.from(fixture));
             assert.deepEqual(race,{selected:78,partialRequests:2,cached:0});
+            await page.addScriptTag({path:path.join(root,'data/network_settings.js')});
             await page.addScriptTag({path:path.join(root,'data/index.js')});
+            await page.addScriptTag({path:path.join(root,'data/app_appearance.js')});
+            await page.addScriptTag({path:path.join(root,'data/history_cache.js')});
             const result = await page.evaluate(() => {
                 const target = document.createElement('div'); target.id = 'settings'; target.hidden = true;
                 document.body.append(target); target.innerHTML = createSettingsHtml();

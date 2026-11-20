@@ -7,6 +7,7 @@
 #include "wifiUtils.h"
 #include "meter.h"
 #include "meter_timing.h"
+#include "cpu_usage.h"
 #include "event_capture_config.h"
 #include "bl0942/bl0942.h"
 #include "manager_api.h"
@@ -15,6 +16,7 @@
 #include "storage/storage_manager.h"
 #include "diagnostic_logger.h"
 #include "rtc_clock.h"
+#include "boot_timing.h"
 #include "storage/nand_read_session.h"
 #include "storage/history_read_session.h"
 #include "storage/diagnostic_read_session.h"
@@ -22,8 +24,10 @@
 #include "web/webfs_http.h"
 #include "web/events_http.h"
 #include "event_settings.h"
+#include "../base/json_writer.h"
 #include <math.h>
 #include <new>
+#include <errno.h>
 #include <stdlib.h>
 #include <errno.h>
 
@@ -58,7 +62,18 @@ static void addCaptureCacheIdentity(AsyncWebServerResponse* response, bool wave)
 	if (captureCacheIdentity(wave, identity, sizeof(identity))) response->addHeader("X-Capture-Identity", identity);
 	response->addHeader("Access-Control-Expose-Headers", "X-Capture-Identity");
 }
-static constexpr uint8_t historyReadSessionCount = 5;
+// Mantiene como maximo dos descargas activas: una visible y una auxiliar.
+static constexpr uint8_t historyReadSessionCount = 2;
+
+// Forma la identidad del historico desde RAM; buffer/size reciben MAC y generacion persistente.
+static bool historyCacheIdentity(char* buffer, size_t size)
+{
+	uint64_t epoch = 0;
+	if (!storageManager.isReady() || storageManager.partition(StoragePartitionId::history).isFormatting() ||
+		!storageManager.getHistoryCacheEpoch(epoch)) return false;
+	snprintf(buffer, size, "%012llx:%016llx", ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL, epoch);
+	return true;
+}
 static HistoryReadSession historyReadSessions[historyReadSessionCount];
 static DiagnosticReadSession diagnosticReadSessions[2];
 static StaticSemaphore_t diagnosticReadControl;
@@ -423,9 +438,10 @@ static bool parseHistoryOptions(AsyncWebServerRequest* request, bool body, bool 
 	return true;
 }
 
-// Serializa unicamente las opciones del historico; config contiene el perfil activo.
-static String historyConfigJson(const HistoryRecorderConfig& config)
+// Serializa el perfil activo y su estado desde una sola instantanea RAM; sin parametros.
+static String historyConfigJson()
 {
+	HistoryRecorderConfig config; const char* status = nullptr; historyRecorder.getConfig(config, &status);
 	String json = "{\"enabled\":";
 	json += config.enabled ? "true" : "false";
 	json += ",\"samplePeriod\":";
@@ -455,6 +471,7 @@ static String historyConfigJson(const HistoryRecorderConfig& config)
 	json += ",\"energyExtraMode\":";
 	json += config.groupConfig & HistoryFormat::energyBit ?
 		((config.groupConfig >> HistoryFormat::energyExtraModeShift) & 0x07U) : 0;
+	json += ",\"apply\":\""; json += status; json += '"';
 	json += "}";
 	return json;
 }
@@ -558,6 +575,7 @@ static bool parseBackupOption(BackupOptionValue& item, const String& nameSpace)
 	item.type = backupOptionType(nameSpace, item.key);
 	if (item.type == BackupOptionType::invalid) return false;
 	if (item.type == BackupOptionType::string) return item.text.length() <= 255;
+	if (item.text.isEmpty() || isspace(static_cast<unsigned char>(item.text[0]))) return false;
 	if (item.type == BackupOptionType::boolean) {
 		if (item.text == "1" || item.text.equalsIgnoreCase("true")) item.boolValue = true;
 		else if (item.text == "0" || item.text.equalsIgnoreCase("false")) item.boolValue = false;
@@ -565,30 +583,31 @@ static bool parseBackupOption(BackupOptionValue& item, const String& nameSpace)
 		return true;
 	}
 	char* end = nullptr;
+	errno = 0;
 	if (item.type == BackupOptionType::floatingPoint) {
 		item.floatValue = strtof(item.text.c_str(), &end);
 		if (nameSpace == "meter" && (item.key == "ocHyst" || item.key == "ocCurrent") &&
 			(item.floatValue < 0 || item.floatValue > 163.82f || (item.key == "ocCurrent" && item.floatValue == 0))) return false;
 		if (nameSpace == "ADE9000" && (item.floatValue < 0.1f || item.floatValue > 10)) return false;
-		return end != item.text.c_str() && *end == '\0' && isfinite(item.floatValue);
+		return end != item.text.c_str() && *end == '\0' && errno != ERANGE && isfinite(item.floatValue);
 	}
 	if (item.type == BackupOptionType::signedInt && nameSpace == "ADE9000" &&
 		(item.text.startsWith("0x") || item.text.startsWith("0X"))) {
 		const unsigned long raw = strtoul(item.text.c_str(), &end, 16);
-		if (end == item.text.c_str() + 2 || *end || raw > UINT32_MAX) return false;
+		if (item.text.length() > 10 || end == item.text.c_str() + 2 || *end || errno == ERANGE || raw > UINT32_MAX) return false;
 		item.signedValue = static_cast<int32_t>(static_cast<uint32_t>(raw));
 		return true;
 	}
 	if (item.type == BackupOptionType::signedInt) {
 		const long long value = strtoll(item.text.c_str(), &end, 10);
-		if (end == item.text.c_str() || *end || value < INT32_MIN || value > INT32_MAX) return false;
+		if (end == item.text.c_str() || *end || errno == ERANGE || value < INT32_MIN || value > INT32_MAX) return false;
 		if (nameSpace == "meter" && (item.key == "dipMs" || item.key == "swellMs" || item.key == "ocMs") &&
 			(value < 10 || value > eventConfirmMaxMs || value % 10)) return false;
 		item.signedValue = static_cast<int32_t>(value);
 		return true;
 	}
 	const unsigned long long value = strtoull(item.text.c_str(), &end, 10);
-	if (end == item.text.c_str() || *end || item.text.startsWith("-") || value > UINT32_MAX) return false;
+	if (end == item.text.c_str() || *end || errno == ERANGE || item.text.startsWith("-") || value > UINT32_MAX) return false;
 	item.unsignedValue = static_cast<uint32_t>(value);
 	return true;
 }
@@ -598,6 +617,80 @@ static bool isEventOptionKey(const String& key) {
 	const char* keys[] = {"dipEnabled", "swellEnabled", "overcurrent", "dipMs", "swellMs", "ocMs", "ocCurrent", "ocHyst"};
 	for (const char* name : keys) if (key == name) return true;
 	return false;
+}
+
+// Convierte ip a un entero de orden de red para comprobar subredes y mascaras.
+static uint32_t networkIpNumber(const IPAddress& ip)
+{
+	return (uint32_t(ip[0])<<24) | (uint32_t(ip[1])<<16) | (uint32_t(ip[2])<<8) | ip[3];
+}
+
+// Valida values/count antes de escribir y deja en invalidKey la primera clave que falla.
+static bool validateNetworkOptions(const BackupOptionValue* values, size_t count, String& invalidKey)
+{
+	Preferences options;
+	if (!options.begin("wifi-stuff", true)) return false;
+	const auto text = [&](const char* key, const char* fallback) {
+		for (size_t i=0; i<count; ++i) if (values[i].key == key) return values[i].text;
+		return options.getString(key, fallback);
+	};
+	const auto toggle = [&](const char* key) {
+		for (size_t i=0; i<count; ++i) if (values[i].key == key) return values[i].boolValue;
+		return options.getBool(key, false);
+	};
+	for (size_t i=0; i<count; ++i) {
+		const auto& item=values[i];
+		bool valid = true;
+		if (item.key == "wifi-mode") valid = item.signedValue >= 0 && item.signedValue <= 3;
+		if (item.key == "time-minwest") valid = item.signedValue >= -840 && item.signedValue <= 840;
+		if (item.key == "time-dsttime") valid = item.signedValue >= -120 && item.signedValue <= 120;
+		if (item.key == "mqtt-port") valid = item.unsignedValue >= 1 && item.unsignedValue <= 65535;
+		if (item.key == "mqtt-server") valid = item.text.length() < 64;
+		if (item.key == "mqtt-user" || item.key == "mqtt-pass") valid = item.text.length() < 32;
+		if (item.key == "sta-ssid" || item.key == "ap-ssid") valid = item.text.length() <= 32;
+		if (item.key == "ap-ssid") valid &= !item.text.isEmpty();
+		if (item.key == "sta-pass" || item.key == "ap-pass") {
+			const size_t length=item.text.length();
+			bool hex=length==64 && item.key=="sta-pass";
+			for (size_t k=0; hex && k<length; ++k) hex=isxdigit(item.text[k]);
+			valid = valid && (length==0 || (length>=8 && length<=63) || hex);
+		}
+		if (item.key == "time-server") {
+			valid = !item.text.isEmpty() && item.text.length()<48;
+			for (size_t k=0; k<item.text.length(); ++k) {
+				const char c=item.text[k]; valid = valid && (isalnum(c) || c=='.' || c=='-');
+			}
+		}
+		if (!valid) { invalidKey = item.key; options.end(); return false; }
+	}
+	for (const char* prefix : {"sta", "ap"}) {
+		if (!toggle(prefix[0]=='s' ? "staticIp" : "ap-custom-ip")) continue;
+		IPAddress ip, mask, gateway;
+		const String base=String(prefix)+"-";
+		if (!ip.fromString(text((base+"ip").c_str(),"192.168.4.1"))) { invalidKey = base+"ip"; options.end(); return false; }
+		if (!mask.fromString(text((base+"mask").c_str(),"255.255.255.0"))) { invalidKey = base+"mask"; options.end(); return false; }
+		if (!gateway.fromString(text((base+"gw").c_str(),"192.168.4.1"))) { invalidKey = base+"gw"; options.end(); return false; }
+		const uint32_t ipNumber=networkIpNumber(ip), maskNumber=networkIpNumber(mask), gatewayNumber=networkIpNumber(gateway);
+		const uint32_t hostMask=~maskNumber;
+		if (!maskNumber || !hostMask || (hostMask & (hostMask+1))!=0) { invalidKey = base+"mask"; options.end(); return false; }
+		if (ip[0]==0 || ip[0]>=224 || (ipNumber&hostMask)==0 || (ipNumber&hostMask)==hostMask) { invalidKey = base+"ip"; options.end(); return false; }
+		if (gateway[0]==0 || gateway[0]>=224 || (gatewayNumber&hostMask)==0 || (gatewayNumber&hostMask)==hostMask ||
+			(ipNumber&maskNumber)!=(gatewayNumber&maskNumber)) { invalidKey = base+"gw"; options.end(); return false; }
+	}
+	for (const char* key : {"sta-dns1","sta-dns2"}) { IPAddress address; if (!address.fromString(text(key,"0.0.0.0"))) { invalidKey = key; options.end(); return false; } }
+	options.end();
+	return true;
+}
+
+// Devuelve un error de opciones con la clave causante, sin incluir su valor.
+// request: respuesta HTTP. code: estado HTTP. error: codigo estable. key: clave rechazada, sin su valor.
+static void sendOptionError(AsyncWebServerRequest* request, int code, const char* error, const String& key)
+{
+	char buffer[320]; JsonWriter json(buffer, sizeof(buffer));
+	json.objBegin(); json.objAppendBool("ok", false); json.objAppendString("error", error);
+	if (key.length()) json.objAppendString("key", key.c_str());
+	json.objEnd();
+	request->send(code, "application/json", json.valid() ? json.c_str() : "{\"error\":\"response_overflow\"}");
 }
 
 // Escribe un grupo previamente validado con los tipos que espera cada consumidor.
@@ -622,12 +715,12 @@ static void writeBackupOptions(AsyncWebServerRequest* request, const String& nam
 		values[count].text = param->value();
 		for (size_t j = 0; j < count; ++j) {
 			if (values[j].key == values[count].key) {
-				request->send(400, "application/json", "{\"ok\":false,\"error\":\"duplicate_option\"}");
+				sendOptionError(request, 400, "duplicate_option", values[count].key);
 				return;
 			}
 		}
 		if (!parseBackupOption(values[count], nameSpace)) {
-			request->send(400, "application/json", "{\"ok\":false,\"error\":\"invalid_or_unsupported_option\"}");
+			sendOptionError(request, 400, "invalid_or_unsupported_option", values[count].key);
 			return;
 		}
 		++count;
@@ -636,25 +729,47 @@ static void writeBackupOptions(AsyncWebServerRequest* request, const String& nam
 		request->send(400, "application/json", "{\"ok\":false,\"error\":\"options_required\"}");
 		return;
 	}
+	networkSettingsGuard networkGuard(nameSpace == "wifi-stuff");
+	if (!networkGuard.locked) { request->send(409, "application/json", "{\"error\":\"config_busy\"}"); return; }
+	String invalidKey;
+	if (nameSpace == "wifi-stuff" && !validateNetworkOptions(values,count,invalidKey)) {
+		sendOptionError(request, 400, "invalid_network_config", invalidKey); return;
+	}
 	Preferences options;
 	if (!options.begin(nameSpace.c_str(), false)) {
 		request->send(503, "application/json", "{\"ok\":false,\"error\":\"preferences_unavailable\"}");
 		return;
 	}
 	size_t writtenCount = 0;
+	uint8_t networkServices = 0;
+	if (nameSpace == "wifi-stuff") restartRequired = false;
+	if (nameSpace == "ADE9000" || nameSpace == "meter") restartRequired = true;
 	if (nameSpace == "meter") {
 		float current = options.getFloat("ocCurrent", 50), hysteresis = options.getFloat("ocHyst", 1);
 		for (size_t i = 0; i < count; ++i) {
 			if (values[i].key == "ocCurrent") current = values[i].floatValue;
 			if (values[i].key == "ocHyst") hysteresis = values[i].floatValue;
 		}
-		if (hysteresis >= current) { options.end(); request->send(400, "text/plain", "Histeresis de corriente incompatible"); return; }
+		if (hysteresis >= current) { options.end(); sendOptionError(request, 400, "invalid_current_hysteresis", "ocHyst"); return; }
 	}
 	for (; writtenCount < count; ++writtenCount) {
 		BackupOptionValue& item = values[writtenCount];
+		bool unchanged = options.isKey(item.key.c_str());
+		switch (item.type) {
+		case BackupOptionType::string: unchanged &= options.getString(item.key.c_str()) == item.text; break;
+		case BackupOptionType::boolean: unchanged &= options.getBool(item.key.c_str()) == item.boolValue; break;
+		case BackupOptionType::signedInt: unchanged &= options.getInt(item.key.c_str()) == item.signedValue; break;
+		case BackupOptionType::unsignedInt: unchanged &= options.getUInt(item.key.c_str()) == item.unsignedValue; break;
+		case BackupOptionType::floatingPoint: unchanged &= options.getFloat(item.key.c_str()) == item.floatValue; break;
+		default: break;
+		}
+		if (unchanged) continue;
 		size_t written = 0;
 		switch (item.type) {
-		case BackupOptionType::string: written = options.putString(item.key.c_str(), item.text.c_str()); break;
+		case BackupOptionType::string:
+			written = options.putString(item.key.c_str(), item.text.c_str());
+			if (!written && item.text.isEmpty() && options.getString(item.key.c_str(), "missing").isEmpty()) written=1;
+			break;
 		case BackupOptionType::boolean: written = options.putBool(item.key.c_str(), item.boolValue); break;
 		case BackupOptionType::signedInt: written = options.putInt(item.key.c_str(), item.signedValue); break;
 		case BackupOptionType::unsignedInt: written = options.putUInt(item.key.c_str(), item.unsignedValue); break;
@@ -662,20 +777,41 @@ static void writeBackupOptions(AsyncWebServerRequest* request, const String& nam
 		default: break;
 		}
 		if (!written) break;
+		if (nameSpace == "wifi-stuff") {
+			if (item.key.startsWith("sta-") || item.key.startsWith("ap-") || item.key == "staticIp" || item.key == "wifi-mode") networkServices |= 1;
+			else if (item.key.startsWith("time-") && item.key != "time-start") networkServices |= 2;
+			else restartRequired = true;
+		}
+	}
+	bool verified = writtenCount == count;
+	String failedKey;
+	if (!verified && writtenCount < count) failedKey = values[writtenCount].key;
+	for (size_t i = 0; verified && i < count; ++i) {
+		const auto& item = values[i];
+		if (!options.isKey(item.key.c_str())) { verified = false; failedKey = item.key; break; }
+		switch (item.type) {
+		case BackupOptionType::string: verified = options.getString(item.key.c_str()) == item.text; break;
+		case BackupOptionType::boolean: verified = options.getBool(item.key.c_str()) == item.boolValue; break;
+		case BackupOptionType::signedInt: verified = options.getInt(item.key.c_str()) == item.signedValue; break;
+		case BackupOptionType::unsignedInt: verified = options.getUInt(item.key.c_str()) == item.unsignedValue; break;
+		case BackupOptionType::floatingPoint: verified = options.getFloat(item.key.c_str()) == item.floatValue; break;
+		default: verified = false; break;
+		}
+		if (!verified) failedKey = item.key;
 	}
 	options.end();
 	if (writtenCount != count) {
-		char response[96];
-		snprintf(response, sizeof(response), "{\"ok\":false,\"written\":%u,\"total\":%u}", unsigned(writtenCount), unsigned(count));
-		request->send(500, "application/json", response);
+		sendOptionError(request, 500, "write_failed", failedKey);
 		return;
 	}
-	char response[96];
-	if (restartRequired)
-		snprintf(response, sizeof(response), "{\"ok\":true,\"written\":%u,\"restartRequired\":true}", unsigned(count));
-	else
-		snprintf(response, sizeof(response), "{\"ok\":true,\"written\":%u}", unsigned(count));
-	request->send(200, "application/json", response);
+	if (!verified) { sendOptionError(request, 500, "verification_failed", failedKey); return; }
+	const bool deferred = request->hasParam("defer") && request->getParam("defer")->value() == "1";
+	if (networkServices && !deferred) networkQueueApply(networkServices);
+	char response[160];
+	snprintf(response, sizeof(response), "{\"ok\":true,\"verified\":true,\"written\":%u,\"restartRequired\":%s,\"pending\":%u,\"apply\":\"%s\"}",
+		unsigned(count), restartRequired ? "true" : "false", networkServices,
+		networkServices ? deferred ? "saved" : "wait" : "ok");
+	request->send(networkServices && !deferred ? 202 : 200, "application/json", response);
 }
 
 // Codifica texto para incluirlo de forma segura en una cadena JSON.
@@ -720,12 +856,42 @@ static void appendNetworkOptionJson(String& json, Preferences& options, const ch
 // request: solicitud HTTP GET.
 static void handleNetworkConfigGet(AsyncWebServerRequest* request)
 {
+	if (request->hasParam("view") && request->getParam("view")->value()=="setup") {
+		networkSettingsGuard guard;
+		if (!guard.locked) { request->send(409, "application/json", "{\"error\":\"config_busy\"}"); return; }
+		Preferences options;
+		if (!options.begin("wifi-stuff", true)) { request->send(503); return; }
+		char buffer[1536]; JsonWriter json(buffer,sizeof(buffer)); json.objBegin();
+		json.objAppendInt("wifi-mode",options.getInt("wifi-mode",1));
+		const char* const keys[]={"sta-ssid","sta-ip","sta-mask","sta-gw","sta-dns1","sta-dns2","ap-ssid","ap-ip","ap-mask","ap-gw","time-server"};
+		const char* const defaults[]={"","192.168.1.90","255.255.254.0","192.168.0.1","8.8.8.8","4.4.4.4","PowerMeter9000","192.168.4.1","255.255.255.0","192.168.4.1","ar.pool.ntp.org"};
+		for (size_t i=0; i<sizeof(keys)/sizeof(keys[0]); ++i) json.objAppendString(keys[i],options.getString(keys[i],defaults[i]).c_str());
+		for (const char* key : {"staticIp","ap-hide","ap-custom-ip"}) json.objAppendBool(key,options.getBool(key,false));
+		json.objAppendBool("time-sync",options.getBool("time-sync",true));
+		json.objAppendInt("time-minwest",options.getInt("time-minwest",-180));
+		json.objAppendInt("time-dsttime",options.getInt("time-dsttime",0));
+		json.objAppendBool("staHasPass",!options.getString("sta-pass","").isEmpty());
+		json.objAppendBool("apHasPass",!options.getString("ap-pass","").isEmpty());
+		options.end();
+		json.objAppendString("apply",networkApplyStatus());
+		json.objAppendBool("connected",WiFi.isConnected());
+		json.objAppendString("address",WiFi.localIP().toString().c_str());
+		json.objAppendBool("recovery",wifiRecoveryApActive());
+		json.objAppendBool("apActive",(WiFi.getMode() & WIFI_MODE_AP)!=0);
+		json.objAppendString("apAddress",WiFi.softAPIP().toString().c_str());
+		json.objEnd();
+		if (!json.valid()) { request->send(500); return; }
+		auto* response=request->beginResponse(200,"application/json",json.c_str());
+		response->addHeader("Cache-Control","no-store"); request->send(response); return;
+	}
 	static const char* const keys[] = {
 		"wifi-mode", "sta-ssid", "sta-pass", "staticIp", "sta-ip", "sta-mask", "sta-gw", "sta-dns1", "sta-dns2",
 		"ap-ssid", "ap-pass", "ap-hide", "ap-custom-ip", "ap-ip", "ap-mask", "ap-gw", "ota-enabled", "ota-name", "ota-pass",
 		"time-start", "time-dsttime", "time-minwest", "time-server", "time-sync", "debug-enabled", "debug-name", "debug-pass",
 		"mqtt-enabled", "mqtt-server", "mqtt-port", "mqtt-user", "mqtt-pass"
 	};
+	networkSettingsGuard guard;
+	if (!guard.locked) { request->send(409, "application/json", "{\"error\":\"config_busy\"}"); return; }
 	Preferences options;
 	if (!options.begin("wifi-stuff", true)) {
 		request->send(503, "application/json", "{\"ok\":false,\"error\":\"preferences_unavailable\"}");
@@ -756,7 +922,7 @@ static void handleBackupOptionsPost(AsyncWebServerRequest* request)
 	writeBackupOptions(request, nameSpace, false);
 }
 
-// Guarda parámetros de red enviados como formulario y avisa que requieren reinicio.
+// Guarda el formulario y marca los servicios de red/hora que deben consumirlo.
 // request: formulario POST con opciones del namespace wifi-stuff.
 static void handleNetworkConfigPost(AsyncWebServerRequest* request)
 {
@@ -788,8 +954,10 @@ static void handleGridSettings(AsyncWebServerRequest* request) {
 
 void webServerSetMeterEvents(WSeventFunctionCallback func)
 {
-	if (func != nullptr)
+	if (func != nullptr) {
 		meterEvents = func;
+		scopeWS.onEvent(meterEvents);
+	}
 }
 
 AsyncWebSocket* webServerGetMeterWS()
@@ -1218,6 +1386,7 @@ void Init_WebServer()
 			",\"lostParts\":" + String(loggerMetrics.lostChunks) +
 			",\"incomplete\":" + String(loggerMetrics.incompleteMessages) +
 			",\"truncated\":" + String(loggerMetrics.truncatedMessages) +
+			",\"stackFreeWords\":" + String(loggerMetrics.stackFreeWords) +
 			"},\"serialDrops\":" + String(loggerMetrics.serialDrops) +
 			",\"nandDrops\":" + String(loggerMetrics.nandDrops) +
 			",\"storage\":{\"ready\":" + (storeMetrics.ready ? "true" : "false") +
@@ -1455,6 +1624,10 @@ void Init_WebServer()
 		appendPartitionStatus(json, status.webFsB, status.webFsBFormat);
 		json += "},\"historyStore\":{\"writtenPages\":";
 		json += status.historyStore.writtenPages;
+		json += ",\"mountReadyMs\":";
+		json += status.historyStore.mountReadyMs;
+		json += ",\"writeReadyMs\":";
+		json += status.historyStore.writeReadyMs;
 		if (includeDetails) {
 			json += ",\"acceptedSamples\":";
 			json += status.historyStore.acceptedSamples;
@@ -1477,7 +1650,13 @@ void Init_WebServer()
 		json += status.gridStore.recoveredEvents;
 		json += ",\"acceptedEvents\":";
 		json += status.gridStore.acceptedEvents;
+		json += ",\"mountReadyMs\":";
+		json += status.gridStore.mountReadyMs;
+		json += ",\"writeReadyMs\":";
+		json += status.gridStore.writeReadyMs;
 		if (includeDetails) {
+			json += ",\"firstObserveMs\":";
+			json += status.gridStore.firstObserveMs;
 			json += ",\"discardedCandidates\":";
 			json += status.gridStore.discardedCandidates;
 			json += ",\"writtenPages\":";
@@ -1534,7 +1713,11 @@ void Init_WebServer()
 			json += heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 			json += ",\"min8\":";
 			json += heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
-			json += "},\"historyRecovery\":{\"headerReads\":";
+			json += "},\"tasks\":{\"meterStackFreeWords\":";
+			json += meterGetStackFreeWords();
+			json += "},\"boot\":";
+			bootTimingAppendJson(json);
+			json += ",\"historyRecovery\":{\"headerReads\":";
 			json += status.historyRecovery.headerReads;
 			json += ",\"validHeaders\":";
 			json += status.historyRecovery.validHeaders;
@@ -1552,6 +1735,21 @@ void Init_WebServer()
 			json += historyReadMetrics.lastBufferWaitUs;
 			json += ",\"maxBufferWaitUs\":";
 			json += historyReadMetrics.maxBufferWaitUs;
+			HistoryReadTimings readTimings;
+			HistoryReadSession::getTimings(readTimings);
+			const char* timingNames[] = {"nand", "prepare", "queue"};
+			const HistoryReadTiming* timings[] = {&readTimings.nand, &readTimings.prepare, &readTimings.queue};
+			for (uint8_t index = 0; index < 3; ++index) {
+				const auto& timing = *timings[index];
+				json += ",\""; json += timingNames[index]; json += "\":{\"count\":"; json += timing.count;
+				json += ",\"totalUs\":"; managerAppendUint64(json, timing.totalUs);
+				json += ",\"maxUs\":"; json += timing.maxUs;
+				json += ",\"over1ms\":"; json += timing.over1ms;
+				json += ",\"over2ms\":"; json += timing.over2ms;
+				json += ",\"over5ms\":"; json += timing.over5ms;
+				json += ",\"over10ms\":"; json += timing.over10ms;
+				json += '}';
+			}
 			json += "},\"io\":{\"readBytes\":";
 			json += status.ioMetrics.bytesRead;
 			json += ",\"writtenBytes\":";
@@ -1562,6 +1760,8 @@ void Init_WebServer()
 			json += status.ioMetrics.maxQueueDepth[uint8_t(StoragePriority::medium)];
 			json += ",\"lowQueueMax\":";
 			json += status.ioMetrics.maxQueueDepth[uint8_t(StoragePriority::low)];
+			json += ",\"stackFreeWords\":";
+			json += status.ioMetrics.stackFreeWords;
 			json += ",\"lastOperation\":\"";
 			json += nandOperationName(status.ioMetrics.lastOperation);
 			json += "\",\"lastError\":\"";
@@ -1623,7 +1823,7 @@ void Init_WebServer()
 		if (!requireExactPath(request, "/history/config")) return;
 		HistoryRecorderConfig config;
 		historyRecorder.getConfig(config);
-		AsyncWebServerResponse* response = request->beginResponse(200, "application/json", historyConfigJson(config));
+		AsyncWebServerResponse* response = request->beginResponse(200, "application/json", historyConfigJson());
 		response->addHeader("Cache-Control", "no-store");
 		request->send(response);
 	});
@@ -1662,11 +1862,12 @@ void Init_WebServer()
 			request->send(400, "application/json", "{\"ok\":false,\"reason\":\"invalid_history_options\"}");
 			return;
 		}
-		if (!historyRecorder.setConfig(config)) {
+		if (!HistoryRecorder::isConfigSupported(config)) {
 			request->send(422, "application/json", "{\"ok\":false,\"reason\":\"unsupported_history_config\"}");
 			return;
 		}
-		AsyncWebServerResponse* response = request->beginResponse(200, "application/json", historyConfigJson(config));
+		if (!historyRecorder.setConfig(config)) { request->send(409, "application/json", "{\"error\":\"config_busy\"}"); return; }
+		AsyncWebServerResponse* response = request->beginResponse(202, "application/json", historyConfigJson());
 		response->addHeader("Cache-Control", "no-store");
 		request->send(response);
 	});
@@ -1764,6 +1965,14 @@ void Init_WebServer()
 		json += status.historyStore.activeSamples;
 		json += ",\"activeBytes\":";
 		json += uint32_t(status.historyStore.activeSamples) * HistoryFormat::sampleSize(historyConfig.groupConfig);
+		char identity[32] = {};
+		historyCacheIdentity(identity, sizeof(identity));
+		json += ",\"identity\":\"";
+		json += identity;
+		json += "\",\"committedTo\":";
+		json += status.historyStore.newestTimestamp;
+		json += ",\"latestSequence\":";
+		json += status.historyStore.latestSequence;
 		json += ",\"writePending\":";
 		json += status.historyStore.writePending ? "true" : "false";
 		json += ",\"pageSize\":";
@@ -1777,6 +1986,22 @@ void Init_WebServer()
 
 	server.on("/history/data", HTTP_GET, [](AsyncWebServerRequest* request) {
 		if (!requireExactPath(request, "/history/data")) return;
+		if (request->hasParam("bg")) {
+			bool busy = scopeWS.count() || nandReadSession.isActive();
+			for (auto& reader : historyReadSessions) busy = busy || !reader.isAvailable();
+			if (busy) {request->send(409, "application/json", "{\"ok\":false,\"reason\":\"history_background_busy\"}"); return;}
+		}
+		uint32_t maxPages = 4096, beforeSequence = UINT32_MAX;
+		if ((request->hasParam("pages") && (!getUint32Parameter(request, "pages", maxPages) || !maxPages || maxPages > 256)) ||
+			(request->hasParam("before") && (!request->hasParam("pages") ||
+				!getUint32Parameter(request, "before", beforeSequence) || beforeSequence > 0xFFFFFFU))) {
+			request->send(400, "application/json", "{\"ok\":false,\"reason\":\"invalid_chunk\"}"); return;
+		}
+		char identity[32] = {};
+		if (!historyCacheIdentity(identity, sizeof(identity)) ||
+			(request->hasParam("identity") && request->getParam("identity")->value() != identity)) {
+			request->send(409, "application/json", "{\"ok\":false,\"reason\":\"history_identity_changed\"}"); return;
+		}
 		StorageManagerStatus status;
 		storageManager.getStatus(status);
 		if (status.state != StorageState::ready) {
@@ -1803,7 +2028,7 @@ void Init_WebServer()
 		}
 		HistoryReadPlan plan;
 		const HistoryReadPlanStatus planStatus = storageManager.history().buildReadPlan(fromTimestamp, toTimestamp, plan,
-			activeSnapshot, HistoryFormat::pageSize);
+			activeSnapshot, HistoryFormat::pageSize, maxPages, beforeSequence);
 		if (planStatus != HistoryReadPlanStatus::ready) {
 			delete[] activeSnapshot;
 			const char* reason = planStatus == HistoryReadPlanStatus::noData ? "history_empty_in_range" :
@@ -1831,6 +2056,10 @@ void Init_WebServer()
 		response->addHeader("X-History-From", String(fromTimestamp));
 		response->addHeader("X-History-To", String(toTimestamp));
 		response->addHeader("X-History-Page-Size", String(HistoryFormat::pageSize));
+		response->addHeader("X-History-Identity", identity);
+		response->addHeader("X-History-First-Sequence", String(plan.firstSequence));
+		response->addHeader("X-History-Pages", String(plan.physicalPageCount));
+		response->addHeader("Access-Control-Expose-Headers", "X-History-Identity,X-History-First-Sequence,X-History-Pages");
 		request->send(response);
 		});
 	registerHistoryRoot();
@@ -2067,7 +2296,25 @@ void Init_WebServer()
 	registerGridEventsRoot();
 
 	server.on("/network/config", HTTP_GET, handleNetworkConfigGet);
+	server.on("/network/status", HTTP_GET, [](AsyncWebServerRequest* request) {
+		if (!requireExactPath(request, "/network/status")) return;
+		char json[192];
+		snprintf(json, sizeof(json), "{\"apply\":\"%s\",\"connected\":%s,\"address\":\"%s\",\"apAddress\":\"%s\"}",
+			networkApplyStatus(), WiFi.isConnected() ? "true" : "false", WiFi.localIP().toString().c_str(), WiFi.softAPIP().toString().c_str());
+		auto* response = request->beginResponse(200, "application/json", json);
+		response->addHeader("Cache-Control", "no-store"); request->send(response);
+	});
 	server.on("/network/config", HTTP_POST, handleNetworkConfigPost);
+	server.on("/network/apply", HTTP_POST, [](AsyncWebServerRequest* request) {
+		if (!requireExactPath(request, "/network/apply")) return;
+		if (request->params() != 1 || !request->hasParam("services", true)) { request->send(400); return; }
+		const String value = request->getParam("services", true)->value();
+		if (value != "1" && value != "2" && value != "3") { request->send(400); return; }
+		networkSettingsGuard guard;
+		if (!guard.locked) { request->send(409, "application/json", "{\"error\":\"config_busy\"}"); return; }
+		networkQueueApply(uint8_t(value.toInt()));
+		request->send(202, "application/json", "{\"ok\":true,\"apply\":\"wait\"}");
+	});
 
 	server.on("/network/scan", HTTP_GET, [](AsyncWebServerRequest* request) {
 		String status;
@@ -2169,8 +2416,10 @@ void Init_WebServer()
 		});
 
 	server.on("/calibration/restore", HTTP_POST, [](AsyncWebServerRequest* request) {
-		request->send(200, "text/plain", "restaurando calibracion... reiniciar para aplicar cambios!");
-		ade.restoreCalibration();
+		if (!requireExactPath(request, "/calibration/restore")) return;
+		const bool saved = ade.restoreCalibration();
+		request->send(saved ? 200 : 500, "application/json", saved ?
+			"{\"ok\":true,\"verified\":true,\"restartRequired\":true}" : "{\"error\":\"verification_failed\"}");
 		});
 
 	server.on("/options/reload", HTTP_POST, [](AsyncWebServerRequest* request) {
@@ -2214,10 +2463,12 @@ void Init_WebServer()
 							value = (float)opts.getULong64(key.c_str());
 						else if (type == PT_BLOB) {
 							int32_t size = opts.getBytesLength(key.c_str());
-							if (size == sizeof(float))
-								value = String(opts.getFloat(key.c_str()), key == "neutralRms" || key == "neutralFast" ? 9 : 2);
-							else if (size == sizeof(double))
-								value = opts.getDouble(key.c_str());
+							if (size == sizeof(float) || size == sizeof(double)) {
+								char number[32];
+								snprintf(number, sizeof(number), size == sizeof(float) ? "%.9g" : "%.17g",
+									size == sizeof(float) ? double(opts.getFloat(key.c_str())) : opts.getDouble(key.c_str()));
+								value = number;
+							}
 							else
 								value = "\"invalid type\"";
 						}
@@ -2229,7 +2480,7 @@ void Init_WebServer()
 					else 
 						value = "\"key no existe\"";
 					if (res.length() > 3) res += ", ";
-					res += "\"" + key + "\": " + value;
+					res += quoteJsonString(key) + ": " + value;
 				}
 				res += "}";
 			}
@@ -2241,7 +2492,8 @@ void Init_WebServer()
 			res = "{\"error\":\"se debe indicar el nombre del namespace y una clave a leer o escribir\"}";
 		time = micros() - time;
 		debugI("Tiempo de ejecucion opts: %Uus", time);
-		request->send(200, "application/json", res);
+		auto* response = request->beginResponse(200, "application/json", res);
+		response->addHeader("Cache-Control", "no-store"); request->send(response);
 		});
 
 
@@ -2271,11 +2523,24 @@ void getStatus(String& str) {
 	const bool recentActive = recentAgeUs < 1000000U;
 	const uint32_t readBytesPerSecond = recentActive ? nandRateBytesPerSecond(storageStatus.ioMetrics.recentReadBytes, recentAgeUs) : 0;
 	const uint32_t writeBytesPerSecond = recentActive ? nandRateBytesPerSecond(storageStatus.ioMetrics.recentWrittenBytes, recentAgeUs) : 0;
-	char data[200];
-	snprintf(data, sizeof(data), "{\"ssid\":\"%s\",\"rssi\":%i,\"ip\":\"%s\",\"heap\":%i,\"free\":%i,\"nand\":{\"readBytesPerSecond\":%lu,\"writeBytesPerSecond\":%lu}}",
-		getWiFiSSID().c_str(), getWiFiRSSI(), WiFi.localIP().toString().c_str(), ESP.getHeapSize(), ESP.getFreeHeap(),
-		static_cast<unsigned long>(readBytesPerSecond), static_cast<unsigned long>(writeBytesPerSecond));
-	str = data;
+	int16_t cpu[2]; cpuUsageRead(cpu);
+	char data[400]; JsonWriter json(data, sizeof(data));
+	json.objBegin();
+	json.objAppendString("ssid", getWiFiSSID().c_str());
+	json.objAppendInt("rssi", getWiFiRSSI());
+	json.objAppendString("ip", WiFi.localIP().toString().c_str());
+	json.objAppendUInt("heap", ESP.getHeapSize()); json.objAppendUInt("free", ESP.getFreeHeap());
+	json.objBegin("nand");
+	json.objAppendUInt("readBytesPerSecond", readBytesPerSecond);
+	json.objAppendUInt("writeBytesPerSecond", writeBytesPerSecond); json.objEnd();
+	json.objBegin("cpu");
+	for (uint8_t core = 0; core < 2; ++core) {
+		const char* key = core ? "c1" : "c0";
+		if (cpu[core] < 0) json.objAppendNull(key);
+		else json.objAppendFloat(key, cpu[core] / 10.0, 1);
+	}
+	json.objEnd(); json.objEnd();
+	str = json.valid() ? json.c_str() : "{}";
 }
 
 
@@ -2294,16 +2559,18 @@ int32_t scanWifiGetJson(String& List)
 		String ssid;
 		int32_t rssi;
 		uint8_t encType;
-		char item[128];
 
 		count = wifiScanStatus();
 		if (count >= 0) {	//Una vez terminado el escaneo, crear un array de objetos con la info de la red
 			list = "";	//Limpiar lista
 			for (int32_t i = 0; i < count; i++) {
 				if (wifiScanGetNetwork(i, ssid, encType, rssi)) {	//Obtener info de la red
-					snprintf(item, sizeof(item), "{\"ssid\":\"%s\", \"rssi\":%i,\"auth\":\"%s\"}", ssid.c_str(), rssi, getWifiAuthMode(encType));
-					list += item;
-					if (i < (count - 1)) list += ",";
+					char entry[320]; JsonWriter json(entry,sizeof(entry));
+					json.objBegin(); json.objAppendString("ssid",ssid.c_str());
+					json.objAppendInt("rssi",rssi); json.objAppendString("auth",getWifiAuthMode(encType)); json.objEnd();
+					if (!json.valid()) continue;
+					if (list.length()) list += ",";
+					list += json.c_str();
 				}
 			}
 			first = true;

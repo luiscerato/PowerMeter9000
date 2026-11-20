@@ -4,6 +4,16 @@
 #include <atomic>
 #include "history_store.h"
 
+struct HistoryReadTiming {
+	uint64_t totalUs = 0;
+	uint32_t count = 0, maxUs = 0;
+	uint32_t over1ms = 0, over2ms = 0, over5ms = 0, over10ms = 0;
+};
+
+struct HistoryReadTimings {
+	HistoryReadTiming nand, prepare, queue;
+};
+
 struct HistoryReadSessionMetrics {
 	uint32_t emptyBufferCalls = 0;
 	uint32_t emptyBufferEpisodes = 0;
@@ -12,7 +22,7 @@ struct HistoryReadSessionMetrics {
 	uint32_t maxBufferWaitUs = 0;
 };
 
-// Transmite paginas historicas congeladas sin bloquear el callback HTTP.
+// Transmite paginas historicas congeladas; HTTP usa RAM y como maximo 20 ms de espera de cola por llamada.
 class HistoryReadSession {
 public:
 	// Reserva buffers dinamicos y comienza a precargar las paginas descriptas por plan.
@@ -32,6 +42,9 @@ public:
 
 	// Copia metricas acumuladas desde el arranque; output recibe la instantanea protegida.
 	static void getMetrics(HistoryReadSessionMetrics& output);
+
+	// Copia tiempos globales de lectura, preparacion y espera de cola; output recibe la instantanea.
+	static void getTimings(HistoryReadTimings& output);
 
 private:
 	static constexpr uint8_t bufferCount = 3;

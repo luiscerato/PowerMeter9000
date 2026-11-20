@@ -50,8 +50,8 @@ function bundleAppScripts(files) {
 // Parses command line arguments; no parameters are required for the default data folder.
 function parseArguments() {
   const values = process.argv.slice(2);
-  const gzip = values.includes("--gzip");
-  const paths = values.filter(value => value !== "--gzip");
+  const gzip = !values.includes("--no-gzip");
+  const paths = values.filter(value => value !== "--gzip" && value !== "--no-gzip");
   return {
     gzip,
     source: path.resolve(paths[0] || path.join(__dirname, "..", "data")),

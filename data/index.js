@@ -27,6 +27,8 @@ let storageWebFsInfo = {};
 let historyEstimateRequest = null;
 let historyEstimateRevision = 0;
 let loadedSettingsBackup = null;
+let loadedSettingsBackupErrors = {};
+let settingsBackupBusy = false;
 let settingsBackupRestartRequired = false;
 
 // Mapa fijo inicial del firmware: particiones fisicas y bancos WebFS en bloques NAND de 128 KiB.
@@ -60,6 +62,8 @@ function initMeterUI() {
     createTable();
     initSettingsUI();
     initHistoryViewer();
+    initAppAppearance();
+    initHistoryCache();
 	initGridEventsViewer();
     initEventHistory();
 	initLogsViewer();
@@ -277,9 +281,110 @@ const backupGridKeys = ["lowR", "highR", "lowS", "highS", "lowT", "highT", "noVo
 const backupHistoryKeys = ["enabled", "groupConfig", "samplePeriodDeciseconds"];
 const backupEnergyKeys = ["rWattH", "rVarH", "rVaH", "sWattH", "sVarH", "sVaH", "tWattH", "tVarH", "tVaH", "WattH", "VarH", "VaH"];
 
+// Interpreta solo representaciones booleanas admitidas; value proviene del formulario o del JSON.
+function settingsBoolean(value) {
+    if([true,1,'1','true'].includes(value))return true;
+    if([false,0,'0','false'].includes(value))return false;
+    throw Error('Valor booleano inválido.');
+}
+
+// Comprueba numero finito y rango; value/min/max/integer definen el valor y sus limites.
+function settingsNumber(value,min,max,integer=false) {
+    return ['number','string'].includes(typeof value)&&String(value).trim()!==''&&Number.isFinite(Number(value))&&
+        Number(value)>=min&&Number(value)<=max&&(!integer||Number.isInteger(Number(value)));
+}
+
+// Compara valores solicitados contra su lectura posterior; expected/actual son objetos planos de una seccion.
+function assertSettingsMatch(expected,actual) {
+    const different=Object.keys(expected).filter(key=>{
+        if(!Object.hasOwn(actual,key))return true;
+        const value=expected[key],stored=actual[key];
+        if(getCalibrationKeys().includes(key)&&isHex32(String(value))) {
+            if(!isHex32(String(stored))&&!settingsNumber(stored,-2147483648,4294967295,true))return true;
+            return (parseInt(value,16)>>>0)!==(isHex32(String(stored))?parseInt(stored,16)>>>0:Number(stored)>>>0);
+        }
+        if(typeof stored==='boolean'||typeof value==='boolean') {
+            try{return settingsBoolean(value)!==settingsBoolean(stored);}catch(error){return true;}
+        }
+        if(typeof stored==='number') {
+            if(!settingsNumber(value,-Number.MAX_VALUE,Number.MAX_VALUE))return true;
+            const floating=backupEnergyKeys.includes(key)||['ocCurrent','ocHyst','neutralRms','neutralFast','samplePeriod'].includes(key)||
+                backupGridKeys.includes(key)&&!key.endsWith('Ms')||/^(volt|curr)\./.test(key)||/^neut\.(high|hyst)$/.test(key);
+            return floating?Math.fround(Number(value))!==Math.fround(stored):Number(value)!==stored;
+        }
+        return value!==stored;
+    });
+    if(different.length)throw Error('No coincide lo guardado: '+different.join(', ')+'. Recargue antes de continuar.');
+}
+
+// Valida limites y relaciones de red; values contiene el grupo completo de estados de red.
+function validateGridValues(values) {
+    const limits={noVoltage:[1,100],hysteresis:[0,50],lossConfirmMs:[20,2000],recoveryConfirmMs:[20,1000],
+        neutralHigh:[0.025,409.55],neutralHysteresis:[0,409.55],neutralConfirmMs:[20,2000],neutralRecoveryMs:[20,1000]};
+    for(const [key,[min,max]] of Object.entries(limits))
+        if(!settingsNumber(values[key],min,max,key.endsWith('Ms')))throw Error('Valor fuera de rango en '+key+'.');
+    for(const phase of ['R','S','T']) {
+        const low=Number(values['low'+phase]),high=Number(values['high'+phase]),hyst=Number(values.hysteresis);
+        if(!settingsNumber(values['low'+phase],1,500)||!settingsNumber(values['high'+phase],1,500)||
+            low<=Number(values.noVoltage)+hyst||high<=low+2*hyst)throw Error('Límites o histéresis incompatibles en fase '+phase+'.');
+    }
+    if(Number(values.neutralHysteresis)>=Number(values.neutralHigh))throw Error('La histéresis de neutro debe ser menor al umbral.');
+}
+
+// Valida campos de deteccion presentes; values puede ser una seccion parcial del respaldo.
+function validateCaptureValues(values) {
+    for(const key of ['dipEnabled','swellEnabled','overcurrent'])if(Object.hasOwn(values,key))settingsBoolean(values[key]);
+    for(const key of ['dipMs','swellMs','ocMs'])if(Object.hasOwn(values,key)&&
+        (!settingsNumber(values[key],10,2000,true)||Number(values[key])%10))throw Error('Confirmaciones: 10 a 2000 ms, en pasos de 10 ms.');
+    for(const key of ['ocCurrent','ocHyst'])if(Object.hasOwn(values,key)&&
+        (!settingsNumber(values[key],0,163.82)||key==='ocCurrent'&&Number(values[key])===0))throw Error('Sobrecorriente fuera de rango.');
+    if(Object.hasOwn(values,'ocCurrent')&&Object.hasOwn(values,'ocHyst')&&Number(values.ocHyst)>=Number(values.ocCurrent))
+        throw Error('La histéresis de corriente debe ser menor al umbral.');
+}
+
+// Valida campos Wi-Fi y servicios; values incluye las opciones finales conocidas antes de guardar.
+function validateNetworkValues(values) {
+    const ranges={'wifi-mode':[0,3],'time-minwest':[-840,840],'time-dsttime':[-120,120],'time-start':[0,4294967295],'mqtt-port':[1,65535]};
+    for(const [key,[min,max]] of Object.entries(ranges))if(Object.hasOwn(values,key)&&!settingsNumber(values[key],min,max,true))throw Error('Valor fuera de rango en '+key+'.');
+    for(const key of ['staticIp','ap-hide','ap-custom-ip','ota-enabled','time-sync','debug-enabled','mqtt-enabled'])
+        if(Object.hasOwn(values,key))settingsBoolean(values[key]);
+    for(const [key,value] of Object.entries(values)) {
+        if(backupNetworkKeys.includes(key)&&!Object.hasOwn(ranges,key)&&!['staticIp','ap-hide','ap-custom-ip','ota-enabled','time-sync','debug-enabled','mqtt-enabled'].includes(key)) {
+            if(typeof value!=='string'||new TextEncoder().encode(value).length>255)throw Error('Texto inválido en '+key+'.');
+        }
+    }
+    for(const prefix of ['sta','ap']) {
+        const ssid=values[prefix+'-ssid'],password=values[prefix+'-pass'];
+        if(ssid!==undefined&&(new TextEncoder().encode(ssid).length>32||prefix==='ap'&&!ssid))throw Error('SSID inválido: máximo 32 bytes.');
+        if(password!==undefined) {
+            const size=new TextEncoder().encode(password).length;
+            if(size!==0&&!(size>=8&&size<=63)&&!(prefix==='sta'&&/^[a-f\d]{64}$/i.test(password)))throw Error('Contraseña inválida en '+prefix+'.');
+        }
+        const toggle=prefix==='sta'?'staticIp':'ap-custom-ip';
+        if(Object.hasOwn(values,toggle)&&settingsBoolean(values[toggle])&&['ip','mask','gw'].every(key=>Object.hasOwn(values,prefix+'-'+key))) {
+            const ip=settingsIp(values[prefix+'-ip']),mask=settingsIp(values[prefix+'-mask']),gateway=settingsIp(values[prefix+'-gw']);
+            const host=(~mask)>>>0;
+            if(!mask||!host||(host&(host+1))!==0||(ip&host)===0||(ip&host)===host||
+                (gateway&host)===0||(gateway&host)===host||(ip>>>24)<1||(ip>>>24)>=224||
+                (gateway>>>24)<1||(gateway>>>24)>=224||(ip&mask)!==(gateway&mask))throw Error('IP, máscara o puerta de enlace incompatibles en '+prefix+'.');
+        }
+    }
+    for(const key of ['sta-dns1','sta-dns2'])if(Object.hasOwn(values,key))settingsIp(values[key]);
+    if(Object.hasOwn(values,'time-server')&&!/^[a-z\d.-]{1,47}$/i.test(values['time-server']))throw Error('Servidor NTP inválido (máximo 47 caracteres).');
+    for(const [key,max] of [['mqtt-server',63],['mqtt-user',31],['mqtt-pass',31]])
+        if(Object.hasOwn(values,key)&&new TextEncoder().encode(values[key]).length>max)throw Error(key+': máximo '+max+' bytes.');
+}
+
+// Convierte value IPv4 a entero sin signo, rechazando octetos incompletos o fuera de rango.
+function settingsIp(value) {
+    if(typeof value!=='string'||!/^\d{1,3}(\.\d{1,3}){3}$/.test(value)||value.split('.').some(part=>Number(part)>255))throw Error('Dirección IPv4 inválida.');
+    return value.split('.').reduce((ip,part)=>(ip*256+Number(part))>>>0,0);
+}
+
 // Inicializa la pestaña de opciones.
 function initSettingsUI() {
     $("#settings").html(createSettingsHtml());
+    initNetworkSettings();
     $("#btnLoadSettings").click(() => loadSettings("capture", true));
     $("#btnLoadCalibration").click(() => loadSettings("calibration", true));
     $("#btnSaveMeterOptions").click(saveMeterOptions);
@@ -287,6 +392,8 @@ function initSettingsUI() {
     $("#waveConfigRefresh").on("click", () => loadWaveConfig().catch(()=>{}));
     $("#btnSaveCalibration").click(saveCalibrationOptions);
     $("#btnRestoreCalibration").click(restoreDefaultCalibration);
+    $("#neutralCalibrationReload").on("click", () => loadNeutralCalibration());
+    $("#neutralCalibrationStart").on("click", startNeutralCalibration);
     $("#gridSettingsForm").on("submit", saveGridSettings);
     $("#historySettingsForm").on("submit", saveHistorySettings);
     $("#historySettingsForm").on("change", "input, select", function () {
@@ -318,12 +425,12 @@ function initSettingsUI() {
 // Crea el HTML base de las opciones.
 function createSettingsHtml() {
     let html = '<div class="p-2"><ul class="nav nav-tabs" id="settingsTabs" role="tablist">';
-    const sections = [["grid", "Eventos de red"], ["history", "Registro histórico"], ["storage", "Almacenamiento NAND"], ["calibration", "Calibración"], ["backup", "Importar / exportar"]];
+    const sections = [["grid", "Eventos de red"], ["network", "Red y hora"], ["history", "Registro histórico"], ["application", "Aplicación"], ["storage", "Almacenamiento NAND"], ["calibration", "Calibración"], ["backup", "Importar / exportar"]];
     sections.forEach(([key, label], i) => {
         html += '<li class="nav-item" role="presentation"><button class="nav-link' + (i ? '' : ' active') + '" id="settingsTab_' + key + '" data-section="' + key + '" data-bs-toggle="tab" data-bs-target="#settings_' + key + '" type="button" role="tab" aria-controls="settings_' + key + '" aria-selected="' + !i + '">' + label + '</button></li>';
     });
     html += '</ul><div class="tab-content">';
-    const contents = [createGridSettingsHtml() + createMeterSettingsHtml(), createHistorySettingsHtml(), createStorageSettingsHtml(), createCalibrationSettingsHtml(), createSettingsBackupHtml()];
+    const contents = [createGridSettingsHtml() + createMeterSettingsHtml(), createNetworkSettingsHtml(), createHistorySettingsHtml(), createAppearanceSettingsHtml() + createApplicationSettingsHtml(), createStorageSettingsHtml(), createCalibrationSettingsHtml(), createSettingsBackupHtml()];
     sections.forEach(([key], i) => {
         html += '<section class="tab-pane settingsPane' + (i ? '' : ' active') + '" id="settings_' + key + '" role="tabpanel" aria-labelledby="settingsTab_' + key + '">';
         html += contents[i] + '</section>';
@@ -352,7 +459,7 @@ function createSettingsBackupHtml() {
 
 // Crea el panel de estado, mapa y acciones disponibles para la NAND; sin parametros.
 function createStorageSettingsHtml() {
-    const actions = '<button id="btnRefreshStorage" type="button" class="btn btn-sm btn-outline-secondary">Actualizar</button>' +
+    const actions = createSettingsIconButton('btnRefreshStorage','Actualizar almacenamiento',false) +
         '<button id="btnFormatStorage" type="button" class="btn btn-sm btn-outline-danger">Formatear NAND completa</button>';
     let html = '<div class="settingsSection">' + createSettingsHeaderHtml("Almacenamiento NAND", "Distribución física, capacidad útil y estado de las áreas de almacenamiento.", actions);
     html += '<div id="storageSettingsStatus" class="settingsStatusLine small text-muted" role="status">Sin consultar.</div>';
@@ -417,6 +524,10 @@ function renderStorageStatus(status, webFs) {
         webFsA: storageWebFsLabel(webFs, "a"),
         webFsB: storageWebFsLabel(webFs, "b"),
     };
+    for (const [key, metrics] of [["history", history], ["gridEvents", grid]]) {
+        if (metrics.writeReadyMs > 0) content[key] += '<div class="small text-muted" title="Tiempos desde el arranque del firmware; escritura incluye preparar el primer destino libre, no escribir una muestra.">' +
+            'Montaje ' + (metrics.mountReadyMs / 1000).toFixed(3) + ' s · lista para escribir ' + (metrics.writeReadyMs / 1000).toFixed(3) + ' s</div>';
+    }
     const globalFormatActive = !!(status.format && status.format.active);
     const anyPartitionFormatActive = Object.values(p).some((part) => part.format && part.format.active);
     const anyFormatActive = globalFormatActive || anyPartitionFormatActive;
@@ -560,8 +671,8 @@ function createGridSettingsHtml() {
 
 // Crea el formulario del perfil que se escribe periodicamente en la NAND.
 function createHistorySettingsHtml() {
-    const actions = '<button id="btnLoadHistorySettings" type="button" class="btn btn-sm btn-outline-secondary">Recargar</button>' +
-        '<button type="submit" class="btn btn-sm btn-success">Guardar</button>';
+    const actions = createSettingsIconButton('btnLoadHistorySettings','Actualizar histórico',false) +
+        createSettingsIconButton('','Guardar histórico',true,'submit');
     let html = '<form id="historySettingsForm" class="settingsSection">';
     html += createSettingsHeaderHtml("Registro histórico", "Muestras periódicas guardadas en la memoria NAND. Cada cambio inicia una página nueva.", actions);
     html += '<div id="historySettingsStatus" class="settingsStatusLine small text-muted" role="status"></div>';
@@ -740,7 +851,7 @@ function historyBackupToOptions(values) {
     const mode = shift => ({0: "off", 1: "compact", 2: "full"}[(config >> shift) & 3] || "off");
     const energy = Boolean(config & (1 << 14));
     return {
-        enabled: values.enabled,
+        enabled: settingsBoolean(values.enabled),
         samplePeriod: Number(values.samplePeriodDeciseconds) / 10,
         voltageMode: config & 1 ? "full" : "basic",
         activePower: mode(1),
@@ -758,7 +869,7 @@ function historyBackupToOptions(values) {
 }
 
 // Valida y guarda el perfil del histórico; event contiene el envio del formulario.
-function saveHistorySettings(event) {
+async function saveHistorySettings(event) {
     event.preventDefault();
     const form = document.getElementById("historySettingsForm");
     if (!form.reportValidity()) return;
@@ -769,15 +880,35 @@ function saveHistorySettings(event) {
     }
     const values = getHistoryConfigOptions();
     values.enabled = $("#history_enabled").prop("checked");
-    $("#historySettingsFields, #btnLoadHistorySettings").prop("disabled", true);
+    $("#historySettingsFields, #historySettingsForm button").prop("disabled", true);
     $("#historySettingsStatus").text("Guardando y cerrando la página actual...");
-    $.ajax({type: "POST", url: board.IP + "/history/config", data: values, timeout: Math.max(board.timeout, 5000)})
-        .done((config) => {
-            fillHistorySettings(config);
-            $("#historySettingsStatus").text("Guardado. Las muestras nuevas usan este perfil.");
-        })
-        .fail((xhr) => $("#historySettingsStatus").text(xhr.responseText || "No se pudo guardar el perfil histórico."))
-        .always(() => $("#historySettingsFields, #btnLoadHistorySettings").prop("disabled", false));
+    try {
+        const config=await saveHistoryConfig(values);
+        fillHistorySettings(config);
+        $("#historySettingsStatus").text("Guardado y aplicado sin reiniciar. Las muestras nuevas usan este perfil.");
+    } catch(error) {$("#historySettingsStatus").text(error.message||error.responseText||"No se pudo guardar el perfil histórico.");}
+    finally {$("#historySettingsFields, #historySettingsForm button").prop("disabled", false);}
+}
+
+// Guarda values del perfil y verifica el perfil activo al finalizar el consumidor.
+async function saveHistoryConfig(values) {
+    const response=await $.ajax({type:'POST',url:board.IP+'/history/config',data:values,timeout:Math.max(board.timeout,5000)});
+    await waitHistorySettings(response);
+    const config=await waitHistorySettings(await $.ajax({url:board.IP+'/history/config',cache:false,timeout:5000}));
+    assertSettingsMatch(values,config);
+    return config;
+}
+
+// Espera que el recorder publique el perfil; config contiene la respuesta inicial de guardado.
+async function waitHistorySettings(config) {
+    const deadline=Date.now()+30000;
+    while(config.apply==='wait'||config.apply==='save') {
+        if(Date.now()>=deadline)throw Error('El cambio sigue pendiente; espere a que termine la captura activa y recargue.');
+        await new Promise(resolve=>setTimeout(resolve,500));
+        config=await $.ajax({url:board.IP+'/history/config',cache:false,timeout:5000});
+    }
+    if(config.apply==='fail')throw Error('No se pudo guardar el perfil. Sigue activo el anterior.');
+    return config;
 }
 
 // Crea el encabezado comun de una seccion; title y description son textos, actions contiene sus botones.
@@ -811,7 +942,7 @@ async function requestEvents(path, options = {}) {
         if (!response.ok) {
             const messages={rev_conflict:"La configuración cambió en otro cliente. Recargue antes de guardar.",
                 save_busy:"Ya hay un guardado pendiente en la placa. Espere y recargue.",invalid_config:"Los límites o tiempos de eventos son incompatibles."};
-            throw Error(messages[value.error] || value.error || "HTTP " + response.status);
+            throw Error((value.key ? value.key + ": " : "") + (messages[value.error] || value.error || "HTTP " + response.status));
         }
         return value;
     } finally { clearTimeout(timer); }
@@ -839,7 +970,8 @@ function flattenEventFields(config, fields) {
 
 // Convierte values del formulario en parametros cortos usando fields como mapeo.
 function mapEventFields(values, fields) {
-    return Object.fromEntries(Object.entries(fields).filter(([key])=>Object.hasOwn(values,key)).map(([key,path])=>[path,Number(values[key])]));
+    return Object.fromEntries(Object.entries(fields).filter(([key])=>Object.hasOwn(values,key)).map(([key,path])=>
+        [path,path.startsWith('rec.')?Number(settingsBoolean(values[key])):Number(values[key])]));
 }
 
 // Adapta config/status a la tabla Wave existente sin consultas adicionales.
@@ -890,7 +1022,13 @@ async function saveEventConfig(values) {
         const deadline = Date.now()+30000;
         while (Date.now()<deadline) {
             const status = await readEventsStatus();
-            if (status.cfg === queued.rev) { await readEventsConfig(true); return; }
+            if (status.cfg === queued.rev) {
+                const confirmed=await readEventsConfig(true);
+                if(confirmed.rev!==queued.rev)throw Error('La configuración cambió durante la verificación. Recargue los ajustes.');
+                const actual=Object.fromEntries(Object.keys(values).map(path=>{const [group,key]=path.split('.');return [path,confirmed[group]?.[key]];}));
+                assertSettingsMatch(values,actual);
+                return confirmed;
+            }
             if (status.save.state === "fail" && status.save.rev === queued.rev) throw Error("Falló el guardado NVS; se conserva la configuración anterior.");
             if (status.cfg !== current.rev) throw Error("La configuración cambió desde otro cliente. Recargue los ajustes.");
             await new Promise(resolve=>setTimeout(resolve,300));
@@ -913,6 +1051,8 @@ function saveGridSettings(event) {
     const form = document.getElementById("gridSettingsForm");
     if (!form.reportValidity()) return;
     const values = Object.fromEntries(new FormData(form));
+    try { validateGridValues(values); validateCaptureValues(values); }
+    catch(error) { $('#gridSettingsStatus').text(error.message); return; }
     const absence = Number(values.noVoltage), hysteresis = Number(values.hysteresis);
     if (Number(values.ocHyst) >= Number(values.ocCurrent)) {
         $("#gridSettingsStatus").text("La histéresis de corriente debe ser menor que el umbral de sobrecorriente."); return;
@@ -1007,7 +1147,7 @@ function createMeterSettingsHtml() {
         createEventSettingsHelpButton("wave") + createSettingsIconButton("waveConfigRefresh", "Recargar oscilografías", false) + createSettingsIconButton("", "Guardar oscilografías", true, "submit") + '</div></div>' +
         '<p class="small text-muted mb-1 mt-1">Guarda la forma de onda de tensión y corriente alrededor del disparo para analizar el detalle del evento, además de sus muestras FAST.</p>' +
         '<div class="waveConfigToolbar"><div class="wavePreControl"><label for="wavePreMs">Antes del evento</label><select id="wavePreMs" class="form-select form-select-sm" aria-describedby="wavePreHelp">' +
-        [48,96,144,192,240,288].map(value => '<option value="' + value + '">' + value + ' ms</option>').join("") +
+        [48,96].map(value => '<option value="' + value + '">' + value + ' ms</option>').join("") +
         '</select></div><label class="form-check form-switch mb-0"><input id="waveSaveEnabled" class="form-check-input" type="checkbox" checked>Habilitar oscilografías</label></div>' +
         '<p id="wavePreHelp" class="small text-muted mt-1 mb-1">Tiempo de señal anterior al disparo que se conserva en memoria. El resto de la captura muestra lo ocurrido después. Cambiar este tiempo requiere reiniciar.</p>' +
         '<div id="waveConfigStatus" class="small text-muted mt-2" role="status"></div><dl id="waveConfigMetrics" class="waveConfigMetrics small"></dl>' +
@@ -1052,8 +1192,8 @@ async function saveWaveConfig(event) {
     event.preventDefault();
     $("#waveConfigForm button").prop("disabled", true);
     try {
-        await saveEventConfig(waveFormEventFields());
-        $("#waveConfigStatus").text("Guardado. Habilitación aplicada; si cambió el previo, reinicie para ajustar la reserva.");
+        const result=await saveEventConfig(waveFormEventFields());
+        $("#waveConfigStatus").text(result.restartRequired?"Guardado. Habilitación aplicada; reinicie para aplicar el nuevo tiempo previo.":"Guardado y aplicado sin reiniciar.");
     } catch (error) { $("#waveConfigStatus").text(error.message); }
     finally { $("#waveConfigForm button").prop("disabled", false); }
 }
@@ -1067,8 +1207,8 @@ function waveFormEventFields() {
 
 // Crea el bloque compacto de calibración.
 function createCalibrationSettingsHtml() {
-    const actions = '<button class="btn btn-sm btn-outline-secondary" id="btnLoadCalibration" type="button">Recargar</button>' +
-        '<button class="btn btn-sm btn-success" id="btnSaveCalibration" type="button" disabled>Guardar</button>' +
+    const actions = createSettingsIconButton('btnLoadCalibration','Actualizar calibración',false) +
+        createSettingsIconButton('btnSaveCalibration','Guardar calibración',true).replace('type="button"','type="button" disabled') +
         '<button class="btn btn-sm btn-warning" id="btnRestoreCalibration" type="button">Por defecto</button>';
     let html = '<div class="settingsSection">' + createSettingsHeaderHtml("Calibración", "Registros ADE9000 almacenados en hexadecimal.", actions);
     html += '<div class="settingsStatus settingsStatusLine small text-muted" role="status"></div>';
@@ -1081,7 +1221,13 @@ function createCalibrationSettingsHtml() {
         });
         html += "</tr>";
     });
-    html += "</tbody></table></div></fieldset></div>";
+    html += '</tbody></table></div></fieldset><div class="settingsGroup mt-3"><div class="d-flex align-items-center justify-content-between gap-2"><h3 class="mb-0">Neutro a tierra · BL0942</h3>'+
+        createSettingsIconButton('neutralCalibrationReload','Recargar calibración del neutro',false)+'</div>'+
+        '<p class="small text-muted mt-2 mb-2">Use la misma tensión estable (50 a 300 V) en el canal del neutro y en la fase ADE9000 de referencia. Promedia un segundo y guarda los factores RMS y FAST; se aplican sin reiniciar.</p>'+
+        '<div class="d-flex align-items-center flex-wrap gap-2"><label for="neutralCalibrationPhase">Referencia</label><select id="neutralCalibrationPhase" class="form-select form-select-sm w-auto"><option value="r">Fase R</option><option value="s">Fase S</option><option value="t">Fase T</option></select>'+
+        '<button id="neutralCalibrationStart" type="button" class="btn btn-sm btn-success" disabled>Calibrar</button></div>'+
+        '<div id="neutralCalibrationStatus" class="small text-muted mt-2" role="status">Cargue la calibración para consultar los factores activos.</div>'+
+        '<div class="table-responsive"><table class="table table-sm mt-2 mb-0"><thead><tr><th>Factor RMS</th><th>Factor FAST</th><th>Referencia</th><th>Muestras FAST / RMS</th></tr></thead><tbody><tr>'+['Rms','Fast','Reference','Samples'].map(key=>'<td id="neutralCalibration'+key+'">—</td>').join('')+'</tr></tbody></table></div></div></div>';
     return html;
 }
 
@@ -1147,7 +1293,8 @@ let settingsLoadQueue = Promise.resolve();
 
 // Carga section solo al abrirla; force permite recargar explicitamente. Serializa consultas de ajustes.
 function loadSettings(section = $("#settingsTabs .active").data("section"), force = false) {
-    if (!["grid", "history", "storage", "capture", "calibration"].includes(section)) return;
+    if (section === "application") {fillAppAppearanceSettings(); return fillHistoryCacheSettings();}
+    if (!["grid", "network", "history", "storage", "capture", "calibration"].includes(section)) return;
     const panel = $("#settings_" + section);
     if (panel.data("loading") || (!force && panel.data("loaded"))) return settingsLoadQueue;
     panel.data("loading", true);
@@ -1157,6 +1304,7 @@ function loadSettings(section = $("#settingsTabs .active").data("section"), forc
                 await loadGridSettings();
                 $("#settings_capture").data("loaded", true);
             }
+            else if (section === "network") await loadNetworkSettings();
             else if (section === "history") await loadHistorySettings();
             else if (section === "storage") await loadStorageStatus();
             else if (section === "capture") await loadCaptureSettings();
@@ -1166,10 +1314,13 @@ function loadSettings(section = $("#settingsTabs .active").data("section"), forc
                 setSettingsStatus("Cargando opciones...", false, section);
                 const values = await readOptions("ADE9000", getCalibrationKeys());
                 if (values.error) throw new Error(values.error);
+                if(getCalibrationKeys().some(key=>!settingsNumber(values[key],-2147483648,4294967295,true)))
+                    throw Error('Lectura de calibración incompleta o inválida.');
                 fillCalibrationOptions(values);
                 $("#" + section + "Fields").prop("disabled", false);
                 $("#btnSaveCalibration").prop("disabled", false);
                 setSettingsStatus("Opciones cargadas.", false, section);
+                await loadNeutralCalibration();
             }
             panel.data("loaded", true);
         } catch (error) {
@@ -1181,6 +1332,40 @@ function loadSettings(section = $("#settingsTabs .active").data("section"), forc
         }
     });
     return settingsLoadQueue;
+}
+
+let neutralCalibrationRun=0;
+
+// Consulta factores activos y acompana una calibracion en curso hasta terminar; sin parametros.
+async function loadNeutralCalibration() {
+    const run=++neutralCalibrationRun,deadline=Date.now()+30000;
+    $('#neutralCalibrationStart,#neutralCalibrationReload,#neutralCalibrationPhase').prop('disabled',true);
+    try {
+        while(run===neutralCalibrationRun) {
+            const value=await $.ajax({url:board.IP+'/calibration/neutral',cache:false,timeout:5000});
+            $('#neutralCalibrationRms').text(Number(value.rmsFactor).toFixed(7));
+            $('#neutralCalibrationFast').text(Number(value.fastFactor).toFixed(7));
+            $('#neutralCalibrationReference').text(Number(value.reference).toFixed(2)+' V');
+            $('#neutralCalibrationSamples').text(value.samples+' / '+value.rmsSamples);
+            const errors={unstable_signal:'La señal no fue estable. Repita con tensión estable.',invalid_reference:'La referencia debe estar entre 50 y 300 V.',missing_signal:'El BL0942 no tiene señal suficiente para calibrar.',insufficient_samples:'Faltan lecturas del BL0942 o de la referencia.',nvs_write_failed:'No se pudieron guardar los factores.',invalid_factors:'Los factores calculados están fuera de rango.'};
+            const states={idle:'Factores activos cargados.',queued:'Esperando las mediciones...',sampling:'Promediando un segundo de mediciones...',saving:'Guardando factores...',done:'Calibración guardada y aplicada sin reiniciar.'};
+            $('#neutralCalibrationStatus').text(value.error?(errors[value.error]||'No se pudo calibrar: '+value.error):(states[value.status]||value.status));
+            if(!['queued','sampling','saving'].includes(value.status))return;
+            if(Date.now()>=deadline)throw Error('La calibración sigue pendiente. Recargue para consultar su estado.');
+            await new Promise(resolve=>setTimeout(resolve,500));
+        }
+    } catch(error){$('#neutralCalibrationStatus').text(error.message||'No se pudo consultar el BL0942.');}
+    finally {if(run===neutralCalibrationRun)$('#neutralCalibrationStart,#neutralCalibrationReload,#neutralCalibrationPhase').prop('disabled',false);}
+}
+
+// Inicia la calibracion de neutro con la fase elegida en el formulario; sin parametros.
+async function startNeutralCalibration() {
+    $('#neutralCalibrationStart').prop('disabled',true);
+    try {
+        await $.ajax({type:'POST',url:board.IP+'/calibration/neutral',data:{phase:$('#neutralCalibrationPhase').val()},timeout:5000});
+        await loadNeutralCalibration();
+    } catch(error){$('#neutralCalibrationStatus').text(error.responseJSON?.error||'No se pudo iniciar la calibración. Compruebe las lecturas del BL0942.');}
+    finally {$('#neutralCalibrationStart').prop('disabled',false);}
 }
 
 // Carga eventos puntuales y oscilografia dentro de Eventos de red; sin parametros y sin escrituras.
@@ -1197,10 +1382,23 @@ function readOptions(namespace, keys) {
     return $.ajax({type: "GET", url: board.IP + "/options?" + params.toString(), cache: false, timeout: Math.max(board.timeout, 3000)});
 }
 
+// Explica el error HTTP y agrega la clave rechazada si el firmware la informa.
+// error: objeto de error de fetch o jQuery.
+function settingsErrorMessage(error) {
+    const payload=error?.responseJSON;
+    if(payload?.key)return payload.key+": "+(payload.error||"valor rechazado");
+    return error?.message||payload?.error||error?.responseText||"No se pudo aplicar la configuración.";
+}
+
 // Escribe opciones en un namespace.
 // namespace: nombre del namespace. values: objeto clave valor.
-function writeOptions(namespace, values) {
-    return $.ajax({type: "POST", url: board.IP + "/options", data: {...values, ns: namespace}, cache: false, timeout: Math.max(board.timeout, 5000)});
+async function writeOptions(namespace, values) {
+    let result;
+    try { result=await $.ajax({type: "POST", url: board.IP + "/options", data: {...values, ns: namespace}, cache: false, timeout: Math.max(board.timeout, 5000)}); }
+    catch(error) { if(error.responseJSON?.key)throw Error(settingsErrorMessage(error)); throw error; }
+    if(result.verified===false)throw Error('El ESP no pudo verificar la escritura en NVS.');
+    if(result.verified!==true)assertSettingsMatch(values,await readOptions(namespace,Object.keys(values)));
+    return result;
 }
 
 // Devuelve las claves permitidas para una seccion del respaldo.
@@ -1226,7 +1424,7 @@ function validateBackupSection(section, values) {
     const unknownKeys = keys.filter((key) => !allowed.includes(key));
     if (unknownKeys.length) throw new Error("Contiene campos no reconocidos: " + unknownKeys.join(", ") + ".");
     if (section === "wave" && (!allowed.every(key => Object.hasOwn(values, key)) ||
-        !Number.isInteger(values.preMs) || values.preMs < 48 || values.preMs > 288 || values.preMs % 48 ||
+        !Number.isInteger(values.preMs) || values.preMs < 48 || values.preMs > 96 || values.preMs % 48 ||
         ![true, false, 0, 1].includes(values.saveEnabled) || !Number.isInteger(values.pointMask) || values.pointMask < 0 || values.pointMask > 7))
         throw new Error("La configuración de oscilografías no es válida.");
     if (keys.some((key) => values[key] === null || !["string", "number", "boolean"].includes(typeof values[key])))
@@ -1235,8 +1433,7 @@ function validateBackupSection(section, values) {
         throw new Error("Faltan límites o tiempos de red.");
     if (section === "history" && (!backupHistoryKeys.every((key) => Object.prototype.hasOwnProperty.call(values, key)) ||
         ![true, false, 0, 1, "true", "false", "0", "1"].includes(values.enabled) ||
-        !Number.isInteger(Number(values.groupConfig)) || Number(values.groupConfig) < 0 || Number(values.groupConfig) > 0xFFFFFF ||
-        !Number.isInteger(Number(values.samplePeriodDeciseconds)) || Number(values.samplePeriodDeciseconds) < 1 || Number(values.samplePeriodDeciseconds) > 3000))
+        !settingsNumber(values.groupConfig,0,0xFFFFFF,true) || !settingsNumber(values.samplePeriodDeciseconds,1,3000,true)))
         throw new Error("La configuración histórica no es válida.");
     if (section === "energy" && keys.some((key) => !Number.isFinite(Number(values[key]))))
         throw new Error("Los totalizadores deben ser números finitos.");
@@ -1248,16 +1445,24 @@ function validateBackupSection(section, values) {
     if (section === "calibration" && keys.some((key) => ["neutralRms", "neutralFast"].includes(key) ?
         !Number.isFinite(Number(values[key])) || Number(values[key]) < 0.1 || Number(values[key]) > 10 : !isHex32(String(values[key]))))
         throw new Error("La calibración debe contener enteros hexadecimales de 32 bits.");
+    if(section==='network')validateNetworkValues(values);
+    if(section==='grid')validateGridValues(values);
+    if(section==='capture')validateCaptureValues(values);
+    if(section==='energy'&&keys.some(key=>!settingsNumber(values[key],-3.4028234663852886e38,3.4028234663852886e38)))throw Error('Totalizador fuera del rango float32.');
+    if(section==='history') {
+        const group=Number(values.groupConfig);
+        if((group&0xFC0000)||[1,3,5,10].some(shift=>((group>>shift)&3)===3)||!(group&(1<<14))&&(group&(7<<15)))throw Error('Grupos históricos incompatibles con el formato actual.');
+    }
     return true;
 }
 
 // Lee una seccion y completa solo opciones de captura ausentes con sus valores predeterminados del firmware.
 // section: identificador de seccion.
-async function readBackupSection(section) {
+async function readBackupSection(section, fresh = true) {
     let values;
     let defaultsUsed = [];
     if (["grid","capture","wave"].includes(section)) {
-        const config = await readEventsConfig();
+        const config = await readEventsConfig(fresh);
         if (section === "grid") values = flattenEventFields(config,eventGridFields);
         else if (section === "capture") values = flattenEventFields(config,eventPointFields);
         else values = {preMs:config.wave.pre,saveEnabled:config.wave.on,pointMask:(config.wave.dip?1:0)|(config.wave.swell?2:0)|(config.wave.oc?4:0)};
@@ -1285,13 +1490,8 @@ async function readBackupSection(section) {
         values = {enabled: response.enabled, groupConfig: historyOptionsToGroupConfig(response),
             samplePeriodDeciseconds: Math.round(Number(response.samplePeriod) * 10)};
     } else if (section === "energy") {
-        const response = await $.ajax({url: board.IP + "/meter?energy=1", cache: false, timeout: Math.max(board.timeout, 5000)});
-        values = {
-            rWattH: response.wattH.r, rVarH: response.varH.r, rVaH: response.vaH.r,
-            sWattH: response.wattH.s, sVarH: response.varH.s, sVaH: response.vaH.s,
-            tWattH: response.wattH.t, tVarH: response.varH.t, tVaH: response.vaH.t,
-            WattH: response.wattH.tot, VarH: response.varH.tot, VaH: response.vaH.tot,
-        };
+        const response=await readOptions('meter',backupEnergyKeys);
+        values=Object.fromEntries(backupEnergyKeys.map(key=>[key,response[key]]));
     } else throw new Error("Sección desconocida.");
     validateBackupSection(section, values);
     return {values, defaultsUsed};
@@ -1299,9 +1499,10 @@ async function readBackupSection(section) {
 
 // Descarga un respaldo con las secciones seleccionadas en la interfaz.
 async function exportSettingsBackup() {
+    if(settingsBackupBusy)return;
     const selected = $(".backupExportSection:checked").map((_, input) => input.value).get();
     if (!selected.length) { $("#settingsBackupStatus").text("Seleccioná al menos una sección."); return; }
-    const button = $("#btnExportSettingsBackup").prop("disabled", true);
+    setSettingsBackupBusy(true);
     const status = $("#settingsBackupStatus").empty();
     const sections = {};
     eventsConfig=null;
@@ -1309,7 +1510,7 @@ async function exportSettingsBackup() {
         for (const key of selected) {
             const label = settingsBackupSections.find((item) => item.key === key).label;
             const row = $("<li>").text(label + ": leyendo...").appendTo(status);
-            const result = await readBackupSection(key);
+            const result = await readBackupSection(key,false);
             sections[key] = result.values;
             row.text(label + ": lista.");
         }
@@ -1323,27 +1524,37 @@ async function exportSettingsBackup() {
     } catch (error) {
         $("<li class=\"text-danger\">").text("No se generó el respaldo: " + error.message).appendTo(status);
     } finally {
-        button.prop("disabled", false);
+        setSettingsBackupBusy(false);
     }
 }
 
 // Carga y valida un archivo JSON para restaurar.
 // file: archivo elegido por el usuario.
 async function loadSettingsBackup(file) {
+    if(settingsBackupBusy)return;
     loadedSettingsBackup = null;
+    loadedSettingsBackupErrors = {};
     $("#settingsBackupImportSections").empty();
     $("#btnImportSettingsBackup").prop("disabled", true);
     $("#btnRestartAfterImport").prop("hidden", true);
     if (!file) return;
     try {
+        if(file.size>262144)throw Error('El respaldo supera los 256 KiB permitidos.');
         const backup = JSON.parse(await file.text());
-        if (backup.format !== "pm9000-config" || backup.version !== 1 || !backup.sections || typeof backup.sections !== "object")
+        if (!backup || backup.format !== "pm9000-config" || backup.version !== 1 || !backup.sections || typeof backup.sections !== "object" || Array.isArray(backup.sections))
             throw new Error("El archivo no es un respaldo Power Meter compatible.");
+        if(Object.keys(backup.sections).some(key=>!settingsBackupSections.some(section=>section.key===key)))
+            throw Error('El archivo contiene secciones desconocidas.');
         const available = settingsBackupSections.filter(({key}) => Object.prototype.hasOwnProperty.call(backup.sections, key));
         if (!available.length) throw new Error("El archivo no contiene secciones conocidas.");
         available.forEach(({key, label}) => {
-            validateBackupSection(key, backup.sections[key]);
-            $("#settingsBackupImportSections").append('<div class="form-check"><input class="form-check-input backupImportSection" type="checkbox" id="backupImport_' + key + '" value="' + key + '" checked><label class="form-check-label" for="backupImport_' + key + '">' + label + '</label></div>');
+            try { validateBackupSection(key, backup.sections[key]); }
+            catch(error) { loadedSettingsBackupErrors[key]=error.message; }
+            const invalid=loadedSettingsBackupErrors[key];
+            const option=$('<div class="form-check">').appendTo('#settingsBackupImportSections');
+            $('<input class="form-check-input backupImportSection" type="checkbox" checked>').attr({id:'backupImport_'+key,value:key}).appendTo(option);
+            $('<label class="form-check-label">').attr('for','backupImport_'+key).toggleClass('text-danger',!!invalid)
+                .text(label+(invalid?' (revisar)':'')).attr('title',invalid||'').appendTo(option);
         });
         loadedSettingsBackup = backup;
         $("#settingsBackupWarning").removeClass("text-danger").text("Respaldo válido. " + available.length + " secciones; todas seleccionadas.");
@@ -1351,6 +1562,37 @@ async function loadSettingsBackup(file) {
     } catch (error) {
         $("#settingsBackupWarning").text("No se puede usar el archivo: " + error.message).addClass("text-danger");
     }
+}
+
+// Bloquea controles de respaldo durante la operacion; busy indica si hay una tarea en curso.
+function setSettingsBackupBusy(busy) {
+    settingsBackupBusy=busy;
+    $('#settings .tab-pane').not('#settings_backup').prop('inert',busy);
+    $('#settingsTabs button').prop('disabled',busy);
+    $('#settingsBackupFile, .backupExportSection, .backupImportSection, #btnExportSettingsBackup, #btnRestartAfterImport').prop('disabled',busy);
+    $('#btnImportSettingsBackup').prop('disabled',busy||!loadedSettingsBackup);
+}
+
+// Valida cada seccion seleccionada y devuelve sus errores sin bloquear las demas.
+async function preflightSettingsBackup(sections) {
+    const errors={...loadedSettingsBackupErrors};
+    for(const [key,values] of Object.entries(sections)) {
+        try { validateBackupSection(key,values); }
+        catch(error) { errors[key]=error.message; }
+    }
+    if(sections.network&&!errors.network) {
+        try {
+            const current=await $.ajax({url:board.IP+'/network/config',cache:false,timeout:5000});
+            validateNetworkValues({...current,...sections.network});
+        } catch(error) { errors.network=error.message||error.responseText||'No se pudieron validar los ajustes actuales de red.'; }
+    }
+    if(sections.capture&&!errors.capture) {
+        try {
+            const current=await readEventsConfig(true);
+            validateCaptureValues({...flattenEventFields(current,eventPointFields),...sections.capture});
+        } catch(error) { errors.capture=error.message||'No se pudieron validar los ajustes actuales de eventos.'; }
+    }
+    return errors;
 }
 
 // Aplica una seccion usando su endpoint especifico.
@@ -1363,8 +1605,8 @@ async function applyBackupSection(section, values) {
         return saveEventConfig({"wave.pre":values.preMs,"wave.on":Number(values.saveEnabled),
             "wave.dip":values.pointMask&1?1:0,"wave.swell":values.pointMask&2?1:0,"wave.oc":values.pointMask&4?1:0});
     }
-    if (section === "network") return $.ajax({type: "POST", url: board.IP + "/network/config", data: values, timeout: Math.max(board.timeout, 5000)});
-    if (section === "history") return $.ajax({type: "POST", url: board.IP + "/history/config", data: historyBackupToOptions(values), timeout: Math.max(board.timeout, 5000)});
+    if (section === "network") return saveNetworkConfig(values);
+    if (section === "history") return saveHistoryConfig(historyBackupToOptions(values));
     if (section === "energy") return writeOptions("meter", values);
     if (section === "calibration") return writeOptions("ADE9000", values);
     throw new Error("Sección desconocida.");
@@ -1372,31 +1614,47 @@ async function applyBackupSection(section, values) {
 
 // Restaura las secciones marcadas, una por una, y deja visible el resultado de cada una.
 async function importSettingsBackup() {
-    if (!loadedSettingsBackup) return;
+    if (!loadedSettingsBackup || settingsBackupBusy) return;
     let selected = $(".backupImportSection:checked").map((_, input) => input.value).get();
     if (!selected.length) { $("#settingsBackupWarning").text("Seleccioná al menos una sección."); return; }
     if (!confirm("Se van a sobrescribir " + selected.length + " secciones del medidor. ¿Continuar?")) return;
     selected = selected.filter((key) => key !== "network").concat(selected.includes("network") ? ["network"] : []);
+    const sections=Object.fromEntries(selected.map(key=>[key,{...loadedSettingsBackup.sections[key]}]));
     settingsBackupRestartRequired = false;
-    $("#btnImportSettingsBackup").prop("disabled", true);
+    setSettingsBackupBusy(true);
     $("#btnRestartAfterImport").prop("hidden", true);
     const status = $("#settingsBackupStatus").empty();
     let failed = false;
+    try {
+    const validationErrors=await preflightSettingsBackup(sections);
     for (const key of selected) {
         const label = settingsBackupSections.find((item) => item.key === key).label;
         const row = $("<li>").text(label + ": aplicando...").appendTo(status);
+        if(validationErrors[key]) {
+            failed=true;
+            row.addClass('text-danger').text(label+': error de validación. '+validationErrors[key]);
+            continue;
+        }
         try {
-            await applyBackupSection(key, loadedSettingsBackup.sections[key]);
-            if (["network", "energy", "calibration", "wave"].includes(key)) settingsBackupRestartRequired = true;
-            row.text(label + (["network", "energy", "calibration", "wave"].includes(key) ? ": guardada; requiere reinicio." : ": aplicada."));
+            const result=await applyBackupSection(key, sections[key]);
+            const restart=["energy", "calibration"].includes(key)||result?.restartRequired===true;
+            if(restart)settingsBackupRestartRequired=true;
+            row.text(label+(restart?": verificada; requiere reinicio.":": aplicada y verificada."));
         } catch (error) {
             failed = true;
-            row.addClass("text-danger").text(label + ": error; puede haber quedado parcialmente escrita. " + (error.responseText || error.message || ""));
+            row.addClass("text-danger").text(label + ": error; puede haber quedado parcialmente escrita. " + settingsErrorMessage(error));
         }
     }
+    } catch(error) {
+        failed=true;
+        $('<li class="text-danger">').text('Error al preparar la importación: '+error.message).appendTo(status);
+    } finally {
+        eventsConfig=null;
+        $('#settingsTabs button').each(function() { $('#settings_'+$(this).data('section')).data('loaded',false); });
+        setSettingsBackupBusy(false);
+    }
     if (settingsBackupRestartRequired) $("#btnRestartAfterImport").prop("hidden", false);
-    $("#settingsBackupWarning").text(failed ? "La importación terminó con errores. Revisá cada sección; no hay rollback automático." : "Importación terminada." + (settingsBackupRestartRequired ? " Reiniciá para aplicar los cambios pendientes." : ""));
-    $("#btnImportSettingsBackup").prop("disabled", false);
+    $("#settingsBackupWarning").text(failed ? "Importación terminada con errores. Revisá el resultado de cada sección; las demás se procesaron." : "Importación terminada." + (settingsBackupRestartRequired ? " Reiniciá para aplicar los cambios pendientes." : ""));
 }
 
 // Reinicia el medidor sin guardar encima los totalizadores recién importados.
@@ -1456,26 +1714,33 @@ function saveMeterOptions() {
 }
 
 // Guarda los valores de calibración.
-function saveCalibrationOptions() {
+async function saveCalibrationOptions() {
     let values = collectCalibrationValues();
     if (values == null) return;
     setSettingsStatus("Guardando calibración...", false, "calibration");
     $("#btnSaveCalibration, #btnLoadCalibration, #btnRestoreCalibration, #calibrationFields").prop("disabled", true);
-    writeOptions("ADE9000", values)
-        .done(() => setSettingsStatus("Calibración guardada. Reinicie para aplicarla.", false, "calibration"))
-        .fail(() => setSettingsStatus("No se pudo guardar la calibración.", true, "calibration"))
-        .always(() => $("#btnSaveCalibration, #btnLoadCalibration, #btnRestoreCalibration, #calibrationFields").prop("disabled", false));
+    try {
+        await writeOptions("ADE9000",values);
+        setSettingsStatus("Calibración guardada y verificada. Reinicie para aplicarla.",false,"calibration");
+    } catch(error){setSettingsStatus(error.message||"No se pudo guardar la calibración.",true,"calibration");}
+    finally {$("#btnSaveCalibration, #btnLoadCalibration, #btnRestoreCalibration, #calibrationFields").prop("disabled",false);}
 }
 
 // Restaura la calibración por defecto.
-function restoreDefaultCalibration() {
+async function restoreDefaultCalibration() {
     if (!confirm("¿Restaurar la calibración por defecto? Se reemplazarán los valores guardados.")) return;
     setSettingsStatus("Restaurando calibración por defecto...", false, "calibration");
-    $.ajax({type: "POST", url: board.IP + "/calibration/restore", timeout: board.timeout})
-        .done(() => {
-            loadSettings("calibration", true).then(() => setSettingsStatus("Calibración por defecto restaurada. Reinicie para aplicarla.", false, "calibration"));
-        })
-        .fail(() => setSettingsStatus("No se pudo restaurar la calibración.", true, "calibration"));
+    $('#btnRestoreCalibration,#btnSaveCalibration,#btnLoadCalibration,#calibrationFields').prop('disabled',true);
+    try {
+        const result=await $.ajax({type:'POST',url:board.IP+'/calibration/restore',timeout:10000});
+        if(!result.verified)throw Error('El firmware no confirmó la verificación de los valores por defecto.');
+        const values=await readOptions('ADE9000',getCalibrationKeys());
+        if(getCalibrationKeys().some(key=>!settingsNumber(values[key],-2147483648,4294967295,true)))throw Error('No se pudo releer la calibración.');
+        fillCalibrationOptions(values);
+        setSettingsStatus('Calibración por defecto restaurada y verificada. Reinicie para aplicarla.',false,'calibration');
+        await loadNeutralCalibration();
+    } catch(error) {setSettingsStatus(error.message||'No se pudo restaurar la calibración.',true,'calibration');}
+    finally {$('#btnRestoreCalibration,#btnSaveCalibration,#btnLoadCalibration,#calibrationFields').prop('disabled',false);}
 }
 
 // Recolecta los valores de opciones del medidor.

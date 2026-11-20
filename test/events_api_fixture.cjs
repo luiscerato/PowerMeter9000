@@ -1,7 +1,7 @@
 // Construye el JSON agrupado desde los valores planos usados por las pruebas; state es mutable.
 function config(state) {
     const g=state.grid,m=state.meter,w=state.wave;
-    return {rev:state.rev||1,save:{state:'ok',rev:0},
+    return {rev:state.rev||1,save:{state:'ok',rev:0},restartRequired:w.preMs!==(state.bootPreMs??96),
         volt:{lowR:g.lowR,lowS:g.lowS,lowT:g.lowT,highR:g.highR,highS:g.highS,highT:g.highT,loss:g.noVoltage,hyst:g.hysteresis},
         time:{dip:m.dipMs,swell:m.swellMs,oc:m.ocMs,loss:g.lossConfirmMs,back:g.recoveryConfirmMs},
         neut:{high:g.neutralHigh,hyst:g.neutralHysteresis,wait:g.neutralConfirmMs,back:g.neutralRecoveryMs},
@@ -14,7 +14,7 @@ async function routeEvents(route,state) {
     if (url.pathname==='/events/status') {
         const w=state.wave;
         return route.fulfill({json:{seq:state.rev||1,cfg:state.rev||1,save:{state:'ok',rev:0},busy:false,last:45,
-            wave:{on:true,count:w.storedCaptures??17,used:w.occupiedSlots??20,slots:w.totalSlots??640,pre:192,ram:16384,
+            wave:{on:true,count:w.storedCaptures??17,used:w.occupiedSlots??20,slots:w.totalSlots??640,pre:96,ram:18192,
                 done:2,orph:0,pending:0,gaps:0,drop:0,fail:0,free:4},lim:{point:3700,pages:5}}});
     }
     if (url.pathname!=='/events/config') return false;
@@ -46,6 +46,6 @@ function defaultState() {
     return {grid:{lowR:190,lowS:190,lowT:190,highR:250,highS:250,highT:250,noVoltage:20,hysteresis:5,
         lossConfirmMs:250,recoveryConfirmMs:250,neutralHigh:25,neutralHysteresis:2,neutralConfirmMs:100,neutralRecoveryMs:250},
         meter:{dipEnabled:1,swellEnabled:1,overcurrent:1,dipMs:50,swellMs:50,ocMs:10,ocCurrent:50,ocHyst:1},
-        wave:{preMs:192,saveEnabled:true,pointMask:7}};
+        wave:{preMs:96,saveEnabled:true,pointMask:7}};
 }
 module.exports={config,routeEvents,defaultState};

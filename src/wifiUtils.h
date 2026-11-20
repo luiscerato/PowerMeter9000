@@ -32,6 +32,23 @@ struct wifiStationConfig
 	String dns2;
 };
 
+// Marca consumidores pendientes: services bit 0 Wi-Fi y bit 1 NTP; cada solicitud se consume una vez.
+void networkQueueApply(uint8_t services);
+// Devuelve wait/apply/ok/fail segun el cambio pendiente; sin parametros.
+const char* networkApplyStatus();
+
+struct networkSettingsGuard {
+	bool locked;
+	// Reserva el acceso a NVS de red si needed es true; locked indica si se obtuvo sin esperar.
+	explicit networkSettingsGuard(bool needed = true);
+	// Libera solamente la reserva obtenida por esta instancia; sin parametros.
+	~networkSettingsGuard();
+	networkSettingsGuard(const networkSettingsGuard&) = delete;
+	networkSettingsGuard& operator=(const networkSettingsGuard&) = delete;
+private:
+	bool needed;
+};
+
 /*
 		Listado de los caracteres creados con la función Create_WiFi_Chars()
 */
@@ -62,6 +79,9 @@ void WifiStart();
 
 void WifiReconnect();
 
+// Indica si el AP temporal de recuperacion esta activo; no recibe parametros.
+bool wifiRecoveryApActive();
+
 // Inicia o reutiliza el escaneo asíncrono. No recibe parámetros.
 void wifiScanStart();
 
@@ -75,7 +95,7 @@ bool wifiScanGetNetwork(int32_t index, String& ssid, uint8_t& auth, int32_t& rss
 // ssid es el nombre de red y password es su clave, que puede estar vacia.
 bool wifiSaveStationCredentials(const String& ssid, const String& password);
 
-// Carga la configuracion de estacion desde NVS; config recibe todos sus campos.
+// Lee de NVS al abrir la edicion de estacion; config recibe todos sus campos.
 bool wifiLoadStationConfig(wifiStationConfig& config);
 
 // Guarda y aplica la configuracion de estacion; config contiene modo, red e IP.
@@ -87,7 +107,10 @@ void OTAEnd();
 
 void TimeStart();
 
-void TimeSetServer();
+// Prepara fecha UTC desde RTC/NVS y zona local sin iniciar Wi-Fi ni SNTP; sin parametros.
+void timeInitClock();
+
+bool TimeSetServer();
 
 
 

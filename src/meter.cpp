@@ -6,7 +6,7 @@
 #include "webserver.h"
 #include "bl0942/bl0942.h"
 #include "manager_api.h"
-#include "grid_events.h"
+#include "boot_timing.h"
 #include "storage/grid_event_store.h"
 #include "storage/wave_event_store.h"
 #include <esp_timer.h>
@@ -16,6 +16,7 @@
 #include "event_settings.h"
 #include "fast_event_detector.h"
 #include "wave_sample_clock.h"
+#include "scope_stream.h"
 #include <new>
 #include <algorithm>
 
@@ -89,9 +90,11 @@ static void meterLoadGridSettings() {
 struct TotalEnergyVals MeterEnergy;
 
 TaskHandle_t meterHandle = NULL;
+static constexpr uint16_t meterTaskStackBytes = 5 * 1024;
+static std::atomic<bool> meterAcquisitionReady{false}, meterServicesReady{false};
 
 WFBFixedDataRate_t readBuffer[WFB_SAMPLES_PER_CHANNEL / 2];		//Buffer temporal para leer los datos del wavebuffer (7ch*128 samples)
-uint8_t outputSamples[8064];			//Buffer para 96ms de datos de 12 bits. 96ms ->768 samples por canal. 768*7*(12/8) => 8064 bytes
+scopeInfo_t scopeInfo;
 fastRMSData_t halfCycleSamples[fastDataSamplesCount];	//Buffer para 4 segundos de datos half
 static uint32_t halfCycleSampleMs[fastDataSamplesCount] = {};
 static uint16_t halfCycleSampleFractionUs[fastDataSamplesCount] = {};
@@ -99,7 +102,6 @@ static uint64_t currentFastUs = 0;
 uint16_t halfCycleSamplesIndex = 0;		//Indice de buffer de muestras rápidas
 uint16_t halfCycleSamplesCount = 0;		//Cantidad de muestras rápidas del buffer
 
-scopeInfo_t scopeInfo;
 uint32_t meterUpdated = 0;
 uint64_t meterLastSampleTimestampMs = 0;
 portMUX_TYPE meterMutex = portMUX_INITIALIZER_UNLOCKED;
@@ -107,7 +109,6 @@ portMUX_TYPE meterMutex = portMUX_INITIALIZER_UNLOCKED;
 Preferences meterOptions;
 static volatile uint32_t meterIrq0Us = 0;
 static volatile uint32_t meterIrq0Sequence = 0;
-static uint32_t wavePart = 0;
 static uint64_t waveObservedEndUs = 0;
 static uint8_t waveObservedHalf = 0;
 static waveSampleClock waveClock;
@@ -124,7 +125,14 @@ uint64_t MeterGetLastSampleTimestampMs()
 	return meterLastSampleTimestampMs;
 }
 
-void MeterInit()
+// Devuelve el margen de pila observado por FreeRTOS en MeterTask.
+uint16_t meterGetStackFreeWords()
+{
+	return meterHandle ? uint16_t(uxTaskGetStackHighWaterMark(meterHandle)) : 0;
+}
+
+// Prepara medicion y crea su unico productor; sin parametros, false indica fallo al crear la tarea.
+bool meterInitAcquisition()
 {
 	Serial.println("Iniciando ADE9000!");
 	pinMode(pinAdeInt0, INPUT_PULLUP);
@@ -141,11 +149,6 @@ void MeterInit()
 	// ade.setNoCurrentCutoff(0.01);
 
 
-	scopeInfo.currentScale = 0.1;
-	scopeInfo.voltageScale = 0.25;
-	scopeInfo.sampleFreq = 8000;
-	webServerSetMeterEvents(scopeWSevents);		//Callback para eventos del websocket del scope
-	gridEventsInit();
 
 
 	MeterLoadOptions();				//Cargar configuración de los eventos del medidor
@@ -155,7 +158,8 @@ void MeterInit()
 
 	memset(halfCycleSamples, 0, sizeof(halfCycleSamples));
 	bl0942.begin(pinBLRx, pinBLTx);
-	xTaskCreatePinnedToCore(MeterTask, "meterTask", 8192, NULL, 10, &meterHandle, APP_CPU_NUM);
+	if (xTaskCreatePinnedToCore(MeterTask, "meterTask", meterTaskStackBytes,
+		NULL, 10, &meterHandle, APP_CPU_NUM) != pdPASS) return false;
 
 	/*
 		Asignar los pines de interrupciones a una función que se encargue de desbloquear la tarea que lee el ADE9000
@@ -187,12 +191,21 @@ void MeterInit()
 		}, FALLING);
 
 	ade.clearStatusBit1();	//Limpiar flags de interrupciones
+	meterAcquisitionReady.store(true);
 
 
 
 
 	Serial.println("Meter inicializado!");
+	return true;
+}
 
+// Carga servicios no criticos antes de exponer sus callbacks; sin parametros.
+void meterInitServices()
+{
+	scopeStreamInit();
+	webServerSetMeterEvents(scopeStreamWebSocketEvents);
+	meterServicesReady.store(true);
 }
 
 struct meterPendingFastSample {
@@ -289,6 +302,7 @@ static void meterFinishFastRmsSample(bool force)
 
 void MeterTask(void* arg)
 {
+	while (!meterAcquisitionReady.load()) vTaskDelay(1);
 	uint32_t waitingTime = 0, runningTime = 0, startTime = 0, stopTime = 0, realTime = 0;
 	uint32_t EventsCount;
 
@@ -296,8 +310,6 @@ void MeterTask(void* arg)
 	bool recording = false;
 
 
-	while (millis() < 250)
-		vTaskDelay(25 / portTICK_RATE_MS);	//Esperar que todo esté listo
 
 	uint32_t lastRmsReadyUs = micros();
 	uint32_t nextForcedFastRmsUs = 0;
@@ -364,12 +376,7 @@ void MeterTask(void* arg)
 			// if (EventsCount == 0) Serial.printf("Status0=0x%x\n", status0.raw);
 			// Serial.printf("Status 0= 0x%X. time: %uus\n", status0, t);
 
-			// Leer la mitad Wave pendiente antes de RMS, potencia, THD y energia.
-			if (status0.PAGE_FULL) {
-				meterReadWaveBuffer();
-				meterUpdated++;
-			}
-
+			// FAST no tiene FIFO: leerlo antes de los varios ms de SPI y empaquetado Wave.
 			if (status0.RMSONERDY) {
 				meterTimingScope timing(meterTimingPart::fast);
 				lastRmsReadyUs = micros();
@@ -377,6 +384,10 @@ void MeterTask(void* arg)
 				nextForcedFastRmsUs = 0;
 				meterReadHalfRMS();
 				meterRecordFastRmsSample();
+			}
+			if (status0.PAGE_FULL && (waveCaptureReady() || meterServicesReady.load())) {
+				meterReadWaveBuffer();
+				meterUpdated++;
 			}
 			if (status0.RMS1012RDY) {
 				meterTimingScope timing(meterTimingPart::slowRms);
@@ -638,6 +649,7 @@ void MeterLoop()
 {
 	static uint32_t energyUpdateTime = millis();
 	eventSettingsPoll();
+	if (meterServicesReady.load()) scopeStreamLoop();
 
 	if (meterUpdated) {
 		const uint64_t sampleTimestampMs = managerNowMs();
@@ -650,7 +662,6 @@ void MeterLoop()
 	bl0942.pollDiagnostics();
 
 	// NVS puede detener ambos nucleos al escribir flash interna, aunque lo llamemos desde otra tarea.
-	if (!waveCaptureBusy()) gridEventsPersistLoop();
 
 	if (!waveCaptureBusy() && millis() - energyUpdateTime >= 3600 * 8 * 1000) {	//Cada 8 horas actualizar los registros de energía
 		if (MeterWriteEnergyRegisters(false)) {
@@ -727,38 +738,19 @@ void meterReadWaveBuffer()
 		packed[offset + 1] = ((values[0] >> 8) & 15) | ((values[1] & 15) << 4);
 		packed[offset + 2] = (values[1] >> 4) & 255;
 	}
-	if (waveClock.update(waveObservedEndUs, waveObservedHalf)) {
+    const bool waveUpdated = waveClock.update(waveObservedEndUs, waveObservedHalf);
+    if (waveUpdated) {
 		if (waveClock.gap) flags |= waveEventFormat::acquisitionGap;
 		waveCapturePublish(packed, waveClock.endUs > 16000 ? waveClock.endUs - 16000 : 0, flags);
 	}
 	meterTimingRecord(meterTimingPart::waveStore, micros() - storeStartedUs);
 
-	timeScale = micros();
-	scaleBuffer(readBuffer, WFB_SAMPLES_PER_CHANNEL / 2, scopeInfo.voltageScale, scopeInfo.currentScale);
-	timeScale = micros() - timeScale;
-	meterTimingRecord(meterTimingPart::waveScale, timeScale);
-
-	timeCompress = micros();
-	compressWaveBuffer12(readBuffer[0].buffer, outputSamples, wavePart);
-	wavePart++;
-	timeCompress = micros() - timeCompress;
-	meterTimingRecord(meterTimingPart::wavePack, timeCompress);
-	
-	if (wavePart == 6) {	//Buffer de 96ms comprimido listo para enviar
-		wavePart = 0;
-
-		timeSend = micros();
-		size_t size = sizeof(outputSamples);
-		{
-			meterTimingScope webTiming(meterTimingPart::waveWeb);
-			meterSendScopeFrame(outputSamples, size);
-		}
-
-		timeSend = micros() - timeSend;
-
-		// debugI("Tiempo de lectura: %uus, tiempo escalado: %uus, tiempo de compresion: %uus, tiempo de envio: %uus, free heap: %u bytes\n",
-		// 	timeRead, timeScale, timeCompress, timeSend, ESP.getFreeHeap());
+	const uint32_t processStartedUs = micros();
+	if (waveUpdated && meterServicesReady.load()) {
+		const float frequencies[] = {meterVals.phaseR.Freq, meterVals.phaseS.Freq, meterVals.phaseT.Freq};
+		scopeStreamProcess(readBuffer, WFB_SAMPLES_PER_CHANNEL / 2, waveClock.endUs, frequencies);
 	}
+	meterTimingRecord(meterTimingPart::wavePack, micros() - processStartedUs);
 }
 
 
@@ -821,14 +813,10 @@ static void meterApplyFastRms(const float voltages[3], const float currents[4], 
 	meterVals.gridState = deriveGridState(meterVals.phaseR.gridState.state,
 		meterVals.phaseS.gridState.state, meterVals.phaseT.gridState.state);
 	if (meterVals.gridState != previousGridState) meterVals.gridStateChangedAtMs = sampleMs;
-	gridEventsUpdate(meterVals.phaseR.gridState, meterVals.phaseS.gridState,
-		meterVals.phaseT.gridState, meterVals.gridState, voltages[0],
-		voltages[1], voltages[2], sampleMs);
-	if (gridEventsReadyForStorage()) {
-		gridEventStoreObserve(meterVals.phaseR.gridState, meterVals.phaseS.gridState, meterVals.phaseT.gridState,
-			meterVals.gridState, voltages[0], voltages[1], voltages[2],
-			meterVals, gridConfig, sampleMs);
-	}
+	bootTimingEnd(bootPhase::firstFast);
+	if (meterVals.gridState != gridCondition::unknown) bootTimingEnd(bootPhase::firstState);
+	gridEventStoreObserve(meterVals.phaseR.gridState, meterVals.phaseS.gridState, meterVals.phaseT.gridState,
+		meterVals.gridState, voltages[0], voltages[1], voltages[2], meterVals, gridConfig, sampleMs);
 
 	meterVals.average.FastVrms = (meterVals.phaseR.FastVrms + meterVals.phaseS.FastVrms + meterVals.phaseT.FastVrms) / 3.0;
 	meterVals.average.FastIrms = (meterVals.phaseR.FastIrms + meterVals.phaseS.FastIrms + meterVals.phaseT.FastIrms) / 3.0;

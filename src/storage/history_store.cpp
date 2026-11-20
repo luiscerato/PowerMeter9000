@@ -50,7 +50,18 @@ bool HistoryStore::begin()
 		maintenanceQueue = xQueueCreateStatic(1, sizeof(NandIoResult), maintenanceQueueData, &maintenanceQueueStorage);
 	else xQueueReset(maintenanceQueue);
 	if (!completionQueue || !planQueue || !planMutex || !maintenanceQueue || !recoverCursor()) return false;
-	return writeBlockReady ? prepareNextBlock() : prepareCurrentBlock();
+	storeMetrics.mountReadyMs = millis();
+	if (!writeBlockReady) {
+		if (!prepareCurrentBlock()) return false;
+		const uint32_t startedMs = millis();
+		while (!writeBlockReady && preparedErasePending && uint32_t(millis() - startedMs) < 250U) {
+			pollMaintenance();
+			if (!writeBlockReady && preparedErasePending) vTaskDelay(1);
+		}
+		if (!writeBlockReady) return false;
+	}
+	storeMetrics.writeReadyMs = millis();
+	return prepareNextBlock();
 }
 
 // Agrega una muestra y cierra la pagina si cambia el formato o no queda espacio.
@@ -581,11 +592,12 @@ bool HistoryStore::pageIntersectsRange(const HistoryFormat::PageHeader& header, 
 
 // Construye un plan de lectura inmutable y toma una copia valida de la pagina RAM si entra en el rango.
 HistoryReadPlanStatus HistoryStore::buildReadPlan(uint32_t fromTimestamp, uint32_t toTimestamp, HistoryReadPlan& plan,
-	uint8_t* activeSnapshot, size_t snapshotSize)
+	uint8_t* activeSnapshot, size_t snapshotSize, uint32_t maxPages, uint32_t beforeSequence)
 {
 	StoreFormatGuard guard(formatPaused, activeCalls);
 	if (!guard) return HistoryReadPlanStatus::ioError;
-	if (!activeSnapshot || snapshotSize < HistoryFormat::pageSize || fromTimestamp > toTimestamp || !planMutex) return HistoryReadPlanStatus::ioError;
+	if (!activeSnapshot || snapshotSize < HistoryFormat::pageSize || fromTimestamp > toTimestamp || !planMutex ||
+		!maxPages || maxPages > 4096) return HistoryReadPlanStatus::ioError;
 	if (xSemaphoreTake(planMutex, pdMS_TO_TICKS(1000)) != pdPASS) return HistoryReadPlanStatus::ioError;
 	plan = HistoryReadPlan{};
 	plan.fromTimestamp = fromTimestamp;
@@ -602,7 +614,7 @@ HistoryReadPlanStatus HistoryStore::buildReadPlan(uint32_t fromTimestamp, uint32
 			payloadBytes <= HistoryFormat::payloadSize && header->headerCrc16 == HistoryFormat::crc16(activeSnapshot, 16) &&
 			header->payloadCrc16 == HistoryFormat::crc16(activeSnapshot + HistoryFormat::headerSize, payloadBytes);
 	}
-	if (snapshotValid) {
+	if (snapshotValid && maxPages == 4096 && beforeSequence == UINT32_MAX) {
 		const auto* header = reinterpret_cast<const HistoryFormat::PageHeader*>(activeSnapshot);
 		plan.includesActivePage = pageIntersectsRange(*header, fromTimestamp, toTimestamp);
 		if (plan.includesActivePage) plan.activeSampleCount = header->sampleCount;
@@ -616,6 +628,17 @@ HistoryReadPlanStatus HistoryStore::buildReadPlan(uint32_t fromTimestamp, uint32
 	uint16_t cursorBlock = latestStoredBlock;
 	uint8_t cursorPage = latestStoredPage;
 	uint32_t expectedSequence = latestStoredSequence;
+	if (beforeSequence != UINT32_MAX) {
+		const uint32_t distance = (latestStoredSequence - beforeSequence) & 0xFFFFFFU;
+		NandPartitionInfo info;
+		partition.getInfo(info);
+		if (distance >= uint32_t(info.usableBlockCount) * WinbondSpiNand::pagesPerBlock ||
+			!previousPages(cursorBlock, cursorPage, distance)) {
+			xSemaphoreGive(planMutex);
+			return HistoryReadPlanStatus::noData;
+		}
+		expectedSequence = beforeSequence;
+	}
 	const uint32_t searchStartedUs = micros();
 	const bool foundTarget = findPageAtOrBefore(toTimestamp, cursorBlock, cursorPage, expectedSequence, plan.searchHeaderReads);
 	plan.searchElapsedUs = micros() - searchStartedUs;
@@ -624,7 +647,7 @@ HistoryReadPlanStatus HistoryStore::buildReadPlan(uint32_t fromTimestamp, uint32
 		return HistoryReadPlanStatus::noData;
 	}
 	bool found = false;
-	constexpr uint32_t maxDownloadPages = 4096;
+	const uint32_t maxDownloadPages = maxPages;
 	for (uint32_t scanned = 0; scanned < maxDownloadPages; ++scanned) {
 		HistoryFormat::PageHeader header;
 		bool valid = false;
@@ -657,7 +680,7 @@ HistoryReadPlanStatus HistoryStore::buildReadPlan(uint32_t fromTimestamp, uint32
 		}
 		expectedSequence = (expectedSequence - 1U) & 0xFFFFFFU;
 	}
-	if (found && plan.physicalPageCount >= maxDownloadPages) {
+	if (found && plan.physicalPageCount >= maxDownloadPages && maxPages == 4096) {
 		xSemaphoreGive(planMutex);
 		return HistoryReadPlanStatus::rangeTooLarge;
 	}

@@ -16,7 +16,7 @@ async function run() {
         const eventState={grid:{lowR:185,highR:250,lowS:180,highS:255,lowT:190,highT:260,noVoltage:20,hysteresis:5,
             lossConfirmMs:250,recoveryConfirmMs:250,neutralHigh:25,neutralHysteresis:2,neutralConfirmMs:100,neutralRecoveryMs:250},
             meter:{dipEnabled:1,swellEnabled:1,overcurrent:1,dipMs:50,swellMs:50,ocMs:50,ocCurrent:85,ocHyst:1},
-            wave:{preMs:192,saveEnabled:true,pointMask:5},onPost:fields=>{
+            wave:{preMs:96,saveEnabled:true,pointMask:5},onPost:fields=>{
                 if(fields.has('volt.lowR'))calls.push('grid');
                 if(fields.has('rec.dip'))calls.push('events:capture');
                 if(fields.has('wave.on'))calls.push('wave');
@@ -26,24 +26,27 @@ async function run() {
         const signedKeys = new Set(['wifi-mode', 'time-dsttime', 'time-minwest', 'dipMs', 'swellMs', 'ocMs']);
         const unsignedKeys = new Set(['time-start', 'mqtt-port', 'eventPrevSamples', 'eventPostSamples', 'eventMaxSamples']);
         const floatKeys = new Set(['ocCurrent', 'ocHyst']);
+        const networkValues={};
+        for(const key of networkKeys)networkValues[key]=key==='sta-pass'?'clear"text':key+'-value';
+        Object.assign(networkValues,{'sta-ip':'192.168.1.90','sta-mask':'255.255.255.0','sta-gw':'192.168.1.1',
+            'sta-dns1':'1.1.1.1','sta-dns2':'0.0.0.0','ap-ip':'192.168.4.1','ap-mask':'255.255.255.0','ap-gw':'192.168.4.1',
+            'wifi-mode':1,'time-dsttime':0,'time-minwest':180,'time-start':5,'mqtt-port':1883});
+        for(const key of boolKeys)if(!['dipEnabled','swellEnabled','overcurrent'].includes(key))networkValues[key]=true;
+        const saved={meter:{rWattH:10,rVarH:1,rVaH:11,sWattH:20,sVarH:2,sVaH:22,tWattH:30,tVarH:3,tVaH:33,WattH:60,VarH:6,VaH:66},ADE9000:{}};
+        let mismatch=false;
         await page.route('http://meter.test/**', async route => {
             const request = route.request(), url = new URL(request.url());
             if(url.pathname.startsWith('/events/'))return routeEvents(route,eventState);
             if (url.pathname === '/network/config' && request.method() === 'GET') {
-                const values = {};
-                for (const key of networkKeys) values[key] = key === 'sta-pass' ? 'clear"text' : key + '-value';
-                for (const key of ['staticIp', 'ap-hide', 'ap-custom-ip', 'ota-enabled', 'time-sync', 'debug-enabled', 'mqtt-enabled']) values[key] = true;
-                for (const key of ['wifi-mode', 'time-dsttime', 'time-minwest']) values[key] = -180;
-                values['time-start'] = 5;
-                values['mqtt-port'] = 1883;
-                return route.fulfill({json: values});
+                return route.fulfill({json: networkValues});
             }
             if (url.pathname === '/network/config' && request.method() === 'POST') {
-                assert.equal(url.search, '');
+                assert.equal(url.search, '?defer=1');
                 const form = new URLSearchParams(request.postData());
                 assert.equal(form.get('sta-pass'), 'clear"text');
                 assert.equal(form.has('ns'), false);
                 calls.push('network');
+                for(const [key,value] of form)networkValues[key]=boolKeys.has(key)?value==='true':signedKeys.has(key)||unsignedKeys.has(key)?Number(value):value;
                 return route.fulfill({json: {ok: true, written: form.size, restartRequired: true}});
             }
             if (url.pathname === '/options' && request.method() === 'GET') {
@@ -51,7 +54,8 @@ async function run() {
                 const values = {};
                 for (const key of url.searchParams.keys()) {
                     if (key === 'ns') continue;
-                    if (namespace === 'ADE9000') values[key] = ['neutralRms', 'neutralFast'].includes(key) ? 1.17 : -1;
+                    if(Object.hasOwn(saved[namespace]||{},key))values[key]=saved[namespace][key];
+                    else if (namespace === 'ADE9000') values[key] = ['neutralRms', 'neutralFast'].includes(key) ? 1.17 : -1;
                     else if (networkKeys.has(key)) values[key] = key === 'sta-pass' ? 'clear"text' : key + '-value';
                     else if (boolKeys.has(key)) values[key] = 1;
                     else if (signedKeys.has(key)) values[key] = namespace === 'meter' ? 50 : -180;
@@ -71,6 +75,8 @@ async function run() {
                     assert.equal(form.get('neutralFast'), '1.17');
                 }
                 calls.push('opts:' + form.get('ns'));
+                for(const [key,value] of form)if(key!=='ns')saved[form.get('ns')][key]=value.startsWith('0x')?parseInt(value,16)|0:Number(value);
+                if(mismatch&&form.get('ns')==='meter')saved.meter.WattH=999;
                 return route.fulfill({json: {ok: true, written: form.size - 1}});
             }
             if (url.pathname === '/grid/config') {
@@ -98,10 +104,10 @@ async function run() {
             if (url.pathname === '/wave/config') {
                 if (request.method() === 'POST') {
                     const form = new URLSearchParams(request.postData());
-                    assert.equal(form.get('preMs'), '192'); assert.equal(form.get('pointMask'), '5');
+                    assert.equal(form.get('preMs'), '96'); assert.equal(form.get('pointMask'), '5');
                     assert.equal(form.get('saveEnabled'), '1'); calls.push('wave');
                 }
-                return route.fulfill({json:{preMs:192,saveEnabled:true,pointMask:5}});
+                return route.fulfill({json:{preMs:96,saveEnabled:true,pointMask:5}});
             }
             if (url.pathname === '/options/reload') return route.fulfill({body: 'ok'});
             if (url.pathname === '/restart') return route.fulfill({json: {ok: true}});
@@ -110,7 +116,10 @@ async function run() {
         await page.goto('http://meter.test/');
         await page.addScriptTag({path: path.join(root, 'data/lib/jquery-3.6.4.min.js')});
         await page.addScriptTag({path: path.join(root, 'data/lib/bootstrap.bundle.min.js')});
+        await page.addScriptTag({path: path.join(root, 'data/app_appearance.js')});
+        await page.addScriptTag({path: path.join(root, 'data/history_cache.js')});
         await page.addScriptTag({path: path.join(root, 'data/index.js')});
+        await page.addScriptTag({path: path.join(root, 'data/network_settings.js')});
         await page.evaluate(() => {
             document.body.innerHTML = '<div id="settings"></div>';
             window.board = {IP: 'http://meter.test', timeout: 1000};
@@ -139,7 +148,7 @@ async function run() {
         assert.equal(Object.hasOwn(backup.sections.capture, 'eventPostSamples'), false);
         assert.equal(Object.hasOwn(backup.sections.capture, 'eventMaxSamples'), false);
         assert.equal(Object.keys(backup.sections).length, 7);
-        assert.deepEqual(backup.sections.wave, {preMs:192,saveEnabled:true,pointMask:5});
+        assert.deepEqual(backup.sections.wave, {preMs:96,saveEnabled:true,pointMask:5});
         assert.equal(Object.hasOwn(backup.sections, 'web'), false);
         assert.equal(await page.evaluate(() => {
             try { validateBackupSection('calibration', {neutralRms: -1}); return false; }
@@ -154,6 +163,24 @@ async function run() {
         await page.waitForFunction(() => document.querySelector('#settingsBackupWarning').textContent.startsWith('Importación terminada.'));
         assert.deepEqual(calls, ['grid', 'history', 'events:capture', 'wave', 'opts:meter', 'opts:ADE9000', 'network']);
         assert.equal(await page.isHidden('#btnRestartAfterImport'), false);
+        calls.length=0;
+        await page.evaluate(()=>$('.backupImportSection').prop('checked',false).filter('[value="energy"]').prop('checked',true));
+        await page.click('#btnImportSettingsBackup');
+        await page.waitForFunction(()=>!settingsBackupBusy);
+        assert.deepEqual(calls,['opts:meter']);
+        calls.length=0;mismatch=true;
+        await page.evaluate(()=>$('.backupImportSection').prop('checked',true));
+        await page.click('#btnImportSettingsBackup');
+        await page.waitForFunction(()=>document.querySelector('#settingsBackupWarning').textContent.startsWith('Importación terminada con errores.'));
+        assert.deepEqual(calls,['grid','history','events:capture','wave','opts:meter','opts:ADE9000','network']);
+        assert.match(await page.textContent('#settingsBackupStatus'),/No coincide lo guardado: WattH/);
+        assert.equal(await page.isEnabled('#settingsBackupFile'),true);
+        assert.equal(await page.evaluate(()=>{
+            try {validateBackupSection('history',{enabled:true,groupConfig:6,samplePeriodDeciseconds:10});return false;}catch{return true;}
+        }),true);
+        await page.setInputFiles('#settingsBackupFile',{name:'invalid.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({...backup,sections:{...backup.sections,bogus:{a:1}}}))});
+        await page.waitForFunction(()=>document.querySelector('#settingsBackupWarning').textContent.includes('secciones desconocidas'));
+        assert.equal(await page.isEnabled('#btnImportSettingsBackup'),false);
         console.log('PASS: respaldo JSON completo, escape de credenciales, validacion y restauracion secuencial con red al final.');
     } finally {
         await context.close();

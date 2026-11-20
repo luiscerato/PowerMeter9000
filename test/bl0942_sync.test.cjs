@@ -115,6 +115,7 @@ static_assert(preserveInitialization(), "ADE no cancela deteccion UART pendiente
 struct MeterCase {
     struct { float voltages[3] = {123, 124, 125}, currents[4] = {1, 2, 3, 4};
         uint32_t sampleMs = 1000, lastEventMs = 900; uint16_t timestamp = 65530;
+        uint64_t sampleUs = 1000000;
         bool active = true; } pendingFastSample;
     struct { struct { float FastVrms = 0; } neutral; bool neutralFastValid = false; } meterVals;
     struct Bl {
@@ -136,6 +137,7 @@ struct MeterCase {
     } EventsData;
     int halfCycleSamples[1] = {}, halfCycleSamplesIndex = 0, meterUpdated = 0, pushes = 0;
     uint32_t storedMs = 0, observedMs = 0; uint16_t storedTimestamp = 0;
+    uint64_t currentFastUs = 0;
     float storedAde = 0;
     // Conserva la interfaz de detectores; ms es el instante original verificado en esta prueba.
     constexpr void meterPollCapturedEvents(uint32_t ms) {}

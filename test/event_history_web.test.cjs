@@ -102,14 +102,16 @@ async function run() {
             assert.equal(await page.locator('#eventHistoryWarning').isVisible(),true,'un problema distinto muestra su aviso');
             await page.evaluate(() => {eventHistory.captures[0].partial=false;eventHistory.failures=[];eventHistory.dismissedWarning=null;renderEventHistory();});
             assert.equal(await page.evaluate(() => eventHistory.captures.every(item => !item.samples)), true);
-            assert.equal(await page.locator('#eventStatisticsSummary tr').count(), 5);
-            assert.match(await page.locator('#eventStatisticsSummary tr').nth(1).textContent(), /30.0 s.*1 inicio/);
+            assert.equal(await page.locator('#eventStatisticsSummary tr').count(), 4);
+            assert.match(await page.locator('#eventStatisticsSummary tr').nth(0).textContent(), /30 s.*1 inicio/);
             assert.match(await page.locator('#eventStatisticsStatus').textContent(), /dia/);
             const requestsBeforeStatistics = order.length;
             await page.locator('#eventHistoryStats-tab').click();
             await page.waitForFunction(() => eventStatisticsCharts.length === 2);
             assert.ok(await page.locator('#eventStatisticsCountChart canvas').count() > 0);
-            await page.selectOption('#eventStatisticsSubject', '0');
+            await page.locator('[data-stat-subject="1"]').click();
+            await page.locator('[data-stat-subject="2"]').click();
+            await page.locator('[data-stat-subject="3"]').click();
             await page.selectOption('#eventStatisticsUnit', 'hour');
             const statistics = await page.evaluate(() => {
                 const result = buildEventStatistics(eventHistory.result.intervals, eventHistory.range.from, eventHistory.range.to, 'hour', 0);
@@ -118,6 +120,15 @@ async function run() {
             });
             assert.equal(await page.locator('#eventStatisticsRows tr').count(), statistics.rows);
             assert.equal(statistics.duration, 30000); assert.equal(statistics.starts, 1);
+            const durationDisplay = await page.evaluate(() => {
+                const axis = eventStatisticsCharts[1].options.axisY;
+                return {title: axis.title, label: axis.labelFormatter({value: 90}),
+                    point: eventStatisticsCharts[1].options.data[0].dataPoints.find(point => point.y > 0)};
+            });
+            assert.equal(durationDisplay.title, 'Tiempo');
+            assert.equal(durationDisplay.label, '1 min 30 s');
+            assert.equal(durationDisplay.point.y, 30);
+            assert.equal(durationDisplay.point.tooltipText, '30 s');
             assert.equal(order.length, requestsBeforeStatistics);
             await page.selectOption('#eventStatisticsUnit', 'auto');
             await page.screenshot({path: 'tmp/event-statistics-charts-' + width + '.png', fullPage: true});

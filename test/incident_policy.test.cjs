@@ -25,6 +25,12 @@ const harness = `
 #include <algorithm>
 #include <cmath>
 using std::isfinite;
+using esp_reset_reason_t = uint8_t;
+constexpr esp_reset_reason_t ESP_RST_POWERON = 1, ESP_RST_BROWNOUT = 9;
+constexpr esp_reset_reason_t esp_reset_reason() {return 3;}
+enum class bootPhase {firstEventPage};
+// Sustituye solo la metrica de arranque; phase identifica el hito sin afectar la politica probada.
+constexpr void bootTimingEnd(bootPhase phase) {}
 ${format}
 ${states}
 ${config}
@@ -57,7 +63,7 @@ struct Store {
     uint8_t currentPage = 0;
     NandPartition partition;
     int completionQueue = 0;
-    uint32_t nowMs = 0, nextEventId = 1;
+    uint32_t nowMs = 0, nextEventId = 1, armedThroughMs = 0;
     Capture capture;
     Candidate candidates[4] = {};
     pointTracker points[10] = {};
@@ -77,6 +83,7 @@ struct Store {
     constexpr void gettimeofday(timeval* now, void* unused) const { now->tv_sec = estimatedEpoch; }
     // Abre RAM sin NAND; candidate/sampleMs fijan contexto y ventana originales.
     constexpr void armCapture(const Candidate& candidate, uint32_t sampleMs) {
+        armedThroughMs = sampleMs;
         capture = Capture{}; capture.active = true; capture.pageCount = 5; capture.eventId = nextEventId;
         capture.startedMs = candidate.startedMs; capture.endMs = candidate.startedMs + 4720;
         capture.closeAfterMs = capture.endMs; capture.rootSampleCount = 113;
@@ -108,6 +115,7 @@ struct Store {
     ${method('appendRecord', 'bool')}
     ${method('addTransition')}
     ${method('confirmCandidate')}
+    ${method('startStartupCapture')}
     ${method('startCandidate')}
     ${method('discardCandidate')}
     ${method('observePhase')}
@@ -140,6 +148,18 @@ struct Scenario {
         }
     }
 };
+// Recupera el estado temprano sin perder el intervalo que ya esta en el anillo; sin parametros.
+constexpr bool startupBackfill() {
+    Store store; meterValues meter; gridSettings settings;
+    phaseState phase; phase.state = phase.pending = phaseCondition::normal;
+    const phaseState* phases[] = {&phase,&phase,&phase};
+    const float voltages[] = {230,230,230};
+    store.nowMs = 930;
+    store.startStartupCapture(phases,gridCondition::normal,voltages,meter,settings,600);
+    return store.capture.startedMs == 600 && store.capture.rootStartedMs == 600 && store.armedThroughMs == 930 &&
+        store.capture.settings.reserved == (GridEventFormat::startupReasonMarker | 3) && store.capture.transitionCount == 3;
+}
+static_assert(startupBackfill(),"Arranque conserva su fecha y recupera hasta la muestra actual");
 // Un DIP cerrado no escribe al iniciar y conserva duracion fisica sin sumar recuperacion; sin parametros.
 constexpr bool shortDip() {
     Scenario s; s.feed(150, 0, 1000, 1490);

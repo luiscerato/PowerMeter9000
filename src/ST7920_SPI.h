@@ -123,6 +123,8 @@ public:
   void switchBuf(byte b);
   void display(int buf = 0);
   void display(int buf, int part);
+  // Envia solo words palabras de 16 pixeles por rows filas; firstWord/firstRow son coordenadas fisicas.
+  bool displayRegion(uint8_t firstWord, uint8_t firstRow, uint8_t words, uint8_t rows);
   void copy(uint8_t x16, uint8_t y, uint8_t w16, uint8_t h, uint8_t buf = 0);
   void gotoXY(byte x, byte y);
   void sleep(bool mode = true);

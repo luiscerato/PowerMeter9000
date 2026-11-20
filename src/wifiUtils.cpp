@@ -5,21 +5,155 @@
 #include "AsyncMqttClient.h"
 #include "ST7920_SPI.h"
 #include "manager_api.h"
-#include "grid_events.h"
 #include "rtc_clock.h"
 #include "memory_diagnostics.h"
+#include "diagnostic_logger.h"
+#include "storage/wave_event_store.h"
 #include <new>
+#include <atomic>
 
 Preferences Settings;
 const char* settingsName = "wifi-stuff";
+static Wifi_Mode configuredWifiMode = Wifi_Mode::Off;
+static bool recoveryAp = false, stationHasSsid = false, apAttempted = false;
+static uint32_t lastStationOnlineMs = 0, stationOnlineSinceMs = 0;
+static portMUX_TYPE networkMutex = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t pendingNetworkServices = 0;
+static bool networkNvsLocked = false;
+static uint32_t networkApplyAfterMs = 0;
+static std::atomic<uint8_t> networkState{0};
+static std::atomic<bool> timeConnectionPending{false};
+static std::atomic<bool> debugConnectionPending{false};
+struct disconnectLogWindow { uint32_t lastLogMs = 0; uint16_t suppressed = 0; bool hasLogged = false; };
+static disconnectLogWindow wifiDisconnectLog, mqttDisconnectLog;
+
+// Limita el aviso a uno por minuto; moduleId filtra, label y reason describen la causa, window agrupa repeticiones.
+static void logDisconnectRateLimited(uint32_t moduleId, const char* label, uint8_t reason,
+	disconnectLogWindow& window)
+{
+	const uint32_t now = millis();
+	if (!window.hasLogged || uint32_t(now - window.lastLogMs) >= 60000) {
+		const uint16_t count = window.suppressed + 1;
+		window.lastLogMs = now;
+		window.suppressed = 0;
+		window.hasLogged = true;
+		DIAG_WARN(moduleId, "%s desconectado motivo=%u eventos_agrupados=%u", label, unsigned(reason), unsigned(count));
+	}
+	else ++window.suppressed;
+}
+
+// Serializa lectura y escritura de grupos completos; needed=false evita bloquear otros namespaces.
+networkSettingsGuard::networkSettingsGuard(bool needed) : locked(!needed), needed(needed) {
+	if (!needed) return;
+	portENTER_CRITICAL(&networkMutex);
+	if (!networkNvsLocked) { networkNvsLocked = true; locked = true; }
+	portEXIT_CRITICAL(&networkMutex);
+}
+
+// Libera el acceso a NVS de esta instancia; sin parametros.
+networkSettingsGuard::~networkSettingsGuard() {
+	if (!needed || !locked) return;
+	portENTER_CRITICAL(&networkMutex); networkNvsLocked = false; portEXIT_CRITICAL(&networkMutex);
+}
+
+// Publica services sin borrar solicitudes concurrentes y deja un segundo para entregar la respuesta HTTP.
+void networkQueueApply(uint8_t services) {
+	if (!services) return;
+	portENTER_CRITICAL(&networkMutex);
+	pendingNetworkServices |= services;
+	networkApplyAfterMs = millis() + 1000U;
+	networkState = 1;
+	portEXIT_CRITICAL(&networkMutex);
+}
+
+// Informa el estado del ultimo cambio de servicios; sin parametros.
+const char* networkApplyStatus() {
+	const char* states[] = {"ok", "wait", "apply", "fail"};
+	return states[networkState.load()];
+}
+
+// Reconfigura solo la radio; preserveAccess habilita el AP temporal durante un cambio de estacion.
+static bool applyWifiRuntime(bool preserveAccess);
+
+// Consume por separado Wi-Fi y hora desde el loop principal; sin parametros.
+static void pollNetworkConfig() {
+	if (waveCaptureBusy()) return;
+	portENTER_CRITICAL(&networkMutex);
+	const bool ready = pendingNetworkServices && int32_t(millis() - networkApplyAfterMs) >= 0;
+	portEXIT_CRITICAL(&networkMutex);
+	if (!ready) return;
+	networkSettingsGuard guard;
+	if (!guard.locked) return;
+	uint8_t services = 0;
+	portENTER_CRITICAL(&networkMutex);
+	if (pendingNetworkServices && int32_t(millis() - networkApplyAfterMs) >= 0) {
+		services = pendingNetworkServices; pendingNetworkServices = 0; networkState = 2;
+	}
+	portEXIT_CRITICAL(&networkMutex);
+	if (!services) return;
+	bool ok = true;
+	if (services & 1U) ok = applyWifiRuntime(true);
+	if (services & 2U) ok = TimeSetServer() && ok;
+	portENTER_CRITICAL(&networkMutex);
+	if (!pendingNetworkServices) networkState = ok ? 0 : 3;
+	portEXIT_CRITICAL(&networkMutex);
+}
+
+// Inicia el AP guardado; recovery lo hace visible aunque el AP manual estuviera oculto.
+static bool startConfiguredAp(bool recovery)
+{
+	Preferences options;
+	if (!options.begin(settingsName, true)) return false;
+	const String ssid = options.getString("ap-ssid", "PowerMeter9000"), password = options.getString("ap-pass", "");
+	const bool hidden = !recovery && options.getBool("ap-hide", false);
+	IPAddress ip(192,168,4,1), mask(255,255,255,0), gateway(192,168,4,1);
+	if (options.getBool("ap-custom-ip", false)) {
+		ip.fromString(options.getString("ap-ip", "192.168.4.1"));
+		mask.fromString(options.getString("ap-mask", "255.255.255.0"));
+		gateway.fromString(options.getString("ap-gw", "192.168.4.1"));
+	}
+	options.end();
+	WiFi.mode(configuredWifiMode == Wifi_Mode::SoftAP ? WIFI_MODE_AP : WIFI_MODE_APSTA);
+	if (!WiFi.softAPConfig(ip, gateway, mask) || !WiFi.softAP(ssid.c_str(), password.c_str(), 1, hidden)) return false;
+	WiFi.softAPsetHostname("PowerMeter9000");
+	debugI("AP %s: %s, IP %s%s", recovery ? "recuperacion" : "configurado", ssid.c_str(),
+		WiFi.softAPIP().toString().c_str(), password.isEmpty() ? " (sin clave)" : "");
+	return true;
+}
+
+// Mantiene un AP tras 30 s sin red y lo retira al recuperar la estacion sin clientes; sin parametros.
+static void pollWifiRecovery()
+{
+	if (configuredWifiMode != Wifi_Mode::Station) return;
+	const uint32_t now = millis();
+	if (WiFi.isConnected()) {
+		lastStationOnlineMs = now;
+		if (!stationOnlineSinceMs) stationOnlineSinceMs = now;
+		if (recoveryAp && uint32_t(now - stationOnlineSinceMs) >= 30000U && !WiFi.softAPgetStationNum()) {
+			WiFi.softAPdisconnect(false); WiFi.mode(WIFI_MODE_STA); recoveryAp = false;
+			debugI("AP de recuperacion cerrado: estacion conectada");
+		}
+	} else {
+		stationOnlineSinceMs = 0;
+		if (!recoveryAp && ((!stationHasSsid && !apAttempted) || uint32_t(now - lastStationOnlineMs) >= 30000U)) {
+			networkSettingsGuard guard;
+			if (!guard.locked) return;
+			lastStationOnlineMs = now;
+			apAttempted = true;
+			recoveryAp = startConfiguredAp(true);
+		}
+	}
+}
+
+// Devuelve si el AP temporal esta activo; sin parametros.
+bool wifiRecoveryApActive() { return recoveryAp; }
 
 // Aplica la direccion IP de la estacion guardada o vuelve a DHCP.
-// options: preferencias abiertas del namespace wifi-stuff.
+// options: preferencias abiertas para esta conexion o cambio de direccion.
 static bool configureStationIp(Preferences& options)
 {
 	if (!options.getBool("staticIp", false))
 		return WiFi.config(IPAddress(), IPAddress(), IPAddress());
-
 	IPAddress ip, mask, gateway, dns1, dns2;
 	ip.fromString(options.getString("sta-ip", "192.168.1.90"));
 	mask.fromString(options.getString("sta-mask", "255.255.254.0"));
@@ -66,9 +200,19 @@ void UtilsInitSettings()
 	Settings.end();
 }
 
+// Inicia RemoteDebug leyendo sus ajustes solo cuando se establece una conexion; sin parametros.
+static void startRemoteDebug();
+
 void UtilsLoop()
 {
 	static uint32_t timerWifi, timerMQTT;
+	pollNetworkConfig();
+	if (timeConnectionPending.load()) {
+		networkSettingsGuard guard;
+		if (guard.locked && timeConnectionPending.exchange(false)) TimeSetServer();
+	}
+	if (debugConnectionPending.exchange(false)) startRemoteDebug();
+	pollWifiRecovery();
 
 	if (WiFi.isConnected()) {
 		timerWifi = millis();
@@ -112,29 +256,23 @@ void DebugStart()
 		Para iniciar RemoteDebugger primero debemos estar conectados al Wifi
 		Agregar una función al evento wifi para que lo inicialice una vez conectado
 	*/
-	WiFi.onEvent([](arduino_event_t* event) {
-		Settings.begin(settingsName, false);
-		bool enabled = Settings.getBool("debug-enabled", true);
-		if (enabled) {
-			String name = Settings.getString("debug-name", hostName);
-			String pass = Settings.getString("debug-pass", "");
-			Debug.begin(name);
-
-			if (pass.length() > 0) Debug.setPassword(pass);
-			Debug.showProfiler(true); // Profiler (Good to measure times, to optimize codes)
-			Debug.showColors(true); // Colors
-
-			debugI("Debugger listo!");
-			usingDebug = true;
-		}
-		else {
-			debugW("Remote debugger deshabilitado!");
-			usingDebug = false;
-		}
-		Settings.end();
-		}, ARDUINO_EVENT_WIFI_STA_CONNECTED);
+	WiFi.onEvent([](arduino_event_t* event) { debugConnectionPending = true; }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
 }
 
+// Lee nombre y clave al conectar, los entrega a RemoteDebug y libera los temporales; sin parametros.
+static void startRemoteDebug() {
+	networkSettingsGuard guard;
+	if (!guard.locked) { debugConnectionPending = true; return; }
+	Preferences options;
+	if (!options.begin(settingsName, true)) return;
+	usingDebug = options.getBool("debug-enabled", true);
+	if (usingDebug) {
+		Debug.begin(options.getString("debug-name", hostName));
+		Debug.setPassword(options.getString("debug-pass", ""));
+		Debug.showProfiler(true); Debug.showColors(true);
+	}
+	options.end();
+}
 
 void MQTTStart()
 {
@@ -147,12 +285,12 @@ void MQTTStart()
 		usingMQTT = true;
 		String url = Settings.getString("mqtt-server");
 		uint32_t port = Settings.getUInt("mqtt-port", 1883);
-		strcpy(server, url.c_str());
+		snprintf(server, sizeof(server), "%s", url.c_str());
 
 		String usr = Settings.getString("mqtt-user");
 		String pas = Settings.getString("mqtt-pass");
-		strcpy(user, usr.c_str());
-		strcpy(pass, pas.c_str());
+		snprintf(user, sizeof(user), "%s", usr.c_str());
+		snprintf(pass, sizeof(pass), "%s", pas.c_str());
 
 		mqtt.setServer(server, port);
 		if (usr.length() > 0) mqtt.setCredentials(user, pas.length() > 0 ? pass : nullptr);
@@ -164,10 +302,12 @@ void MQTTStart()
 
 		mqtt.onConnect([](bool sessionPresent) {
 			debugI("Conectado a servidor MQTT!");
+			DIAG_INFO(DiagnosticModule::mqtt, "Conectado, sesion_previa=%u", sessionPresent ? 1 : 0);
 			});
 
 		mqtt.onDisconnect([](AsyncMqttClientDisconnectReason reason) {
 			debugI("Desconectado de servidor MQTT!");
+			logDisconnectRateLimited(DiagnosticModule::mqtt, "MQTT", uint8_t(reason), mqttDisconnectLog);
 			});
 
 	}
@@ -183,126 +323,67 @@ void MQTTStart()
 */
 void WifiStart()
 {
-	WiFi.disconnect(true, true);
-
-	Settings.begin(settingsName, false);
-
-	debugI("Iniciando Wifi...\n");
-	Wifi_Mode mode = static_cast<Wifi_Mode>(Settings.getInt("wifi-mode", static_cast<int32_t>(Wifi_Mode::Station)));
-	WiFi.mode(static_cast<wifi_mode_t>(mode));
-	if (mode == Wifi_Mode::Station)
-		debugI("Wifi modo estacion");
-	else if (mode == Wifi_Mode::SoftAP)
-		debugI("Wifi modo soft AP");
-	else if (mode == Wifi_Mode::Station_AP)
-		debugI("Wifi modo soft AP y estacion");
-	else {
-		debugI("Wifi modo off");
-		Settings.end();
-		return;
-	}
-
-	WiFi.setSleep(false);
+	WiFi.persistent(false);
 	WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
 		if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
 			debugI("Conectado a AP (SSID): %s", getWiFiSSID());
+			DIAG_INFO(DiagnosticModule::wifi, "Asociado al punto de acceso");
 		}
 		else if (event == (WiFiEvent_t)ARDUINO_EVENT_WIFI_STA_GOT_IP) {
 			debugI("Se obtuvo direccion IP: %s", WiFi.localIP().toString().c_str());
+			const IPAddress address = WiFi.localIP();
+			DIAG_INFO(DiagnosticModule::wifi, "IP asignada=%u.%u.%u.%u RSSI=%d",
+				address[0], address[1], address[2], address[3], WiFi.RSSI());
 		}
-		else {
-			debugI("Evento wifi! code: %d, descripcion: %s", event, getWifiEventName(event));
+		else if (event == (WiFiEvent_t)ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+			logDisconnectRateLimited(DiagnosticModule::wifi, "WiFi", uint8_t(info.wifi_sta_disconnected.reason),
+				wifiDisconnectLog);
 		}
 		});
-
-	const bool staticIp = Settings.getBool("staticIp", false);
-	if (staticIp) {
-		IPAddress ip, mask, gateway, dns1, dns2;
-		ip.fromString(Settings.getString("sta-ip", "192.168.1.90"));
-		mask.fromString(Settings.getString("sta-mask", "255.255.254.0"));
-		gateway.fromString(Settings.getString("sta-gw", "192.168.0.1"));
-		dns1.fromString(Settings.getString("sta-dns1", "8.8.8.8"));
-		dns2.fromString(Settings.getString("sta-dns2", "4.4.4.4"));
-		debugI("Seteando direccion IP estatica... \n");
-		debugI("Direccion IP:    %s", ip.toString());
-		debugI("Mascara de red:  %s", mask.toString());
-		debugI("Gateway:         %s", gateway.toString());
-		debugI("DNS preferiado:  %s", dns1.toString());
-		debugI("DNS alternativo: %s", dns2.toString());
-	}
-	if (configureStationIp(Settings)) debugI("Configuracion IP iniciada correctamente\n");
-	else debugW("Error al setear IP!\n");
-
-	String ssid = Settings.getString("sta-ssid", "");
-	String pass = Settings.getString("sta-pass", "");
-	// String ssid1 = Settings.getString("sta-ssid1", "");
-	// String pass1 = Settings.getString("sta-pass1", "");
-
-	debugI("Intentando conectar a: %s...", ssid);
-	if (WiFi.begin(ssid.c_str(), pass.c_str()))
-		debugI("Ok!");
-	else
-		debugE("Error!");
-
-	if (mode == Wifi_Mode::SoftAP || mode == Wifi_Mode::Station_AP) {
-		// Eventos de modo softAP
-		WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-			Serial.printf("Info: WiFi AP iniciado"); },
-			ARDUINO_EVENT_WIFI_AP_START);
-
-		WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-			Serial.printf("Info: WiFi AP terminado"); }, ARDUINO_EVENT_WIFI_AP_STOP);
-
-		WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-			Serial.printf("Info: WiFi AP direccion IP aignada: ",
-			Serial.println(WiFi.softAPIP())); }, ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED);
-
-		IPAddress ip, mask, gateway;
-		ip.fromString(Settings.getString("ap-ip", "192.168.1.1"));
-		mask.fromString(Settings.getString("ap-mask", "255.255.255.0"));
-		gateway.fromString(Settings.getString("ap-gw", "192.168.1.1"));
-		String ssid = Settings.getString("ap-ssid", "ESP32-AP");
-		String pass = Settings.getString("ap-pass", "");
-		bool hide = Settings.getBool("ap-hide", false);
-		bool customIp = Settings.getBool("ap-custom-ip", false);
-
-		// Configuracion soft ap
-		debugI("Configurando el punto de acceso (AP)...");
-		if (WiFi.softAP(ssid.c_str(), pass.c_str(), 1, hide))
-			debugI("Ok!");
-		else
-			debugE("Error!");
-
-		if (customIp) {
-			debugI("Usar direccion IP definida por usuario para AP");
-			debugI("Direccion IP:    %s", ip.toString());
-			debugI("Mascara de red:  %s", mask.toString());
-			debugI("Gateway:         %s", gateway.toString());
-
-			if (WiFi.softAPConfig(ip, gateway, mask))
-				debugI("IP iniciada correctamente!");
-			else
-				debugI("Error al setear IP!");
-		}
-		WiFi.softAPsetHostname("PowerMeter9000");
-		WiFi.enableAP(true);
-	}
-	debugI("Configuracion Wifi terminada correctamente\n");
-	Settings.end();
+	if (!applyWifiRuntime(false)) debugE("No se pudo iniciar Wi-Fi");
 }
 
+// Lee ajustes al cambiar la radio; preserveAccess mantiene acceso por AP mientras reconecta la estacion.
+static bool applyWifiRuntime(bool preserveAccess)
+{
+	Preferences options;
+	if (!options.begin(settingsName, true)) return false;
+	const int32_t mode = options.getInt("wifi-mode", 1);
+	const String ssid = options.getString("sta-ssid", ""), password = options.getString("sta-pass", "");
+	configuredWifiMode = static_cast<Wifi_Mode>(mode);
+	recoveryAp = false; apAttempted = false;
+	stationHasSsid = !ssid.isEmpty();
+	lastStationOnlineMs = millis(); stationOnlineSinceMs = 0;
+	WiFi.disconnect(false, false);
+	const bool temporaryAp = preserveAccess && configuredWifiMode == Wifi_Mode::Station;
+	if (!WiFi.mode(temporaryAp ? WIFI_MODE_APSTA : static_cast<wifi_mode_t>(mode))) { options.end(); return false; }
+	if (configuredWifiMode == Wifi_Mode::Off) { options.end(); return true; }
+	WiFi.setSleep(false);
+	bool ok = true;
+	if (temporaryAp) { recoveryAp = startConfiguredAp(true); apAttempted = true; ok = recoveryAp; }
+	else if (configuredWifiMode == Wifi_Mode::SoftAP || configuredWifiMode == Wifi_Mode::Station_AP) ok = startConfiguredAp(false);
+	if (configuredWifiMode == Wifi_Mode::Station || configuredWifiMode == Wifi_Mode::Station_AP) {
+		ok = configureStationIp(options) && ok;
+		if (stationHasSsid) ok = WiFi.begin(ssid.c_str(), password.c_str()) != WL_CONNECT_FAILED && ok;
+	}
+	options.end();
+	return ok;
+}
+
+// Lee las credenciales solamente al reintentar la estacion; sin parametros.
 void WifiReconnect()
 {
-	Settings.begin(settingsName, false);
-	Wifi_Mode mode = static_cast<Wifi_Mode>(Settings.getInt("wifi-mode", static_cast<int32_t>(Wifi_Mode::Station)));
-
-	if (mode == Wifi_Mode::Station || mode == Wifi_Mode::Station_AP) {
-		String ssid = Settings.getString("sta-ssid", "");
-		String pass = Settings.getString("sta-pass", "");
-		debugI("Reconectando wifi...");
-		WiFi.begin(ssid.c_str(), pass.c_str());
-	}
-	Settings.end();
+	if (configuredWifiMode != Wifi_Mode::Station && configuredWifiMode != Wifi_Mode::Station_AP) return;
+	portENTER_CRITICAL(&networkMutex);
+	const bool pending = (pendingNetworkServices & 1U) != 0;
+	portEXIT_CRITICAL(&networkMutex);
+	if (pending) return;
+	networkSettingsGuard guard;
+	Preferences options;
+	if (!guard.locked || !options.begin(settingsName, true)) return;
+	const String ssid = options.getString("sta-ssid", ""), password = options.getString("sta-pass", "");
+	options.end();
+	if (!ssid.isEmpty()) WiFi.begin(ssid.c_str(), password.c_str());
 }
 
 // Guarda la red y conecta con la politica IP configurada; ssid es el nombre y password puede estar vacia.
@@ -319,29 +400,28 @@ bool wifiSaveStationCredentials(const String& ssid, const String& password)
 // Carga desde NVS el modo de estacion, credenciales y parametros IP; config recibe los valores.
 bool wifiLoadStationConfig(wifiStationConfig& config)
 {
-	if (!Settings.begin(settingsName, true)) return false;
-	config.enabled = Settings.getInt("wifi-mode", static_cast<int32_t>(Wifi_Mode::Station)) !=
-		static_cast<int32_t>(Wifi_Mode::Off);
-	config.staticIp = Settings.getBool("staticIp", false);
-	config.ssid = Settings.getString("sta-ssid", "");
-	config.password = Settings.getString("sta-pass", "");
-	config.ip = Settings.getString("sta-ip", "192.168.1.90");
-	config.mask = Settings.getString("sta-mask", "255.255.254.0");
-	config.gateway = Settings.getString("sta-gw", "192.168.0.1");
-	config.dns1 = Settings.getString("sta-dns1", "8.8.8.8");
-	config.dns2 = Settings.getString("sta-dns2", "4.4.4.4");
-	Settings.end();
+	networkSettingsGuard guard;
+	Preferences options;
+	if (!guard.locked || !options.begin(settingsName, true)) return false;
+	config.enabled = options.getInt("wifi-mode", 1) != 0;
+	config.staticIp = options.getBool("staticIp", false);
+	config.ssid = options.getString("sta-ssid", ""); config.password = options.getString("sta-pass", "");
+	config.ip = options.getString("sta-ip", "192.168.1.90"); config.mask = options.getString("sta-mask", "255.255.254.0");
+	config.gateway = options.getString("sta-gw", "192.168.0.1"); config.dns1 = options.getString("sta-dns1", "8.8.8.8");
+	config.dns2 = options.getString("sta-dns2", "4.4.4.4");
+	options.end();
 	return true;
 }
 
-// Persiste la configuracion y reconecta o apaga la estacion segun config.enabled.
+// Persiste config y marca la reconfiguracion pendiente de la estacion.
 bool wifiSaveStationConfig(const wifiStationConfig& config)
 {
 	IPAddress ip, mask, gateway, dns1, dns2;
 	if (config.staticIp && (!ip.fromString(config.ip) || !mask.fromString(config.mask) ||
 		!gateway.fromString(config.gateway) || !dns1.fromString(config.dns1) ||
 		!dns2.fromString(config.dns2))) return false;
-	if (!Settings.begin(settingsName, false)) return false;
+	networkSettingsGuard guard;
+	if (!guard.locked || !Settings.begin(settingsName, false)) return false;
 
 	Settings.putInt("wifi-mode", static_cast<int32_t>(config.enabled ? Wifi_Mode::Station : Wifi_Mode::Off));
 	Settings.putBool("staticIp", config.staticIp);
@@ -352,16 +432,9 @@ bool wifiSaveStationConfig(const wifiStationConfig& config)
 	Settings.putString("sta-gw", config.gateway);
 	Settings.putString("sta-dns1", config.dns1);
 	Settings.putString("sta-dns2", config.dns2);
-
-	WiFi.disconnect(!config.enabled, false);
-	WiFi.mode(config.enabled ? WIFI_MODE_STA : WIFI_MODE_NULL);
-	const bool ipConfigured = !config.enabled || configureStationIp(Settings);
 	Settings.end();
-	if (!ipConfigured) return false;
-	if (!config.enabled || config.ssid.isEmpty()) return true;
-
-	WiFi.setSleep(false);
-	return WiFi.begin(config.ssid.c_str(), config.password.c_str()) != WL_CONNECT_FAILED;
+	networkQueueApply(1);
+	return true;
 }
 
 // Inicia o reutiliza el escaneo asíncrono. No recibe parámetros.
@@ -514,7 +587,8 @@ void OTAEnd()
 }
 
 
-void TimeStart()
+// Establece la hora local de arranque antes de iniciar adquisicion; no recibe parametros.
+void timeInitClock()
 {
 	debugI("Iniciando RTC...");
 
@@ -540,31 +614,36 @@ void TimeStart()
 	usingTimeServer = Settings.getBool("time-sync", false);
 	Settings.end();
 
-	if (usingTimeServer) {
-		WiFi.onEvent([](arduino_event_t* event) {
-			TimeSetServer();
-			}, ARDUINO_EVENT_WIFI_STA_CONNECTED);
-	}
+}
+
+// Activa la sincronizacion de red despues de preparar la hora local; sin parametros.
+void TimeStart()
+{
+	WiFi.onEvent([](arduino_event_t* event) { timeConnectionPending = true; }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
+	TimeSetServer();
 
 	printLocalTime();
 }
 
-void TimeSetServer()
+// Lee NTP y zona horaria al iniciar o reconfigurar el servicio; devuelve false si falla NVS, sin parametros.
+bool TimeSetServer()
 {
 	static char server[48];
-	Settings.begin(settingsName, false);
-
-	usingTimeServer = Settings.getBool("time-sync", false);
-	String url = Settings.getString("time-server", "ar.pool.ntp.org");
-	strcpy(server, url.c_str());
+	Preferences options;
+	if (!options.begin(settingsName, true)) return false;
+	usingTimeServer = options.getBool("time-sync", true);
+	if (sntp_enabled()) sntp_stop();
+	localTimeZone.tz_minuteswest = options.getInt("time-minwest", -180);
+	localTimeZone.tz_dsttime = options.getInt("time-dsttime", 0);
+	snprintf(server, sizeof(server), "%s", options.getString("time-server", "ar.pool.ntp.org").c_str());
+	options.end();
+	setTimeZone(&localTimeZone);
 
 	debugI("Iniciando servidor de hora. Server: '%s'...", server);
 
-	Settings.end();
-
 	if (usingTimeServer == false) {
 		debugW("La actualizacion de hora desde internet esta desactivada.");
-		return;
+		return true;
 	}
 	// Setear el servidor de tiempo
 	configTime(0, 0, server);
@@ -584,6 +663,7 @@ void TimeSetServer()
 			cada una hora.
 			https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/system_time.html
 	*/
+	return true;
 }
 
 

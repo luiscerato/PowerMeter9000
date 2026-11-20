@@ -491,7 +491,10 @@ typedef struct {
 } scopeInfo_t;
 
 
-void MeterInit();
+// Inicializa ADE, calibracion, detectores y tarea de adquisicion antes del montaje NAND; sin parametros.
+bool meterInitAcquisition();
+// Carga el osciloscopio y publica sus callbacks despues del arranque principal; sin parametros.
+void meterInitServices();
 
 
 bool MeterWriteEnergyRegisters( bool reset = false);
@@ -506,6 +509,9 @@ void meterQueueEventSettings(const gridSettings& grid, const eventCaptureConfig&
 
 void MeterLoop();
 uint64_t MeterGetLastSampleTimestampMs();
+
+// Devuelve palabras libres minimas de la tarea de adquisicion; sin parametros.
+uint16_t meterGetStackFreeWords();
 
 void MeterTask(void* arg);
 

@@ -3,6 +3,41 @@
 Las paginas nuevas representan 24 ms, no 24 KB. Cada una ocupa 2048 bytes:
 32 de cabecera y 2016 de muestras (192 muestras, siete canales de 12 bits).
 
+## Auditoria actual, 2026-10-29
+
+El build `ota` queda en **114.368 B de RAM estatica (34,9% de 327.680 B)**.
+Ese numero no incluye las pilas de FreeRTOS ni las reservas dinamicas que se
+crean al montar los servicios, por lo que no alcanza para evaluar el margen
+real del servidor web.
+
+Cambios aplicados para recuperar RAM dinamica:
+
+| Reserva | Situacion actual | Recuperado |
+| --- | ---: | ---: |
+| Pilas permanentes de NAND IO, Wave y logger | 3 x 3 KiB | 3 KiB frente a 4 KiB cada una |
+| Wave previo | maximo 96 ms, 18.192 B | 8.064 B si habia 192 ms persistidos |
+| Anillo reciente del logger | 16 fragmentos, 1.920 B | 1.920 B frente a 32 fragmentos |
+| Buffer serial del logger | 513 B | 512 B frente a 1.024 B |
+| Probe de red condicional | 3 KiB mientras esta activo | 1 KiB frente a 4 KiB |
+
+El objetivo de recuperar al menos 16 KiB no se debe estimar sumando solo estas
+pilas: en este port los tamanos son bytes y Wave conserva sus reservas propias.
+El `MeterTask` se valida aparte con su high-water mark en la placa antes de
+seguir reduciendo la pila, para no poner en riesgo la adquisicion ADE/BL0942.
+
+El logger conserva dos caminos: `log()` es inmediato y descarta si la cola
+esta llena; `logWait()` espera como maximo el timeout recibido y devuelve si el
+mensaje completo entro. Ninguno escribe NAND desde el productor: la tarea del
+logger sigue drenando la cola y escribiendo la flash. `logWait()` no debe usarse
+desde una ISR ni desde `MeterTask`.
+
+`/debug` expone ahora los campos heredados `stackFreeWords` del logger y NAND IO
+y `meterStackFreeWords` del medidor; en este port sus valores representan bytes,
+ademas del heap libre, el bloque contiguo mas grande y los contadores de
+cola/escritura.
+Esos valores son la comprobacion definitiva despues de cargar el firmware;
+la compilacion no puede mostrar el minimo de heap durante una descarga real.
+
 ## Reserva Wave
 
 Con 192 ms previos se reservan once posiciones de 2016 bytes y tres tramos
@@ -191,3 +226,28 @@ cuerpo para firmas vigentes y 200 con contenido para firmas desactualizadas,
 incluidos HTML, CSS y JavaScript. Firmware instalado por COM4 y WebFS actualizado.
 RAM estatica sin cambios: 116.816 bytes. La primera visita tras migrar las
 URLs necesita descargar los archivos propios; las siguientes los revalidan.
+
+## Reservas permanentes de MeterTask, 2026-10-29
+
+En el port ESP32 usado por este proyecto, `StackType_t` es de un byte y
+`xTaskCreatePinnedToCore` recibe el tamaño de la pila en bytes. Por lo tanto,
+el valor anterior `8192` reservaba **8 KiB**, no 32 KiB. El marco local de
+`MeterTask` es de 64 bytes; el camino de lectura Wave llega aproximadamente a
+1456 bytes y `scopeStreamProcess` a 144 bytes. El valor grande era un margen
+conservador, no un buffer de muestras.
+
+La implementación actual volvió a usar una pila dinámica de 8192 bytes para
+`MeterTask`, conservando el margen original. Una pila estática de ese tamaño no
+entra en la región DRAM actual: el enlazador informó un exceso de 5480 bytes.
+También son estáticos la cola del logger y su buffer serie; el anillo reciente de logs queda dinámico
+porque es una única reserva pequeña y no se recrea durante las descargas. Los
+buffers temporales de HTTP, NAND y WebSocket siguen dinámicos porque nacen y se
+liberan por sesión.
+
+El entorno OTA compila con 118.456 bytes de RAM estática (36,1%) y 1.376.149
+bytes de flash (67,7%). La comprobación pendiente en la placa es consultar
+`/debug` después de una captura Wave y una descarga simultáneas: el margen de
+pila debe permanecer holgado y `largest8` debe mejorar respecto de `free8`.
+Los fallos de asignación registrados anteriormente pedían 10.240 bytes desde
+`MeterTask` con un bloque contiguo menor que ese pedido; por eso se conserva la
+reserva dinámica de 8192 bytes y se valida el margen real con el high-water mark.

@@ -71,16 +71,17 @@ bool StorageManager::getEventCacheEpochs(uint64_t& fast, uint64_t& wave) const
 	return fast && wave;
 }
 
-// Persiste generaciones antes del borrado; resetFast/resetWave renuevan solo las particiones indicadas.
-bool StorageManager::updateEventCacheEpochs(bool resetFast, bool resetWave)
+// Persiste generaciones antes del borrado; resetFast/resetWave/resetHistory renuevan las particiones indicadas.
+bool StorageManager::updateEventCacheEpochs(bool resetFast, bool resetWave, bool resetHistory)
 {
 	if (!cacheMutex || xSemaphoreTake(cacheMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
 	Preferences prefs;
 	bool success = prefs.begin("event-cache", false);
-	uint64_t fast = 0, wave = 0;
+	uint64_t fast = 0, wave = 0, history = 0;
 	if (success) {
 		fast = prefs.getULong64("fastEpoch", 0);
 		wave = prefs.getULong64("waveEpoch", 0);
+		history = prefs.getULong64("historyEpoch", 0);
 		if (!fast || resetFast) {
 			fast = (uint64_t(esp_random()) << 32) | esp_random();
 			if (!fast) fast = 1;
@@ -91,12 +92,27 @@ bool StorageManager::updateEventCacheEpochs(bool resetFast, bool resetWave)
 			if (!wave) wave = 1;
 			success = prefs.putULong64("waveEpoch", wave) == sizeof(wave);
 		}
+		if (success && (!history || resetHistory)) {
+			history = (uint64_t(esp_random()) << 32) | esp_random();
+			if (!history) history = 1;
+			success = prefs.putULong64("historyEpoch", history) == sizeof(history);
+		}
 		prefs.end();
 	}
 	fastCacheEpoch = success ? fast : 0;
 	waveCacheEpoch = success ? wave : 0;
+	historyCacheEpoch = success ? history : 0;
 	xSemaphoreGive(cacheMutex);
 	return success;
+}
+
+// Lee solo RAM bajo el mutex compartido; epoch recibe la identidad del historico.
+bool StorageManager::getHistoryCacheEpoch(uint64_t& epoch) const
+{
+	if (!cacheMutex || xSemaphoreTake(cacheMutex, 0) != pdTRUE) return false;
+	epoch = historyCacheEpoch;
+	xSemaphoreGive(cacheMutex);
+	return epoch != 0;
 }
 
 // Inicia el formateo destructivo cuando la NAND esta disponible y no hay otra tarea de formato.
@@ -282,7 +298,7 @@ void StorageManager::formatTaskLoop()
 		return;
 	}
 	StorageLayout layout;
-	bool success = updateEventCacheEpochs(true, true) && buildDefaultLayout(layout) && scanFormatBlocks() && eraseFormatBlocks();
+	bool success = updateEventCacheEpochs(true, true, true) && buildDefaultLayout(layout) && scanFormatBlocks() && eraseFormatBlocks();
 	if (success) success = writeFormatMetadata(layout);
 	if (success) {
 		activeMetadata = MetadataHeader{};
@@ -312,8 +328,9 @@ void StorageManager::partitionFormatTaskLoop()
 		return;
 	}
 
-	const bool cacheReady = (formatTarget != StoragePartitionId::gridEvents && formatTarget != StoragePartitionId::waveEvents) ||
-		updateEventCacheEpochs(formatTarget == StoragePartitionId::gridEvents, formatTarget == StoragePartitionId::waveEvents);
+	const bool cacheReady = (formatTarget != StoragePartitionId::gridEvents && formatTarget != StoragePartitionId::waveEvents &&
+		formatTarget != StoragePartitionId::history) || updateEventCacheEpochs(formatTarget == StoragePartitionId::gridEvents,
+			formatTarget == StoragePartitionId::waveEvents, formatTarget == StoragePartitionId::history);
 	const bool erased = cacheReady && (formatTarget == StoragePartitionId::diagnostics
 		? diagnosticStore.erasePartition() : target.eraseAllBlocks());
 	if (erased) {

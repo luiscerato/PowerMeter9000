@@ -103,6 +103,9 @@ public:
 	// Copia generaciones persistentes para la cache web; fast/wave reciben sus nonces de 64 bits.
 	bool getEventCacheEpochs(uint64_t& fast, uint64_t& wave) const;
 
+	// Copia la generacion persistente del historico; epoch recibe el nonce, sin lecturas NVS.
+	bool getHistoryCacheEpoch(uint64_t& epoch) const;
+
 	// Devuelve la particion elegida; id identifica history, wave, grid o diagnostico.
 	NandPartition& partition(StoragePartitionId id);
 
@@ -184,11 +187,12 @@ private:
 	uint32_t formatRequestId = 0;
 	uint64_t fastCacheEpoch = 0;
 	uint64_t waveCacheEpoch = 0;
+	uint64_t historyCacheEpoch = 0;
 	StaticSemaphore_t cacheMutexStorage;
 	SemaphoreHandle_t cacheMutex = nullptr;
 
 	// Carga o renueva nonces antes de borrar; resetFast/resetWave indican las particiones afectadas.
-	bool updateEventCacheEpochs(bool resetFast, bool resetWave);
+	bool updateEventCacheEpochs(bool resetFast, bool resetWave, bool resetHistory = false);
 
 	// Lee y valida los dos bloques de metadata; sin parametros.
 	bool loadMetadata();

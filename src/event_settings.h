@@ -2,10 +2,13 @@
 #include "grid_state.h"
 #include "event_capture_config.h"
 
+constexpr uint16_t maxWavePreMs = 96;
+
 struct eventSettingsData {
     gridSettings grid;
     eventCaptureConfig points;
-    uint16_t preMs = 192;
+    // 96 ms equivale a cuatro paginas de 24 ms y reduce la reserva de Wave sin partir muestras.
+    uint16_t preMs = maxWavePreMs;
     uint8_t waveMask = 7;
     bool waveEnabled = true;
 };
@@ -15,10 +18,13 @@ struct eventSettingsSnapshot {
     eventSettingsData config;
     uint32_t revision = 1, nextRevision = 0;
     eventSaveState state = eventSaveState::idle;
+    bool restartRequired = false;
 };
 
 // Valida data como conjunto, incluidos limites y relaciones entre parametros.
 bool validEventSettings(const eventSettingsData& data);
+// Devuelve la primera clave que invalida data, o nullptr si la configuracion es valida.
+const char* eventSettingsInvalidKey(const eventSettingsData& data);
 // Lee la configuracion unica o importa ajustes anteriores sin escribirlos; sin parametros.
 void eventSettingsBegin();
 // Copia la configuracion confirmada y el estado de guardado a dest, sin acceder a NVS.

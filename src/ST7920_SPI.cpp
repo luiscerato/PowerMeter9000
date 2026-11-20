@@ -184,6 +184,30 @@ void ST7920_SPI::display(int buf, int part)
 	if (part == 7) displayedScrValid = true;
 }
 // ----------------------------------------------------------------
+// Envia el rectangulo fisico alineado a palabras; firstWord/firstRow fijan origen y words/rows su extension.
+bool ST7920_SPI::displayRegion(uint8_t firstWord, uint8_t firstRow, uint8_t words, uint8_t rows)
+{
+	if (firstWord >= 8 || firstRow >= 64 || !words || !rows) return false;
+	if (words > 8 - firstWord) words = 8 - firstWord;
+	if (rows > 64 - firstRow) rows = 64 - firstRow;
+	for (uint8_t row = 0; row < rows; ++row) {
+		const uint16_t offset = uint16_t(firstRow + row) * scrWd + firstWord * 2;
+		gotoXY(firstWord, firstRow + row);
+		if (!beginSpiTransaction()) return false;
+		digitalWrite(csPin, HIGH);
+		spi.transfer(0xFA);
+		for (uint8_t index = 0; index < words * 2; ++index) {
+			const byte value = scr[offset + index];
+			spi.transfer(value & 0xF0);
+			spi.transfer(value << 4);
+		}
+		digitalWrite(csPin, LOW);
+		endSpiTransaction();
+		memcpy(displayedScr + offset, scr + offset, words * 2);
+	}
+	return true;
+}
+
 // copy only part of framebuffer
 void ST7920_SPI::copy(uint8_t x16, uint8_t y, uint8_t w16, uint8_t h, uint8_t buf)
 {

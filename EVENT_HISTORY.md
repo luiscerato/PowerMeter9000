@@ -1,7 +1,39 @@
 # Historial de eventos
 
+## Respaldo de desarrollo 2026-11-20
+
+- Historial reconstruido por estados, filtros de entradas y tipos, y estadisticas por periodo.
+- Tiempos combinados calculados por union temporal, sin triplicar cortes simultaneos de R/S/T.
+- Conteos de DIP, swell y picos por fase disponibles en el resumen de Red.
+- Orden de transiciones casi simultaneas corregido para no dejar sobrecorrientes abiertas falsas.
+- Preferencias de periodo y filtros persistidas por navegador; Hoy conserva su significado relativo.
+- Estados iguales unidos entre reinicios, con marcas circulares y visor emergente compartido.
+- Ancho minimo visual para cortes breves y divisiones acotadas en graficas de duracion.
+- Cache local de capturas/historico, precarga progresiva y herramientas de medicion de transferencias NAND.
+- Osciloscopio y calidad de energia con FFT, controles y mediciones; mejoras de RAM y adquisicion.
+- Configuracion de red y aplicacion, ajustes en caliente, arranque con RTC y pantalla de progreso.
+- Logs por modulo y diagnosticos de CPU, memoria, arranque y conectividad.
+- Pendiente: sacar lecturas lentas de logs del callback TCP conservando espera breve de precarga.
+- Pendiente: timeout de descargas WebFS y recuperacion ante fallos HTTP persistentes.
+- Pendiente: resolver todas las oscilografias de cada evento, incluso fuera de la cache RAM.
+- Proxima etapa: filtros del visor de eventos y consulta independiente de oscilografias relacionadas.
+
+Este respaldo no da por resueltos los panic ni todos los bloqueos de comunicacion.
+
 Vista independiente `#eventHistory`, sin modificar el capturador ni los formatos NAND.
 Periodo inicial: semana actual de lunes a domingo. La reconstruccion se ejecuta en el navegador.
+
+## Controles y filtros
+
+- Primera fila: periodo, desde y hasta. Las fechas muestran dia/mes y hora de forma compacta; al tocarlas se abre el control nativo con fecha/hora completas, incluidos los segundos guardados.
+- Segunda fila: periodo anterior/actual/siguiente, Todos / Ninguno, entrada y los iconos de actualizar/detener. Las dos filas caben sin desplazamiento horizontal en movil.
+- Debajo, Eventos y Estados son accesos rapidos exclusivos: muestran solo ese grupo. Cada tipo individual alterna su visibilidad sin cambiar los demas: DIP, swell, pico I, corte, baja V, alta V / neutro, alta I y red anormal. Todos activa todos los tipos; Ninguno los oculta. Los botones indican que esta seleccionado.
+- Los filtros se aplican a linea, lista y estadisticas sin descargas nuevas. Cuando se muestra algun estado se conserva el contexto normal registrado; un estado oculto no se presenta como normal ni como un corte. El gris puede indicar datos ausentes o estados ocultos, segun la leyenda.
+- La linea temporal tiene una fila por red/fase/neutro: los puntuales de tension y corriente comparten su sujeto. Las condiciones sostenidas de corriente usan una banda inferior, sin sustituir el estado de tension. Los registros internos conservan su canal original.
+- Estadisticas es la primera pestaña, abierta por defecto; Lista mantiene los tramos y enlaces originales. Agrupacion y entrada de estadisticas comparten una fila compacta. En modo Eventos solo se muestran las cantidades de puntuales, sin grafico de duraciones vacio.
+- Seleccionar una fase arriba lleva la entrada de estadisticas a esa fase; luego se puede cambiar su desglose independientemente. Si se eligen puntuales con Red seleccionada en estadisticas, se propone la primera fase con puntuales (R si aun no llegaron datos).
+
+## Reconstruccion
 
 - Consulta el indice por lotes de hasta 64 IDs y descarga las capturas de una
   en una, empezando por la mas reciente. Cada descarga actualiza linea y lista.
@@ -9,19 +41,19 @@ Periodo inicial: semana actual de lunes a domingo. La reconstruccion se ejecuta 
   FAST decodificadas en la lista. Los binarios se reutilizan en la cache comun;
   las oscilografias se consultan al abrir la vista previa del evento.
 - Separa red, R/S/T, tension neutro-tierra y estados/puntuales de corriente.
-- Une inicio y retorno usando el tiempo absoluto y la duracion previa registrada.
+- Une inicio y retorno usando las fechas absolutas de los cambios de estado.
   Tambien puede reconstruir el inicio desde un retorno cuyo inicio no se descargo.
 - Conserva los puntuales como intervalos independientes. No suma red y fases
   como si fueran cortes distintos de un mismo total ni reclasifica eventos.
 - Deduplica registros superpuestos y conserva los IDs fuente para abrirlos
   en el visor Eventos existente.
-- Una captura inmediatamente anterior y otra posterior al periodo aportan
-  contexto de borde. El fondo gris no significa tension normal: significa que
-  no se reconstruyo un tramo con los registros consultados. No se realiza un
-  escaneo binario ilimitado buscando estados anteriores de cada entrada.
-- Reinicios, CRC invalidos y registros perdidos generan avisos y evitan afirmar
-  continuidad completa. Los tramos sin retorno se muestran rayados; no se
-  consideran prueba de que el estado siga activo actualmente.
+- Se buscan capturas anteriores hasta tener contexto de estado para red y
+  fases/neutro o agotar el indice. Un DIP previo no sustituye ese contexto.
+  El fondo gris indica que no se dispone de un estado para esa entrada.
+- El ultimo estado se mantiene hasta el siguiente cambio, incluso entre
+  reinicios. Un arranque con el mismo estado no inicia otro corte. Los CRC
+  invalidos y registros contradictorios siguen marcando tramos parciales.
+  Los estados abiertos se contabilizan hasta el final del periodo o hasta ahora.
 - Capturas sinteticas o sin hora fiable no se asignan al calendario.
 - Se puede detener la descarga sin perder los resultados parciales. Cambiar de
   vista cancela solicitudes pendientes. Volver a Historial o pulsar Analizar
@@ -42,8 +74,8 @@ firmware y eventos almacenados sin modificaciones.
 
 ## Estadisticas
 
-Al final de Historial se muestra una tabla de resumen por red/fase/neutro y
-otra por intervalos para la entrada seleccionada. Tension y corriente de una
+La primera pestaña de Historial ofrece graficos y tablas: resumen por red/fase/neutro y
+desglose por intervalos para la entrada seleccionada. Tension y corriente de una
 misma fase se presentan en la misma fila, en columnas diferentes.
 
 - Automatico: hasta dos dias agrupa por hora; hasta catorce, por dia; periodos
@@ -284,9 +316,9 @@ de diagnostico al test; no se determino la causa de aquel fallo intermitente.
 La reconstruccion ahora conserva tambien el estado normal posterior a una
 transicion (antes solo dejaba abiertos estados anormales). Sin una transicion
 posterior se muestra como tramo abierto, no como intervalo cerrado confirmado.
-Esto evita huecos grises artificiales despues de una recuperacion. Un reinicio
-registrado corta cualquier estado abierto de todas las entradas; solo nueva
-evidencia permite reconstruir lo posterior. Un DIP aislado no demuestra que
+Esto evita huecos grises artificiales despues de una recuperacion. Desde la
+revision del 28/10 un reinicio no corta el ultimo estado registrado, que se
+mantiene hasta el siguiente cambio. Un DIP aislado no demuestra que
 toda su entrada estuvo normal durante el resto del periodo. No se rellena en
 verde una entrada sin observaciones. Pruebas: 12 casos de reconstruccion,
 13 de estadisticas y navegacion/cronologia PC-movil con datos simulados.
@@ -342,3 +374,23 @@ todos los binarios sigue dependiendo de la NAND y la red.
 
 Pruebas: `web_bundle`, `web_asset_cache`, `event_history_render`,
 `event_history_web`, `capture_cache_web` y `web_performance_live`.
+
+## Duracion en estadisticas (2026-10-28)
+
+Los acumuladores conservan milisegundos. La grafica usa segundos numericos,
+con eje y tooltips en ms, segundos, minutos/segundos u horas/minutos/segundos;
+no presenta minutos decimales. Por ejemplo, el corte #87 del 26/10 a las
+09:17:43 (Buenos Aires), de 2010 ms, se muestra como 2,01 s.
+
+Revision secuencial de las 114 capturas disponibles: el 23/10 hay observaciones
+sin tension desde #55 (06:29:04) hasta #61 (retorno a las 18:27:35), pero las
+capturas #56 a #60 indican nuevos arranques. La politica inicial excluia esas
+horas; se corrigio para contabilizar el ultimo estado hasta el siguiente cambio.
+El corte de red #55 a #61 suma 43111195,9 ms (11 h 58 min 31 s), un solo inicio.
+La duracion de la cabecera solo se usa si falta la transicion inicial; no recorta
+un intervalo conocido al tiempo desde el ultimo arranque. Los limites del periodo
+recortan la suma, no el origen del evento. Un estado observado al arrancar sin
+inicio conocido suma desde esa observacion, sin contar un inicio ficticio.
+Los datos incompletos o contradictorios siguen separados, al igual que las horas
+no fiables. No cambia el firmware ni el almacenamiento.
+Binarios y analisis: logs/event-statistics-2026-10-28T12-45-44-070Z/.

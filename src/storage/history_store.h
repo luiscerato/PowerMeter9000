@@ -12,6 +12,8 @@ struct HistoryRecoveryMetrics {
 };
 
 struct HistoryStoreMetrics {
+	uint32_t mountReadyMs = 0;
+	uint32_t writeReadyMs = 0;
 	uint32_t acceptedSamples = 0;
 	uint32_t rejectedSamples = 0;
 	uint32_t writtenPages = 0;
@@ -89,9 +91,9 @@ public:
 	// Devuelve el timestamp de la ultima pagina valida recuperada al iniciar.
 	uint32_t lastStoredTimestamp() const;
 
-	// Construye un plan inmutable de paginas confirmadas dentro de un intervalo Unix; snapshot recibe la pagina RAM opcional.
+	// Planifica from/to Unix; snapshot recibe RAM opcional. maxPages acota paginas y beforeSequence continua hacia atras.
 	HistoryReadPlanStatus buildReadPlan(uint32_t fromTimestamp, uint32_t toTimestamp, HistoryReadPlan& plan,
-		uint8_t* activeSnapshot, size_t snapshotSize);
+		uint8_t* activeSnapshot, size_t snapshotSize, uint32_t maxPages = 4096, uint32_t beforeSequence = UINT32_MAX);
 
 	// Copia el rango temporal conocido por el Store; oldest y newest se expresan en segundos Unix.
 	void getTimestampRange(uint32_t& oldestTimestamp, uint32_t& newestTimestamp) const;

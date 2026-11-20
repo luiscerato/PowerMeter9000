@@ -157,19 +157,17 @@ const char* managerClockSource()
 	return clockIsSynchronized ? clockSource : "none";
 }
 
+// Consulta la identidad al solicitar metadata, sin reservar una copia permanente; sin parametros.
 String managerGetDeviceId()
 {
 	Preferences prefs;
-	String deviceId;
+	String deviceId = "pm-ade9000-" + managerGetMacCompact(false);
 	if (prefs.begin(managerSettingsName, false)) {
-		deviceId = prefs.getString("deviceId", "");
-		if (!deviceId.length()) {
-			deviceId = "pm-ade9000-" + managerGetMacCompact(false);
-			prefs.putString("deviceId", deviceId);
-		}
+		const String saved = prefs.getString("deviceId", "");
+		if (saved.length()) deviceId = saved;
+		else prefs.putString("deviceId", deviceId);
 		prefs.end();
 	}
-	if (!deviceId.length()) deviceId = "pm-ade9000-" + managerGetMacCompact(false);
 	return deviceId;
 }
 
@@ -181,15 +179,11 @@ const char* managerGetMqttBaseTopic()
 String managerGetMqttBrokerUrl()
 {
 	Preferences prefs;
-	String server = "";
-	uint32_t port = 1883;
-	if (prefs.begin("wifi-stuff", true)) {
-		server = prefs.getString("mqtt-server", "");
-		port = prefs.getUInt("mqtt-port", 1883);
-		prefs.end();
-	}
-	if (!server.length()) return "";
-	return "mqtt://" + server + ":" + String(port);
+	if (!prefs.begin("wifi-stuff", true)) return "";
+	const String server = prefs.getString("mqtt-server", "");
+	const uint32_t port = prefs.getUInt("mqtt-port", 1883);
+	prefs.end();
+	return server.isEmpty() ? "" : "mqtt://" + server + ":" + String(port);
 }
 
 void managerPublishTelemetry(const char* relativeTopic, const char* dataPayload, uint64_t timestampMs)

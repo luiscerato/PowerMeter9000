@@ -14,6 +14,7 @@
 #include "AsyncMqttClient.h"
 #include "ui/lcd_ui.h"
 #include "ui/wifi_settings.h"
+#include "ui/boot_screen.h"
 #include "manager_api.h"
 #include "storage/winbond_spi_nand.h"
 #include "storage/shared_spi_bus.h"
@@ -22,6 +23,9 @@
 #include "diagnostic_logger.h"
 #include "rtc_clock.h"
 #include "memory_diagnostics.h"
+#include "cpu_usage.h"
+#include "boot_timing.h"
+#include "network_diagnostics.h"
 #include <esp_heap_caps.h>
 
 
@@ -65,14 +69,15 @@ boardButtons_t getButtons();
 bool webServerStarted = false;
 
 // Inicia el servidor web una sola vez.
-// connected: indica si la placa ya tiene conexion WiFi lista.
+// connected: indica si la radio esta habilitada para atender estacion o AP.
 void startWebServerOnce(bool connected)
 {
 	if (!connected || webServerStarted) return;
 
-	Serial.println("Conectado a Wifi");
+	Serial.println("Iniciando web en las interfaces WiFi");
 	Init_WebServer();
 	webServerStarted = true;
+	networkDiagnosticsStart();
 }
 
 
@@ -100,6 +105,7 @@ void setup(void)
 
 	Serial.begin(115200);
 	memoryDiagnosticsBegin();
+	cpuUsageBegin();
 	const bool loggerReady = diagnosticLogger.begin();
 	if (!loggerReady) Serial.println("Diagnostic logger: sin memoria");
 	DIAG_INFO(DiagnosticModule::main, "Inicio, reset=%d, heap=%u", int(esp_reset_reason()), ESP.getFreeHeap());
@@ -107,7 +113,10 @@ void setup(void)
 		ESP.getFreeHeap(), ESP.getMinFreeHeap());
 
 	UtilsInitSettings();
+	bootTimingStart(bootPhase::clock);
 	rtcClockBegin();
+	timeInitClock();
+	bootTimingEnd(bootPhase::clock);
 
 	// UtilsLoadDeafultSettings();
 	
@@ -124,6 +133,11 @@ void setup(void)
 	digitalWrite(pinMem2SS, HIGH);
 	digitalWrite(pinBuzzer, 0);
 	digitalWrite(pinRelay, 0);
+	bootTimingStart(bootPhase::settings);
+	eventSettingsBegin();
+	bootTimingEnd(bootPhase::settings);
+	bootTimingStart(bootPhase::meter);
+	if (meterInitAcquisition()) bootTimingEnd(bootPhase::meter);
 
 	// ledcSetup(4, 1000, 10);
 	// ledcAttachPin(pinBuzzer, 4);
@@ -134,28 +148,74 @@ void setup(void)
 		eventFlash.setSpiBusLock(&peripheralSpiBus);
 	}
 	// lcd.init configura el bus SPI compartido que tambien necesita la NAND.
+	bootTimingStart(bootPhase::screen);
 	lcd.init();
-	lcd.cls();
-	lcd.display(0);
+	bootScreenShow(lcd);
+	bootTimingEnd(bootPhase::screen);
+	bootTimingStart(bootPhase::nand);
 	flashDetected = peripheralSpiReady && eventFlash.begin() && eventFlash.readInfo(flashInfo);
 	Serial.printf("SPI NAND: %s, modelo %s, JEDEC %02X %04X, bloques %u, capacidad %u MiB, "
 		"PROT %02X, CFG %02X, STAT %02X\n", flashDetected ? "detectada" : "no detectada",
 		eventFlash.modelName(), flashInfo.manufacturerId, flashInfo.deviceId,
 		flashInfo.geometry.blockCount, eventFlash.capacityBytes() / (1024U * 1024U),
 		flashInfo.protection, flashInfo.configuration, flashInfo.status);
-	eventSettingsBegin();
 	if (flashDetected) {
 		const bool storageStarted = storageManager.begin([](DiagnosticStore& store) {
 			if (!diagnosticLogger.start(&store)) Serial.println("Diagnostic logger: no se pudo iniciar la tarea");
 		});
 		Serial.printf("Storage: %s, estado %u\n", storageStarted ? "iniciado" : "error", uint8_t(storageManager.state()));
+		if (storageManager.isReady()) bootTimingEnd(bootPhase::nand);
+		HistoryStoreMetrics historyBoot; storageManager.history().getMetrics(historyBoot);
+		GridEventStoreMetrics gridBoot; storageManager.gridEvents().getMetrics(gridBoot);
+		Serial.printf("[boot] NAND history mountReadyMs=%lu writeReadyMs=%lu; grid mountReadyMs=%lu writeReadyMs=%lu\n",
+			static_cast<unsigned long>(historyBoot.mountReadyMs), static_cast<unsigned long>(historyBoot.writeReadyMs),
+			static_cast<unsigned long>(gridBoot.mountReadyMs), static_cast<unsigned long>(gridBoot.writeReadyMs));
 	}
 	if (!diagnosticLogger.start(storageManager.diagnostics().isReady() ? &storageManager.diagnostics() : nullptr))
 		Serial.println("Diagnostic logger: no se pudo iniciar la tarea");
 	DIAG_INFO(DiagnosticModule::storage, "NAND diagnostico %s",
 		storageManager.diagnostics().isReady() ? "lista" : "no disponible");
+	bootScreenAdvance(lcd);
+	bootTimingStart(bootPhase::history);
+	historyRecorder.begin();
+	bootTimingEnd(bootPhase::history);
+	bootScreenAdvance(lcd);
 
-	// La pantalla y las teclas ya pueden iniciar sin retrasar la cola de diagnostico.
+	bootTimingStart(bootPhase::wifi);
+	WifiStart();
+	bootTimingEnd(bootPhase::wifi);
+	bootScreenAdvance(lcd);
+	bootTimingStart(bootPhase::ntp);
+	TimeStart();
+	bootTimingEnd(bootPhase::ntp);
+	OTAStart();
+	MQTTStart();
+	bootScreenAdvance(lcd);
+
+	bootTimingStart(bootPhase::web);
+	startWebServerOnce(WiFi.getMode() != WIFI_MODE_NULL);
+	bootTimingEnd(bootPhase::web);
+	bootScreenAdvance(lcd);
+
+	strip.begin();
+	strip.setAllLedsColor(0);
+	bootScreenAdvance(lcd);
+
+	// Wave publica su reserva a la adquisicion solo cuando su cola y tarea estan listas.
+	bootTimingStart(bootPhase::wave);
+	if (storageManager.isReady() && storageManager.waveEvents().begin()) bootTimingEnd(bootPhase::wave);
+	bootScreenAdvance(lcd);
+	bootTimingStart(bootPhase::scope);
+	meterInitServices();
+	bootTimingEnd(bootPhase::scope);
+	bootScreenAdvance(lcd);
+
+	bootTimingStart(bootPhase::battery);
+	Batt.Init();
+	bootTimingEnd(bootPhase::battery);
+	bootScreenAdvance(lcd);
+
+	// La UI se prepara al final; el dibujo esperara sin bloquear adquisicion ni servicios.
 	BtnEsc.begin(Keys::Esc, []()->bool { return getButtons() != buttonCancel;});
 	BtnDown.begin(Keys::Down, []()->bool { return getButtons() != buttonDown;});
 	BtnUp.begin(Keys::Up, []()->bool { return getButtons() != buttonUp;});
@@ -166,40 +226,19 @@ void setup(void)
 	Keyboard.AddButton(&BtnDown);
 	Keyboard.AddButton(&BtnEsc);
 	Keyboard.AddButton(&BtnNext);
-
 	ui.begin();
 	ui.Add_UI(ui.getNewID(), "main", &Draw_Main);
 	ui.Add_UI(ui.getNewID(), "settings", &drawSettingsMenu);
 	ui.Add_UI(ui.getNewID(), "wifi", &drawWifiSettings);
 	ui.Add_UI(ui.getNewID(), "batt", &Draw_Batt);
 	ui.Add_UI(ui.getNewID(), "calibration", &Draw_Calibrate);
-
-
 	ui.SetUpdateTime(200);
 	ui.setMainScreen("main");
 	ui.setBackgroundDrawer(drawWindow);
-
 	ui.Show("main");
-
-	WiFi.onEvent([](arduino_event_t* event) {
-		startWebServerOnce(true);
-		}, ARDUINO_EVENT_WIFI_STA_GOT_IP);
-
-	WifiStart();
-	TimeStart();
-	OTAStart();
-	MQTTStart();
-
-	startWebServerOnce(WiFi.isConnected());
-
-	strip.begin();
-	strip.setAllLedsColor(0);
-
-	// Reserva Wave despues de red/web, pero antes de que MeterTask pueda publicar muestras.
-	if (storageManager.isReady()) storageManager.waveEvents().begin();
-	MeterInit();
-
-	Batt.Init();
+	bootScreenAdvance(lcd);
+	bootScreenFinish(lcd);
+	bootTimingEnd(bootPhase::complete);
 
 	debugI("Inicialización terminada!");
 	DIAG_INFO(DiagnosticModule::main, "Inicializacion terminada, heap=%u", ESP.getFreeHeap());
@@ -209,47 +248,69 @@ void setup(void)
 uint32_t lastTime = 0, counter = 0, send = 0, bytes = 0, leds = 0, update = 0, screen = 0;
 uint8_t color = 0;
 
+enum class loopSection : uint8_t { services, battery, network, meter, history, screen, other, cycle, count };
+static uint32_t loopMaxUs[size_t(loopSection::count)] = {}, loopCycles = 0;
+
+// Acumula el maximo por tramo; section identifica el trabajo y startedUs su inicio en microsegundos.
+static void recordLoopTime(loopSection section, uint32_t startedUs)
+{
+	const uint32_t elapsedUs = micros() - startedUs;
+	uint32_t& maximum = loopMaxUs[size_t(section)];
+	if (elapsedUs > maximum) maximum = elapsedUs;
+}
+
 void loop(void)
 {
+	const uint32_t loopStartedUs = micros();
 	static uint32_t lastDiagnosticHeartbeat = 0;
 	const uint32_t uptimeMs = millis();
-	if (uint32_t(uptimeMs - lastDiagnosticHeartbeat) >= 5000) {
+	if (uint32_t(uptimeMs - lastDiagnosticHeartbeat) >= 60000) {
 		lastDiagnosticHeartbeat = uptimeMs;
-		DIAG_INFO(DiagnosticModule::main, "Heartbeat uptime=%lu heap=%u free8=%u largest8=%u min8=%u wifi=%u rssi=%d",
+		DIAG_DEBUG(DiagnosticModule::main, "Heartbeat uptime=%lu heap=%u free8=%u largest8=%u min8=%u wifi=%u rssi=%d",
 			static_cast<unsigned long>(uptimeMs), ESP.getFreeHeap(),
 			heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
 			heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT), unsigned(WiFi.status()), WiFi.RSSI());
+		DIAG_DEBUG(DiagnosticModule::main, "Loop n=%lu max_us=%lu srv=%lu bat=%lu net=%lu meter=%lu hist=%lu lcd=%lu other=%lu",
+			(unsigned long)loopCycles, (unsigned long)loopMaxUs[size_t(loopSection::cycle)],
+			(unsigned long)loopMaxUs[size_t(loopSection::services)], (unsigned long)loopMaxUs[size_t(loopSection::battery)],
+			(unsigned long)loopMaxUs[size_t(loopSection::network)], (unsigned long)loopMaxUs[size_t(loopSection::meter)],
+			(unsigned long)loopMaxUs[size_t(loopSection::history)], (unsigned long)loopMaxUs[size_t(loopSection::screen)],
+			(unsigned long)loopMaxUs[size_t(loopSection::other)]);
+		memset(loopMaxUs, 0, sizeof(loopMaxUs));
+		loopCycles = 0;
 	}
 	diagnosticLogger.pollSerial();
+	networkDiagnosticsPoll();
 	memoryDiagnosticsPoll();
 	if (!diagnosticLogger.hasStore() && storageManager.isReady() && storageManager.diagnostics().isReady())
 		diagnosticLogger.attachStore(&storageManager.diagnostics());
 
 	// Keyboard.scan();
 	webServerCleanupClients();
+	recordLoopTime(loopSection::services, loopStartedUs);
 
 	uint32_t time;
 
-	time = millis();
+	time = micros();
 	Batt.Loop();
-	time = millis() - time;
-	// if (time > 9) debugW("BatLoop: %u ms", time);
+	recordLoopTime(loopSection::battery, time);
 
-	time = millis();
+	time = micros();
 	UtilsLoop();
-	time = millis() - time;
-	// if (time > 9) debugW("UtilsLoop: %u ms", time);
+	startWebServerOnce(WiFi.getMode() != WIFI_MODE_NULL);
+	recordLoopTime(loopSection::network, time);
 
-	time = millis();
+	time = micros();
 	MeterLoop();
-	time = millis() - time;
-	// if (time > 9)  debugW("MeterLoop: %u ms", time);
+	recordLoopTime(loopSection::meter, time);
+	time = micros();
 	if (storageManager.isReady()) historyRecorder.update(Meter);
+	recordLoopTime(loopSection::history, time);
 
-	time = millis();
-	ui.Run();
-	time = millis() - time;
-	// if (time > 9)  debugW("uiLoop: %u ms", time);
+	time = micros();
+	if (!bootScreenHold()) ui.Run();
+	recordLoopTime(loopSection::screen, time);
+	time = micros();
 
 	if (millis() - send > 999) {
 		send = millis();
@@ -329,6 +390,9 @@ void loop(void)
 	lastTime = millis();
 
 	counter++;
+	recordLoopTime(loopSection::other, time);
+	recordLoopTime(loopSection::cycle, loopStartedUs);
+	++loopCycles;
 }
 
 

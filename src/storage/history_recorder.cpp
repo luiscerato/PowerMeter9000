@@ -1,4 +1,6 @@
 #include "history_recorder.h"
+#include "wave_event_store.h"
+#include "storage_manager.h"
 #include "battery.h"
 #include "manager_api.h"
 #include "wifiUtils.h"
@@ -8,6 +10,12 @@
 
 static constexpr uint32_t fallbackTimestamp = 1767225600UL;
 static constexpr uint8_t historyConfigSchema = 3;
+extern StorageManager storageManager;
+struct historySettingsRecord {
+	uint32_t group;
+	uint16_t period;
+	uint8_t enabled, version;
+};
 
 // Asocia el recorder al Store que recibe las paginas completas.
 HistoryRecorder::HistoryRecorder(HistoryStore& historyStore) : store(historyStore)
@@ -15,12 +23,15 @@ HistoryRecorder::HistoryRecorder(HistoryStore& historyStore) : store(historyStor
 	config.enabled = true;
 	config.groupConfig = standardGroupConfig;
 	config.samplePeriod = standardSamplePeriod;
-	loadConfig();
 }
+
+// Lee el perfil persistente antes de publicar endpoints o guardar muestras; sin parametros.
+void HistoryRecorder::begin() { loadConfig(); }
 
 // Construye y encola una muestra al periodo configurado sin bloquear la adquisicion del medidor.
 void HistoryRecorder::update(const meterValues& meter)
 {
+	pollConfig();
 	const uint32_t now = millis();
 	if (!config.enabled) return;
 	const bool clockValid = managerClockSynchronized();
@@ -69,9 +80,12 @@ bool HistoryRecorder::flush()
 }
 
 // Copia el perfil de guardado para publicarlo por la API sin exponer estado mutable.
-void HistoryRecorder::getConfig(HistoryRecorderConfig& result) const
+void HistoryRecorder::getConfig(HistoryRecorderConfig& result, const char** status) const
 {
-	result = config;
+	const char* names[] = {"ok", "wait", "save", "fail"};
+	portENTER_CRITICAL(&configMutex);
+	result = config; if (status) *status = names[configState];
+	portEXIT_CRITICAL(&configMutex);
 }
 
 // Rechaza perfiles que el empaquetador actual no puede representar.
@@ -83,15 +97,38 @@ bool HistoryRecorder::isConfigSupported(const HistoryRecorderConfig& value)
 		sampleSize && sampleSize <= maxSampleSize;
 }
 
-// Valida un perfil, cierra la pagina parcial y lo vuelve persistente para la proxima sesion.
+// Encola value para que el recorder cierre la pagina y lo guarde desde su propio loop.
 bool HistoryRecorder::setConfig(const HistoryRecorderConfig& value)
 {
-	if (!isConfigSupported(value) || !store.flush()) return false;
-	config = value;
-	nextSampleMs = 0;
-	sampleScheduleReady = false;
-	saveConfig();
-	return true;
+	if (!isConfigSupported(value)) return false;
+	portENTER_CRITICAL(&configMutex);
+	const bool available = configState != 1 && configState != 2;
+	if (available) {
+		const bool same = config.enabled == value.enabled && config.groupConfig == value.groupConfig && config.samplePeriod == value.samplePeriod;
+		if (same) configState = 0;
+		else { pendingConfig = value; configState = 1; }
+	}
+	portEXIT_CRITICAL(&configMutex);
+	return available;
+}
+
+// Consume el perfil pendiente desde su unico escritor y conserva el activo si falla NVS; sin parametros.
+void HistoryRecorder::pollConfig() {
+	if (waveCaptureBusy()) return;
+	HistoryRecorderConfig value;
+	portENTER_CRITICAL(&configMutex);
+	const bool waiting = configState == 1;
+	if (waiting) value = pendingConfig;
+	portEXIT_CRITICAL(&configMutex);
+	if (!waiting) return;
+	GridEventStoreMetrics grid; storageManager.gridEvents().getMetrics(grid);
+	if (grid.captureActive || !store.flush()) return;
+	portENTER_CRITICAL(&configMutex); configState = 2; portEXIT_CRITICAL(&configMutex);
+	const bool saved = saveConfig(value);
+	portENTER_CRITICAL(&configMutex);
+	if (saved) { config = value; nextSampleMs = 0; sampleScheduleReady = false; }
+	configState = saved ? 0 : 3;
+	portEXIT_CRITICAL(&configMutex);
 }
 
 // Empaqueta los grupos V1 habilitados; dest recibe una muestra y meter los valores medidos.
@@ -203,6 +240,12 @@ void HistoryRecorder::loadConfig()
 {
 	Preferences preferences;
 	if (!preferences.begin("history", true)) return;
+	historySettingsRecord record{};
+	if (preferences.getBytesLength("cfg") == sizeof(record) && preferences.getBytes("cfg", &record, sizeof(record)) == sizeof(record) &&
+		record.version == historyConfigSchema && record.enabled <= 1) {
+		HistoryRecorderConfig saved; saved.enabled = record.enabled; saved.groupConfig = record.group; saved.samplePeriod = record.period;
+		if (isConfigSupported(saved)) { config = saved; preferences.end(); return; }
+	}
 	HistoryRecorderConfig saved;
 	saved.enabled = preferences.getBool("enabled", true);
 	const uint8_t schema = preferences.getUChar("schema", 1);
@@ -224,19 +267,21 @@ void HistoryRecorder::loadConfig()
 		migrated = true;
 	}
 	config = saved;
-	if (migrated) saveConfig();
+	if (migrated) saveConfig(config);
 }
 
-// Guarda el perfil activo con claves cortas para reducir uso de NVS.
-void HistoryRecorder::saveConfig() const
+// Persiste value con una sola escritura para no dejar un perfil parcialmente actualizado.
+bool HistoryRecorder::saveConfig(const HistoryRecorderConfig& value) const
 {
 	Preferences preferences;
-	if (!preferences.begin("history", false)) return;
-	preferences.putBool("enabled", config.enabled);
-	preferences.putUInt("group", config.groupConfig);
-	preferences.putUShort("period", config.samplePeriod);
-	preferences.putUChar("schema", historyConfigSchema);
+	if (!preferences.begin("history", false)) return false;
+	const historySettingsRecord record{value.groupConfig, value.samplePeriod, uint8_t(value.enabled), historyConfigSchema};
+	historySettingsRecord stored{};
+	const bool written = preferences.putBytes("cfg", &record, sizeof(record)) == sizeof(record);
+	const bool saved = written && preferences.getBytes("cfg", &stored, sizeof(stored)) == sizeof(stored) &&
+		stored.group == record.group && stored.period == record.period && stored.enabled == record.enabled && stored.version == record.version;
 	preferences.end();
+	return saved;
 }
 
 // Completa el bitmap compacto de NVS esquema 1; groupConfig conserva las opciones previas.

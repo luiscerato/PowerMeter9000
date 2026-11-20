@@ -100,3 +100,10 @@ Todavia hubo cuatro picos Wave SPI de 10.8-17.1 ms, todos alrededor de uptime
 de arranque no coinciden con este guardado y su causa sigue pendiente. No se
 afirma que haber movido NVS elimine toda pausa de adquisicion.
 Evidencia: logs/meter-timing-deferred-nvs-2026-10-19.json.
+
+## Actualizacion 2026-10-27
+
+Se retiro la persistencia NVS de estados y el modulo `grid_events`. Las mediciones
+anteriores quedan como antecedente, no describen el camino actual. Adquisicion
+temprana, marca de arranque, cola de estados y tiempos por modulo se documentan
+en `STORAGE_STARTUP.md`; NVS sigue usandose para configuracion y calibracion.

@@ -167,16 +167,21 @@ function decodeCompactWaveEvent(buffer, eventId) {
 // Grafica wave con referencia temporal FAST de event; las corrientes usan un eje independiente.
 function renderGridWave(wave, event) {
     if (gridWaveViewer.chart) gridWaveViewer.chart.destroy();
+    const displaySamples = gridRegularSamples(wave.samples, 0.125), fastSamples = gridFastDisplaySamples(event);
     const definitions = [["R", "vr", "#d9534f"], ["S", "vs", "#5cb85c"], ["T", "vt", "#337ab7"],
         ["IR", "ir", "#d9534f"], ["IS", "is", "#5cb85c"], ["IT", "it", "#337ab7"], ["IN", "inn", "#6c757d"]];
+    if (typeof appPhaseColor === 'function') for (const signal of definitions)
+        signal[2] = appPhaseColor(signal[1] === 'inn' ? 'N' : signal[1].slice(1),signal[1][0] === 'i' ? .22 : 0);
     const data = definitions.map(([name, key, color], index) => ({type: "line", name, color, markerSize: 0,
-        axisYType: index < 3 ? "primary" : "secondary", visible: index < 3, showInLegend: true,
-        connectNullData: false, dataPoints: wave.samples.map(point => ({x: point.relativeMs, y: point[key]}))}));
+        axisYType: index < 3 ? "primary" : "secondary", signalUnit: index < 3 ? "V" : "A", visible: index < 3, showInLegend: true,
+        connectNullData: false, dataPoints: displaySamples.map(point => ({x: point.relativeMs, y: point[key]}))}));
     // La leyenda permite superponer RMS de referencia sin modificar la captura almacenada.
     for (const [name, key, color] of [["R RMS", "vr", "#d9534f"], ["S RMS", "vs", "#5cb85c"], ["T RMS", "vt", "#337ab7"]])
-        data.push({type: "line", name, color, visible: false, showInLegend: true, markerSize: 0, lineDashType: "dash",
-            dataPoints: event.samples.map(point => ({x: point.relativeMs, y: point[key]}))});
+        data.push({type: "line", name, appPhase:key.slice(1).toUpperCase(), color:typeof appPhaseColor === 'function' ? appPhaseColor(key.slice(1)) : color, signalUnit: "V RMS", visible: false, showInLegend: true, markerSize: 0, lineDashType: "dash",
+            dataPoints: fastSamples.map(point => ({x: point.relativeMs, y: point[key]}))});
     gridWaveViewer.chart = new CanvasJS.Chart("gridWaveChart", {animationEnabled: false, zoomEnabled: true,
+        toolTip: chartTooltip.options({title: "Oscilografía #" + wave.id, digits: 3, origin: event.timestamp,
+            markers: [{at: wave.triggerMs, label: "Disparo Wave"}]}),
         axisX: {title: "Tiempo relativo al FAST (ms)", stripLines: [{value: wave.triggerMs, label: "Disparo Wave"}]},
         axisY: {title: "Voltaje", suffix: " V"}, axisY2: {title: "Corriente", suffix: " A"},
         legend: {cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(gridWaveViewer.chart), data});

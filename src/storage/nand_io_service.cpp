@@ -55,6 +55,7 @@ void NandIoService::getMetrics(NandIoMetrics& output) const
 	portENTER_CRITICAL(const_cast<portMUX_TYPE*>(&metricsMutex));
 	output = metrics;
 	portEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&metricsMutex));
+	output.stackFreeWords = taskHandle ? uint16_t(uxTaskGetStackHighWaterMark(taskHandle)) : 0;
 }
 
 // Entra al ciclo del objeto recibido en parameter y elimina la tarea al finalizar.

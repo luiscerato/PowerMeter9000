@@ -35,6 +35,20 @@ function setEventHistoryPeriod(range) {
     eventHistory.periodUnit = range.unit;
     $("#eventHistoryFrom").val(eventHistoryInputTime(new Date(range.from)));
     $("#eventHistoryTo").val(eventHistoryInputTime(new Date(range.to)));
+    syncEventHistoryDates();
+}
+
+// Actualiza las etiquetas cortas sin alterar fecha, hora ni segundos de los controles; sin parametros.
+function syncEventHistoryDates() {
+    if (typeof document === "undefined") return;
+    for (const id of ["eventHistoryFrom", "eventHistoryTo"]) {
+        const input = document.getElementById(id), label = document.getElementById(id + "Label");
+        if (!input || !label) continue;
+        const date = new Date(input.value), valid = Number.isFinite(date.getTime());
+        label.textContent = valid ? String(date.getDate()).padStart(2, "0") + "/" + String(date.getMonth() + 1).padStart(2, "0") + " " +
+            String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0") : "—";
+        input.parentElement.title = valid ? date.toLocaleString("es-AR", {hour12: false}) : "Seleccionar fecha y hora";
+    }
 }
 
 // Aplica un atajo y carga el periodo; preset identifica hoy/ayer/semana/mes/anio.
@@ -59,3 +73,39 @@ function moveEventHistoryPeriod(direction) {
 }
 
 if (typeof module !== "undefined") module.exports = {eventHistoryCalendarRange, shiftEventHistoryPeriod};
+
+// Guarda periodo y filtros de Historial en este navegador; no recibe parametros.
+function saveEventHistoryPreferences() {
+    try {
+        localStorage.setItem("powerMeter.eventHistory.v1", JSON.stringify({preset: $("#eventHistoryPreset").val(),
+            from: $("#eventHistoryFrom").val(), to: $("#eventHistoryTo").val(), unit: eventHistory.periodUnit,
+            lane: eventHistory.lane, types: [...eventHistory.types], subjects: [...eventStatisticsSubjects],
+            grouping: $("#eventStatisticsUnit").val()}));
+    } catch (_) {}
+}
+
+// Recupera filtros y recalcula los atajos relativos como Hoy; no recibe parametros.
+function restoreEventHistoryPreferences() {
+    try {
+        const saved = JSON.parse(localStorage.getItem("powerMeter.eventHistory.v1"));
+        if (!saved || typeof saved !== "object") return;
+        const presets = ["today", "yesterday", "thisWeek", "lastWeek", "thisMonth", "lastMonth", "thisYear"];
+        if (presets.includes(saved.preset)) {
+            $("#eventHistoryPreset").val(saved.preset); setEventHistoryPeriod(eventHistoryCalendarRange(saved.preset));
+        } else if (Number.isFinite(Date.parse(saved.from)) && Date.parse(saved.from) < Date.parse(saved.to)) {
+            $("#eventHistoryPreset").val("");
+            setEventHistoryPeriod({from: Date.parse(saved.from), to: Date.parse(saved.to),
+                unit: ["day", "week", "month", "year", "custom"].includes(saved.unit) ? saved.unit : "custom"});
+        }
+        if (["all", "0:V", "1:V", "2:V", "3:V", "4:V"].includes(saved.lane)) {
+            eventHistory.lane = saved.lane; $("#eventHistoryLane").val(saved.lane);
+        }
+        if (Array.isArray(saved.types)) eventHistory.types = new Set(saved.types.filter(key => eventHistoryTypes.some(type => type.key === key)));
+        if (Array.isArray(saved.subjects)) {
+            const subjects = saved.subjects.filter(subject => Number.isInteger(subject) && subject >= 0 && subject <= 4);
+            eventStatisticsSubjects = new Set(subjects.includes(4) ? [4] : subjects);
+        }
+        if (["auto", "hour", "day", "week"].includes(saved.grouping)) $("#eventStatisticsUnit").val(saved.grouping);
+        updateEventHistoryTypeControls(); updateEventStatisticsSubjectControls();
+    } catch (_) {}
+}

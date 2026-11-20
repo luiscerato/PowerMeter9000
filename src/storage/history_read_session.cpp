@@ -2,10 +2,34 @@
 #include "ESPAsyncWebServer.h"
 #include "../memory_diagnostics.h"
 #include <new>
+#include <esp_rom_crc.h>
 
 constexpr size_t HistoryReadSession::pageSize;
 static portMUX_TYPE historyReadMetricsMux = portMUX_INITIALIZER_UNLOCKED;
 static HistoryReadSessionMetrics historyReadMetrics;
+static HistoryReadTimings historyReadTimings;
+
+// Acumula elapsedUs en timing; no almacena muestras individuales ni reserva memoria.
+static void recordHistoryTiming(HistoryReadTiming& timing, uint32_t elapsedUs)
+{
+	portENTER_CRITICAL(&historyReadMetricsMux);
+	++timing.count;
+	timing.totalUs += elapsedUs;
+	if (elapsedUs > timing.maxUs) timing.maxUs = elapsedUs;
+	timing.over1ms += elapsedUs > 1000;
+	timing.over2ms += elapsedUs > 2000;
+	timing.over5ms += elapsedUs > 5000;
+	timing.over10ms += elapsedUs > 10000;
+	portEXIT_CRITICAL(&historyReadMetricsMux);
+}
+
+// Copia los tiempos globales protegidos; output recibe los acumulados desde el arranque.
+void HistoryReadSession::getTimings(HistoryReadTimings& output)
+{
+	portENTER_CRITICAL(&historyReadMetricsMux);
+	output = historyReadTimings;
+	portEXIT_CRITICAL(&historyReadMetricsMux);
+}
 
 // Reserva recursos de esta descarga y dispara una tarea que lee NAND con prioridad baja.
 bool HistoryReadSession::begin(NandPartition& partition, const HistoryReadPlan& plan, const uint8_t* activeSnapshot)
@@ -91,21 +115,52 @@ size_t HistoryReadSession::copyChunk(uint8_t* destination, size_t maxLength, siz
 	if (id != sessionId || !active) return 0;
 	if (offset >= totalBytes || !destination) { cancel(id); return 0; }
 	lastConsumerMs = millis();
-	if (currentBuffer == bufferCount) {
-		if (xQueueReceive(readyQueue, &currentBuffer, 0) != pdPASS) {
-			const uint32_t nowUs = micros();
-			const bool failed = producerFailed;
-			portENTER_CRITICAL(&historyReadMetricsMux);
-			++historyReadMetrics.emptyBufferCalls;
-			++sessionMetrics.emptyBufferCalls;
-			if (!waitingForBuffer) {
-				waitingForBuffer = true;
-				bufferWaitStartedUs = nowUs;
-				++historyReadMetrics.emptyBufferEpisodes;
-				++sessionMetrics.emptyBufferEpisodes;
+	// Aprovecha la ventana TCP completa, sin cortar al final de cada pagina NAND.
+	maxLength = min(maxLength, size_t(CONFIG_LWIP_TCP_MSS) * 4);
+	size_t copied = 0;
+	while (copied < maxLength && offset + copied < totalBytes) {
+		if (currentBuffer == bufferCount) {
+			// Una cola vacia puede postergar HTTP hasta el poll TCP (~500 ms).
+			// El presupuesto de 20 ms se comparte entre paginas: sin espera activa ni acceso NAND aqui.
+			const uint32_t waitedMs = uint32_t(millis() - lastConsumerMs);
+			const TickType_t waitTicks = pdMS_TO_TICKS(waitedMs < 20 ? 20 - waitedMs : 0);
+			bool received = xQueueReceive(readyQueue, &currentBuffer, 0) == pdPASS;
+			if (!received) {
+				const uint32_t waitStartedUs = micros();
+				received = xQueueReceive(readyQueue, &currentBuffer, waitTicks) == pdPASS;
+				recordHistoryTiming(historyReadTimings.queue, micros() - waitStartedUs);
 			}
-			if (failed) {
-				const uint32_t waitUs = nowUs - bufferWaitStartedUs;
+			if (!received) {
+				// Entrega lo ya reunido sin perderlo; solo pide reintento cuando no hay ningun byte.
+				if (copied) return copied;
+				const uint32_t nowUs = micros();
+				const bool failed = producerFailed;
+				portENTER_CRITICAL(&historyReadMetricsMux);
+				++historyReadMetrics.emptyBufferCalls;
+				++sessionMetrics.emptyBufferCalls;
+				if (!waitingForBuffer) {
+					waitingForBuffer = true;
+					bufferWaitStartedUs = nowUs;
+					++historyReadMetrics.emptyBufferEpisodes;
+					++sessionMetrics.emptyBufferEpisodes;
+				}
+				if (failed) {
+					const uint32_t waitUs = nowUs - bufferWaitStartedUs;
+					historyReadMetrics.totalBufferWaitUs += waitUs;
+					historyReadMetrics.lastBufferWaitUs = waitUs;
+					if (waitUs > historyReadMetrics.maxBufferWaitUs) historyReadMetrics.maxBufferWaitUs = waitUs;
+					sessionMetrics.totalBufferWaitUs += waitUs;
+					sessionMetrics.lastBufferWaitUs = waitUs;
+					if (waitUs > sessionMetrics.maxBufferWaitUs) sessionMetrics.maxBufferWaitUs = waitUs;
+					waitingForBuffer = false;
+				}
+				portEXIT_CRITICAL(&historyReadMetricsMux);
+				if (failed) { cancel(id); return 0; }
+				return RESPONSE_TRY_AGAIN;
+			}
+			if (waitingForBuffer) {
+				const uint32_t waitUs = micros() - bufferWaitStartedUs;
+				portENTER_CRITICAL(&historyReadMetricsMux);
 				historyReadMetrics.totalBufferWaitUs += waitUs;
 				historyReadMetrics.lastBufferWaitUs = waitUs;
 				if (waitUs > historyReadMetrics.maxBufferWaitUs) historyReadMetrics.maxBufferWaitUs = waitUs;
@@ -113,35 +168,22 @@ size_t HistoryReadSession::copyChunk(uint8_t* destination, size_t maxLength, siz
 				sessionMetrics.lastBufferWaitUs = waitUs;
 				if (waitUs > sessionMetrics.maxBufferWaitUs) sessionMetrics.maxBufferWaitUs = waitUs;
 				waitingForBuffer = false;
+				portEXIT_CRITICAL(&historyReadMetricsMux);
 			}
-			portEXIT_CRITICAL(&historyReadMetricsMux);
-			if (failed) { cancel(id); return 0; }
-			return RESPONSE_TRY_AGAIN;
+			currentLength = min(pageSize, totalBytes - offset - copied);
+			currentOffset = 0;
 		}
-		if (waitingForBuffer) {
-			const uint32_t waitUs = micros() - bufferWaitStartedUs;
-			portENTER_CRITICAL(&historyReadMetricsMux);
-			historyReadMetrics.totalBufferWaitUs += waitUs;
-			historyReadMetrics.lastBufferWaitUs = waitUs;
-			if (waitUs > historyReadMetrics.maxBufferWaitUs) historyReadMetrics.maxBufferWaitUs = waitUs;
-			sessionMetrics.totalBufferWaitUs += waitUs;
-			sessionMetrics.lastBufferWaitUs = waitUs;
-			if (waitUs > sessionMetrics.maxBufferWaitUs) sessionMetrics.maxBufferWaitUs = waitUs;
-			waitingForBuffer = false;
-			portEXIT_CRITICAL(&historyReadMetricsMux);
+		const size_t count = min(maxLength - copied, currentLength - currentOffset);
+		memcpy(destination + copied, buffers[currentBuffer] + currentOffset, count);
+		copied += count;
+		currentOffset += count;
+		if (currentOffset == currentLength) {
+			xQueueSend(freeQueue, &currentBuffer, 0);
+			currentBuffer = bufferCount;
 		}
-		currentLength = min(pageSize, totalBytes - offset);
-		currentOffset = 0;
 	}
-	const size_t count = min(maxLength, currentLength - currentOffset);
-	memcpy(destination, buffers[currentBuffer] + currentOffset, count);
-	currentOffset += count;
-	if (currentOffset == currentLength) {
-		xQueueSend(freeQueue, &currentBuffer, 0);
-		currentBuffer = bufferCount;
-	}
-	if (offset + count == totalBytes) cancel(id);
-	return count;
+	if (offset + copied == totalBytes) cancel(id);
+	return copied;
 }
 
 // Devuelve la generacion de la respuesta actual; sin parametros.
@@ -191,6 +233,7 @@ void HistoryReadSession::readTaskLoop()
 			const uint8_t readPage = nextPage;
 			while (xQueueReceive(completionQueue, &result, 0) == pdPASS) {}
 			bool submitted = false;
+			const uint32_t prepareStartedUs = micros();
 			const uint32_t submitStartedMs = millis();
 			while (active && !submitted && uint32_t(millis() - submitStartedMs) < 5000U) {
 				submitted = source->submitReadPage(nextBlock, nextPage, 0, buffers[bufferIndex], pageSize,
@@ -225,6 +268,7 @@ void HistoryReadSession::readTaskLoop()
 				break;
 			}
 			lastReadElapsedUs = result.elapsedUs;
+			recordHistoryTiming(historyReadTimings.nand, result.elapsedUs);
 			if (!result.success) {
 				++nandFailureCount;
 				Serial.printf("[history] nand_fail session=%p block=%u page=%u error=%u status=%02X elapsedUs=%lu\n",
@@ -238,6 +282,7 @@ void HistoryReadSession::readTaskLoop()
 				// Asi el cliente conserva el archivo alineado y puede omitir solo ese hueco.
 				memset(buffers[bufferIndex], 0xFF, pageSize);
 			}
+			recordHistoryTiming(historyReadTimings.prepare, micros() - prepareStartedUs);
 			ready = true;
 			--remainingPhysicalPages;
 			if (remainingPhysicalPages && !advancePage()) {
@@ -307,7 +352,10 @@ void HistoryReadSession::readTaskLoop()
 		(unsigned long long)metrics.totalBufferWaitUs, ESP.getFreeHeap(), ESP.getMinFreeHeap(),
 		(unsigned)uxTaskGetStackHighWaterMark(nullptr));
 	// El productor conserva las paginas hasta que HTTP copie el ultimo byte o se desconecte.
-	while (active) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+	while (active) {
+		if (uint32_t(millis() - lastConsumerMs) > 5000U) active = false;
+		else ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+	}
 	releaseBuffers();
 	taskHandle = nullptr;
 }
@@ -341,8 +389,9 @@ bool HistoryReadSession::isValidPage(const uint8_t* data) const
 	const size_t payloadBytes = size_t(header->sampleCount) * sampleSize;
 	return sampleSize && header->sampleCount && header->samplePeriod &&
 		HistoryFormat::isValidGroupConfig(header->formatVersion, config) && payloadBytes <= HistoryFormat::payloadSize &&
-		header->headerCrc16 == HistoryFormat::crc16(data, 16) &&
-		header->payloadCrc16 == HistoryFormat::crc16(data + HistoryFormat::headerSize, payloadBytes);
+		// La ROM aplica complemento de entrada/salida: invertir su resultado conserva CCITT-FALSE (init FFFF).
+		header->headerCrc16 == uint16_t(~esp_rom_crc16_be(0, data, 16)) &&
+		header->payloadCrc16 == uint16_t(~esp_rom_crc16_be(0, data + HistoryFormat::headerSize, payloadBytes));
 }
 
 // Indica si una pagina valida se solapa con el intervalo temporal de esta descarga.

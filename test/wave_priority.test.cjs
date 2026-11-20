@@ -42,10 +42,12 @@ assert.match(half, /pendingFastSample.timestamp =/);
 for (const signature of ['if (status0.RMSONERDY)', 'if (forcedFastRms &&'])
     assert.match(body(task, signature), /meterRecordFastRmsSample\(\)/);
 const irq = body(task, 'while (digitalRead(pinAdeInt0) == 0)');
-const wave = irq.indexOf('if (status0.PAGE_FULL)');
+const wave = irq.indexOf('if (status0.PAGE_FULL && (waveCaptureReady() || meterServicesReady.load()))');
+assert.ok(wave >= 0, 'Wave espera un consumidor listo durante el arranque');
 assert.ok(wave > irq.indexOf('ade.clearStatusBit0(status0.raw)'));
 assert.equal((irq.match(/meterReadWaveBuffer\(\)/g) || []).length, 1);
-for (const flag of ['RMSONERDY', 'RMS1012RDY', 'THD_PF_RDY', 'EGYRDY'])
+assert.ok(irq.indexOf('if (status0.RMSONERDY)') < wave, 'FAST antes del SPI y empaquetado Wave');
+for (const flag of ['RMS1012RDY', 'THD_PF_RDY', 'EGYRDY'])
     assert.ok(wave < irq.indexOf(`if (status0.${flag})`), `Wave antes de ${flag}`);
 assert.doesNotMatch(task, /meterReadDipSwell|meterReadOverCurrent/);
 assert.doesNotMatch(task, /\bdebug[IEWVD]\s*\(|Serial\.(?:print|printf|println)\s*\(/);
@@ -54,4 +56,4 @@ for (const signature of ['void printEvent()'])
     assert.doesNotMatch(body(header, signature), /\bdebug[IEWVD]\s*\(|Serial\.(?:print|printf|println)\s*\(/);
 assert.match(meter, /waveReadHalf = lastPage >= 14 \|\| lastPage < 3 \? 1 : 0/);
 assert.match(body(meter, 'static void meterSendScopeFrame('), /ESP.getFreeHeap\(\) < 50 \* 1024/);
-console.log('PASS: Wave primero, comandos despues de IRQ0, sin prints en adquisicion; selector y limite de heap conservados.');
+console.log('PASS: FAST antes de Wave, Wave antes de lecturas lentas, sin prints en adquisicion; selector y limite de heap conservados.');

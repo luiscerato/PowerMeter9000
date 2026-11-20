@@ -9,13 +9,13 @@ function readCode(name) { return fs.readFileSync(path.join(root, name), 'utf8');
 for (const name of ['src/event_store.cpp', 'src/event_store.h', 'src/event_trigger.h', 'src/event_test_pattern.h'])
     assert.equal(fs.existsSync(path.join(root, name)), false, name);
 for (const name of ['src/meter.cpp', 'src/meter.h', 'src/webserver.cpp', 'src/webserver.h',
-    'src/grid_events.cpp', 'src/grid_events.h', 'src/wifiUtils.cpp', 'src/manager_api.cpp', 'src/manager_api.h']) {
+    'src/wifiUtils.cpp', 'src/manager_api.cpp', 'src/manager_api.h']) {
     assert.doesNotMatch(readCode(name), /eventStore|EventsData|capturedEvent|acEvents|gridNotice|gridEventNotification|managerPublishEventNotification|"\/events(?:["/])|events\/notification/, name);
 }
 const meter = readCode('src/meter.cpp'), server = readCode('src/webserver.cpp');
 assert.match(meter, /gridEventStorePushFastSample\(/);
 assert.match(meter, /gridEventStoreObserve\(/);
-assert.match(meter, /gridEventsPersistLoop\(\)/);
+assert.doesNotMatch(meter, /gridEventsPersistLoop|gridEventsStartupState/);
 assert.match(meter, /bl0942.startFastSample\(\)/);
 assert.doesNotMatch(meter, /ade.setDipDetectionLevels\(/);
 assert.doesNotMatch(meter, /ade.setSwellDetectionLevels\(/);
@@ -32,5 +32,5 @@ assert.match(html, /id="gridEvents"/);
 assert.match(html, /id="gridEventContext"/);
 assert.match(html, /title="Eventos"/);
 for (const name of ['data/index.js', 'data/script.js', 'data/board.js'])
-    assert.doesNotMatch(readCode(name), /loadRamEventsList|loadNodeFile|\/events\b|eventPrevSamples|eventPostSamples|eventMaxSamples/, name);
+    assert.doesNotMatch(readCode(name), /loadRamEventsList|loadNodeFile|\/events(?:["'?#]|$)|eventPrevSamples|eventPostSamples|eventMaxSamples/, name);
 console.log('PASS: camino antiguo eliminado, NAND y detectores presentes, scope en vivo y web sin consultas antiguas.');

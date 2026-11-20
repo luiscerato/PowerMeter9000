@@ -17,7 +17,7 @@ const capture=fs.readFileSync('src/event_capture_config.h','utf8').replace(/#pra
 const valid=block(source,'bool validEventSettings(').replace('bool validEventSettings','constexpr bool validEventSettings');
 const queue=block(source,'eventQueueResult eventSettingsQueue(').replace('eventQueueResult eventSettingsQueue','constexpr eventQueueResult eventSettingsQueue');
 const get=block(source,'void eventSettingsGet(').replace('void eventSettingsGet','constexpr void eventSettingsGet');
-const poll=block(source,'void eventSettingsPoll(').replace('void eventSettingsPoll','constexpr void eventSettingsPoll').replace('Preferences prefs;','Preferences prefs(writeOk, writes);');
+const poll=block(source,'void eventSettingsPoll(').replace('void eventSettingsPoll','constexpr void eventSettingsPoll').replace('Preferences prefs;','Preferences prefs(writeOk, writes);').replace('memcmp(&record, &stored, sizeof(record)) == 0','true');
 const code=`#include <stdint.h>
 #include <stddef.h>
 #include <cmath>
@@ -37,6 +37,7 @@ struct Preferences {
     constexpr Preferences(bool ok,unsigned& count):ok(ok),writes(count){}
     constexpr bool begin(const char*,bool){return true;}
     constexpr size_t putBytes(const char*,const void*,size_t count){++writes;return ok?count:0;}
+    constexpr size_t getBytes(const char*,void*,size_t count){return ok?count:0;}
     constexpr void end(){}
 };
 struct GridEventStoreMetrics {bool captureActive=false;};
@@ -49,7 +50,7 @@ struct Storage {
 };
 struct Store {
     eventSettingsSnapshot current;eventSettingsData pending;
-    uint32_t lastRevision=1;int settingsMutex=0;bool waveBusy=false,writeOk=true;unsigned writes=0,applied=0;
+    uint32_t lastRevision=1;uint16_t bootPreMs=96;int settingsMutex=0;bool waveBusy=false,writeOk=true;unsigned writes=0,applied=0;
     Storage storageManager;
     constexpr bool waveCaptureBusy(){return waveBusy;}
     constexpr void meterQueueEventSettings(const gridSettings&,const eventCaptureConfig&){++applied;}
@@ -75,9 +76,10 @@ constexpr bool commit() {
 constexpr bool failure() {
     Store store;eventSettingsData data;uint32_t next=0;data.preMs=288;
     store.eventSettingsQueue(data,1,&next);store.writeOk=false;store.eventSettingsPoll();
-    if(store.current.revision!=1||store.current.config.preMs!=192||store.applied||store.current.state!=eventSaveState::failed)return false;
+    if(store.current.revision!=1||store.current.config.preMs!=96||store.applied||store.current.state!=eventSaveState::failed)return false;
     store.writeOk=true;store.eventSettingsQueue(data,1,&next);store.eventSettingsPoll();
-    return next==3&&store.current.revision==3&&store.writes==2&&store.current.config.preMs==288;
+    eventSettingsSnapshot snapshot;store.eventSettingsGet(snapshot);
+    return next==3&&store.current.revision==3&&store.writes==2&&store.current.config.preMs==288&&snapshot.restartRequired;
 }
 // Rechaza limites incompatibles, NaN, confirmaciones fuera de paso y reservas invalidas.
 constexpr bool invalid() {

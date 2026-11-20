@@ -15,7 +15,11 @@ struct ModuleName { uint32_t id; const char* name; };
 constexpr ModuleName moduleNames[] = {
 	{DiagnosticModule::logger, "logger"},
 	{DiagnosticModule::main, "main"},
-	{DiagnosticModule::storage, "storage"}
+	{DiagnosticModule::storage, "storage"},
+	{DiagnosticModule::wifi, "wifi"},
+	{DiagnosticModule::mqtt, "mqtt"},
+	{DiagnosticModule::tcp, "tcp"},
+	{DiagnosticModule::health, "health"}
 };
 
 // Devuelve el nombre compilado de moduleId, o un nombre generico si no existe.
@@ -65,10 +69,8 @@ uint8_t DiagnosticLogger::getModuleCount()
 bool DiagnosticLogger::begin()
 {
 	if (queue) return true;
-	if (!queueData) queueData = static_cast<uint8_t*>(malloc(queueLength * sizeof(DiagnosticChunk)));
-	if (!serialData) serialData = static_cast<uint8_t*>(malloc(serialBufferSize + 1));
 	if (!recentChunks) recentChunks = static_cast<DiagnosticRecentChunk*>(malloc(recentChunkCount * sizeof(DiagnosticRecentChunk)));
-	if (!queueData || !serialData || !recentChunks) return false;
+	if (!recentChunks) return false;
 	memset(recentChunks, 0, recentChunkCount * sizeof(DiagnosticRecentChunk));
 	queue = xQueueCreateStatic(queueLength, sizeof(DiagnosticChunk), queueData, &queueControl);
 	serialBuffer = xStreamBufferCreateStatic(serialBufferSize, 1, serialData, &serialControl);
@@ -97,7 +99,7 @@ bool DiagnosticLogger::start(DiagnosticStore* targetStore)
 	if (!queue || !serialBuffer) return false;
 	attachStore(targetStore);
 	if (task) return true;
-	return xTaskCreatePinnedToCore(taskEntry, "diagLog", 4096, this, 1, &task, tskNO_AFFINITY) == pdPASS;
+	return xTaskCreatePinnedToCore(taskEntry, "diagLog", taskStackWords, this, 1, &task, tskNO_AFFINITY) == pdPASS;
 }
 
 // Cambia el destino NAND sin modificar la cola existente.
@@ -203,16 +205,34 @@ bool DiagnosticLogger::isEnabled(uint32_t moduleId, DiagnosticLevel level) const
 	return uint8_t(level) <= selected;
 }
 
-// Formatea una vez y encola hasta cuatro fragmentos de un mismo mensaje.
+// Formatea una vez y encola hasta cuatro fragmentos sin esperar espacio.
 void DiagnosticLogger::log(uint32_t moduleId, DiagnosticLevel level, uint16_t sourceLine, const char* format, ...)
 {
-	if (!queue || !format || !isEnabled(moduleId, level)) return;
-	char message[maxParts * textPerChunk + 1];
 	va_list args;
 	va_start(args, format);
-	const int requested = vsnprintf(message, sizeof(message), format, args);
+	enqueueMessage(moduleId, level, sourceLine, format, args, 0);
 	va_end(args);
-	if (requested < 0) return;
+}
+
+// Encola un mensaje con espera acotada; timeoutMs evita bloquear indefinidamente al consumidor.
+bool DiagnosticLogger::logWait(uint32_t moduleId, DiagnosticLevel level, uint16_t sourceLine,
+	uint32_t timeoutMs, const char* format, ...)
+{
+	va_list args;
+	va_start(args, format);
+	const bool accepted = enqueueMessage(moduleId, level, sourceLine, format, args, pdMS_TO_TICKS(timeoutMs));
+	va_end(args);
+	return accepted;
+}
+
+// Formatea una vez y encola hasta cuatro fragmentos usando la espera indicada.
+bool DiagnosticLogger::enqueueMessage(uint32_t moduleId, DiagnosticLevel level, uint16_t sourceLine,
+	const char* format, va_list args, TickType_t waitTicks)
+{
+	if (!queue || !format || !isEnabled(moduleId, level)) return false;
+	char message[maxParts * textPerChunk + 1];
+	const int requested = vsnprintf(message, sizeof(message), format, args);
+	if (requested < 0) return false;
 	const size_t textLength = strnlen(message, sizeof(message) - 1);
 	const uint8_t partCount = textLength ? uint8_t((textLength + textPerChunk - 1) / textPerChunk) : 1;
 	const bool truncated = size_t(requested) >= sizeof(message);
@@ -222,6 +242,7 @@ void DiagnosticLogger::log(uint32_t moduleId, DiagnosticLevel level, uint16_t so
 	const bool utcValid = now.tv_sec >= 1577836800;
 	const uint64_t unixUs = utcValid ? uint64_t(now.tv_sec) * 1000000 + uint64_t(now.tv_usec) : 0;
 	uint8_t accepted = 0;
+	bool complete = true;
 	for (uint8_t part = 0; part < partCount; ++part) {
 		DiagnosticChunk chunk;
 		chunk.uptimeUs = uint64_t(uptimeUs);
@@ -235,7 +256,8 @@ void DiagnosticLogger::log(uint32_t moduleId, DiagnosticLevel level, uint16_t so
 		const size_t offset = size_t(part) * textPerChunk;
 		chunk.textLength = uint8_t(min(size_t(textPerChunk), textLength - offset));
 		memcpy(chunk.text, message + offset, chunk.textLength);
-		if (xQueueSend(queue, &chunk, 0) != pdPASS) {
+		if (xQueueSend(queue, &chunk, waitTicks) != pdPASS) {
+			complete = false;
 			recordQueueLoss(partCount - part);
 			portENTER_CRITICAL(&stateMutex);
 			++metrics.queueFull;
@@ -257,6 +279,7 @@ void DiagnosticLogger::log(uint32_t moduleId, DiagnosticLevel level, uint16_t so
 		++metrics.truncatedMessages;
 		portEXIT_CRITICAL(&stateMutex);
 	}
+	return complete;
 }
 
 // Drena un tramo que cabe en el transmisor sin esperar espacio UART.
@@ -277,6 +300,13 @@ void DiagnosticLogger::getMetrics(DiagnosticLoggerMetrics& result) const
 	result = metrics;
 	portEXIT_CRITICAL(&stateMutex);
 	result.queueUsed = queue ? uint8_t(uxQueueMessagesWaiting(queue)) : 0;
+	result.stackFreeWords = getStackFreeWords();
+}
+
+// Devuelve el minimo de palabras libres observado por FreeRTOS en la tarea del logger.
+uint16_t DiagnosticLogger::getStackFreeWords() const
+{
+	return task ? uint16_t(uxTaskGetStackHighWaterMark(task)) : 0;
 }
 
 // Copia como maximo capacity fragmentos nuevos desde el anillo circular reciente.

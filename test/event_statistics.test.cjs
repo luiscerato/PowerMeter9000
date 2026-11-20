@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {execFileSync} = require('node:child_process');
-const {buildEventStatistics, eventStatisticsGranularity, eventStatisticsChartData} = require('../data/event_statistics.js');
+const {buildEventStatistics, eventStatisticsGranularity, eventStatisticsChartData, formatEventStatisticsDuration, eventStatisticsTimeInterval} = require('../data/event_statistics.js');
 const hour = 3600000, day = hour * 24;
 const base = new Date(2026, 9, 19).getTime();
 
@@ -18,11 +18,28 @@ test('un corte de cinco horas reparte su duracion y cuenta un solo inicio', () =
     assert.equal(result.summary[0].values.outage.durationMs, 5 * hour);
 });
 
-test('graficas conservan cantidades enteras y convierten duraciones a minutos', () => {
+test('graficas conservan cantidades enteras y expresan duraciones como tiempo', () => {
     const result = buildEventStatistics([interval(0, hour)], base, base + hour, 'hour');
     const counts = eventStatisticsChartData(result, false), durations = eventStatisticsChartData(result, true);
     assert.equal(counts.length, 8); assert.equal(durations.length, 5);
-    assert.equal(counts[0].dataPoints[0].y, 1); assert.equal(durations[0].dataPoints[0].y, 60);
+    assert.equal(counts[0].dataPoints[0].y, 1); assert.equal(durations[0].dataPoints[0].y, 3600);
+    assert.equal(durations[0].dataPoints[0].tooltipText, '1 h 0 min 0 s');
+    assert.equal(eventStatisticsChartData(result, false, 'points').length, 3);
+    assert.equal(eventStatisticsChartData(result, true, 'points').length, 0);
+    assert.equal(eventStatisticsChartData(result, false, 'states').length, 5);
+});
+
+test('corte de 2010 ms se muestra en segundos y no como 0.034 minutos', () => {
+    const result = buildEventStatistics([interval(0, 2010)], base, base + hour, 'hour');
+    const point = eventStatisticsChartData(result, true)[0].dataPoints[0];
+    assert.equal(point.y, 2.01);
+    assert.equal(point.tooltipText, '2,01 s');
+    assert.equal(formatEventStatisticsDuration(90000), '1 min 30 s');
+    assert.equal(formatEventStatisticsDuration(3661000), '1 h 1 min 1 s');
+    assert.equal(formatEventStatisticsDuration(10000), '10 s');
+    assert.equal(formatEventStatisticsDuration(250), '250 ms');
+    assert.equal(eventStatisticsTimeInterval(2.01), 0.5);
+    assert.equal(eventStatisticsTimeInterval(3600), 900);
 });
 
 test('recorta al periodo y no cuenta el inicio de un corte que empezo antes', () => {
@@ -58,6 +75,44 @@ test('red y fases no se suman entre si y corriente pertenece a su fase', () => {
     assert.equal(result.summary[1].values.outage.durationMs, hour);
     assert.equal(result.rows[0].values.outage.durationMs, hour);
     assert.equal(result.rows[0].values.current.durationMs, hour / 2);
+});
+
+test('todas las fases suma sus metricas sin incorporar los estados globales de red', () => {
+    const result = buildEventStatistics([
+        interval(0, hour, {subject: 0, state: 2}),
+        interval(0, hour / 2, {subject: 1, state: 4}),
+        interval(0, hour, {subject: 4, state: 3})
+    ], base, base + hour, 'hour', [0, 1, 2, 3]);
+    assert.deepEqual(result.summary.map(row => row.subject), [0, 1, 2, 3]);
+    assert.equal(result.rows[0].values.low.durationMs, hour);
+    assert.equal(result.rows[0].values.low.starts, 1);
+    assert.equal(result.rows[0].values.outage.durationMs, hour / 2);
+    assert.equal(result.rows[0].values.outage.starts, 1);
+    assert.equal(result.summary.some(row => row.subject === 4), false);
+});
+
+test('tres fases cortadas nueve minutos cuentan nueve minutos combinados', () => {
+    const items = [0, 1, 2].map(subject => interval(0, 9 * 60000, {subject, state: 4}));
+    const result = buildEventStatistics(items, base, base + hour, 'hour', [0, 1, 2, 3]);
+    assert.equal(result.rows[0].values.outage.durationMs, 9 * 60000);
+    assert.equal(result.rows[0].values.outage.starts, 3);
+    for (const row of result.summary.slice(0, 3)) assert.equal(row.values.outage.durationMs, 9 * 60000);
+});
+
+test('union entre fases conserva cortes separados y une los parcialmente solapados', () => {
+    const items = [interval(0, 60000, {subject: 0, state: 4}),
+        interval(30000, 90000, {subject: 1, state: 4}), interval(120000, 180000, {subject: 2, state: 4})];
+    const result = buildEventStatistics(items, base, base + hour, 'hour', [0, 1, 2]);
+    assert.equal(result.rows[0].values.outage.durationMs, 150000);
+});
+
+test('Red cuenta los puntuales de cada fase sin sumar sus estados al corte global', () => {
+    const items = [interval(0, 60000, {subject: 4, state: 3}), interval(0, hour, {subject: 0, state: 4}),
+        ...[0, 1, 2].map(subject => interval(1000, 1100, {subject, point: 1}))];
+    const result = buildEventStatistics(items, base, base + hour, 'hour', [4]);
+    assert.equal(result.rows[0].values.outage.durationMs, 60000);
+    assert.equal(result.rows[0].values.outage.starts, 1);
+    assert.equal(result.rows[0].values.dip.starts, 3);
 });
 
 test('cuenta dips, swells y picos solo en la hora de inicio aunque crucen al siguiente intervalo', () => {
