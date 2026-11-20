@@ -486,18 +486,32 @@ input[type=range][orient=vertical] {
 .gridCaptureFilterLabel { font-size: 12px; white-space: nowrap; }
 .gridCaptureFilterGroup { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .gridCaptureSelections { gap: 8px 20px; }
-.gridCaptureEventTypes { flex: 1 1 580px; }
+.gridCaptureEventTypes { flex: 1 1 390px; }
 .gridCaptureEventTypes .btn-group { flex: 1 1 auto; }
+.gridCaptureViewTools { margin-left: auto; }
+.gridChartNavTools { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.gridChartNavTools .btn, .gridCaptureFilters .btn, .gridChartInteraction .btn { font-size: 11px; padding: 2px 5px; }
+.gridChartOptions { font-size: 12px; min-width: 150px; }
+.gridChartOptions label { display: block; white-space: nowrap; padding: 3px 0; }
+.gridChartOptions input { width: auto; }
+.gridChartInteraction { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+#gridEventsList .list-group-item strong { font-size: 12px; font-weight: 600; }
+.gridEventExpanded > .gridChartNavTools { position: sticky; top: 0; z-index: 3; background: #fff; padding: 4px; }
 .gridCaptureFilterLine > select { width: auto; max-width: 180px; }
 .gridCaptureFilterLine > label { display: flex; align-items: center; gap: 4px; margin: 0; font-size: 12px; min-width: 0; }
-.gridCaptureFilterLine input { width: 205px; font-size: 12px; }
+.gridCaptureFilterLine input[type="datetime-local"] { width: 205px; font-size: 12px; }
 .gridCaptureFilters button { font-size: 12px; }
 .gridCaptureFilters button[aria-pressed="true"] { background: #167d86; border-color: #167d86; color: #fff; }
+@media (min-width: 1100px) {
+    .gridCaptureSelections { column-gap: 8px; }
+    .gridCaptureEventTypes { flex-wrap: nowrap; }
+    .gridCaptureEventTypes .btn { font-size: 10px; padding-inline: 3px; white-space: nowrap; }
+}
 @media (max-width: 575px) {
     .gridCapturePeriod > .gridCaptureFilterLabel { flex-basis: 100%; }
     .gridCaptureFilterGroup { flex-basis: 100%; }
     .gridCaptureFilterLine > label { flex: 1 1 100%; }
-    .gridCaptureFilterLine input { flex: 1; width: 0; min-width: 0; }
+    .gridCaptureFilterLine input[type="datetime-local"] { flex: 1; width: 0; min-width: 0; }
     .gridCaptureFilterLine > select { flex: 1; width: 0; min-width: 120px; max-width: none; }
 }
 .eventHistoryRestart { position: absolute; top: 3px; width: 10px; height: 10px; padding: 0; border: 1px solid #fff; border-radius: 50%; background: #59666c; cursor: pointer; }

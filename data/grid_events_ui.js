@@ -649,6 +649,8 @@ function setGridEventsStatus(message, isError) { $("#gridEventsStatus").text(mes
 // Amplia el area de graficas; expanded indica si ocupa la ventana.
 function setGridEventExpanded(expanded) {
     $('#gridEventWorkspace').toggleClass('gridEventExpanded', expanded);
+    if (expanded) $('#gridChartViewTools').prependTo('#gridEventWorkspace');
+    else $('#gridChartViewTools').appendTo('#gridCaptureViewTools');
     $('#gridEventExpand').attr('aria-pressed', String(expanded)).attr('title', expanded ? 'Salir de pantalla completa' : 'Ampliar gráficas');
     for (const chart of [gridEventsViewer.voltageChart, gridEventsViewer.currentChart, gridWaveViewer.chart]) if (chart) chart.render();
 }

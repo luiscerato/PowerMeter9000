@@ -637,6 +637,19 @@ bootApp();
                                 <span class="gridCaptureFilterLabel">Tipo de evento</span>
                                 <div id="gridCaptureTypes" class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Tipo de evento"></div>
                             </div>
+                            <div id="gridCaptureViewTools" class="gridCaptureViewTools">
+                                <div id="gridChartViewTools" class="gridChartNavTools" role="group" aria-label="Controles de vista">
+                                    <div class="btn-group btn-group-sm"><button id="gridEventVoltageToggle" class="btn btn-outline-primary active" type="button" aria-pressed="true">Voltajes</button><button id="gridEventCurrentToggle" class="btn btn-outline-primary" type="button" aria-pressed="false">Corrientes</button></div>
+                                    <div class="dropdown"><button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Opciones de las gráficas" aria-label="Opciones de las gráficas">&#9881;</button>
+                                        <div class="dropdown-menu dropdown-menu-end p-2 gridChartOptions">
+                                            <label><input id="gridEventMarkers" type="checkbox" checked> Marcas</label>
+                                            <label title="Sincroniza zoom y desplazamiento entre FAST y oscilografía"><input id="gridEventLinkViews" type="checkbox" checked> Vincular vistas</label>
+                                        </div>
+                                    </div>
+                                    <button id="gridEventResetZoom" class="btn btn-outline-secondary btn-sm" type="button" title="Ver todo el tramo" aria-label="Restablecer zoom">Vista completa</button>
+                                    <button id="gridEventExpand" class="btn btn-outline-secondary btn-sm" type="button" title="Ampliar gráficas" aria-label="Ampliar gráficas" aria-pressed="false">&#x26F6;</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="row p-2">
@@ -649,19 +662,14 @@ bootApp();
                         </div>
                         <div class="col-sm-12 col-md-8 col-lg-9">
                             <div class="p-2" id="gridEventWorkspace">
-                                <div class="gridChartNavTools d-flex flex-wrap gap-2 align-items-center justify-content-end mb-2" role="group" aria-label="Navegación de las gráficas">
-                                    <label class="small d-inline-flex gap-1 align-items-center"><input id="gridEventMarkers" type="checkbox" checked>Marcas</label>
-                                    <div class="btn-group btn-group-sm"><button id="gridEventVoltageToggle" class="btn btn-outline-primary active" type="button" aria-pressed="true">Voltajes</button><button id="gridEventCurrentToggle" class="btn btn-outline-primary" type="button" aria-pressed="false">Corrientes</button></div>
-                                    <label class="small d-inline-flex gap-1 align-items-center" title="Sincroniza zoom y desplazamiento entre FAST y oscilografía"><input id="gridEventLinkViews" type="checkbox" checked>Vincular vistas</label>
-                                    <div class="btn-group btn-group-sm" role="group" aria-label="Modo de navegación">
-                                        <button id="gridEventZoomToggle" class="btn btn-outline-secondary active" type="button" aria-pressed="true" title="Arrastrá sobre la gráfica para ampliar" aria-label="Modo zoom">Zoom</button>
-                                        <button id="gridEventPanToggle" class="btn btn-outline-secondary" type="button" aria-pressed="false" title="Arrastrá la gráfica para desplazarte" aria-label="Modo arrastrar">Mover</button>
-                                    </div>
-                                    <button id="gridEventResetZoom" class="btn btn-outline-secondary btn-sm" type="button" title="Ver todo el tramo" aria-label="Restablecer zoom">Vista completa</button>
-                                    <button id="gridEventExpand" class="btn btn-outline-secondary btn-sm" type="button" title="Ampliar gráficas" aria-label="Ampliar gráficas" aria-pressed="false">&#x26F6;</button>
-                                </div>
                                 <div class="row g-2">
                                     <div id="gridEventChartPanel" class="col-lg-8">
+                                        <div class="gridChartInteraction" role="group" aria-label="Navegación de las gráficas">
+                                            <div class="btn-group btn-group-sm" role="group" aria-label="Modo de navegación">
+                                                <button id="gridEventZoomToggle" class="btn btn-outline-secondary active" type="button" aria-pressed="true" title="Arrastrá sobre la gráfica para ampliar" aria-label="Modo zoom">Zoom</button>
+                                                <button id="gridEventPanToggle" class="btn btn-outline-secondary" type="button" aria-pressed="false" title="Arrastrá la gráfica para desplazarte" aria-label="Modo arrastrar">Mover</button>
+                                            </div>
+                                        </div>
                                         <div id="gridEventVoltageChart" class="historyChart"><div class="text-muted p-3">Sin evento cargado.</div></div>
                                         <div id="gridEventCurrentChart" class="historyChart d-none"><div class="text-muted p-3">Sin evento cargado.</div></div>
                                         <details id="gridEventWaveDetails" class="gridEventInfo border-top mt-2 py-2">
