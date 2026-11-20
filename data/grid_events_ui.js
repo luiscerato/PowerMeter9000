@@ -1,4 +1,4 @@
-let gridEventsViewer = {events: [], cache: new Map(), selectedId: null, request: 0, records: [], selectedRecord: null, showMarkers: true, linkViews: true, panMode: false, voltageChart: null, currentChart: null, voltageVisible: true, currentVisible: false, loading: false};
+let gridEventsViewer = {events: [], cache: new Map(), selectedId: null, request: 0, records: [], selectedRecord: null, showMarkers: true, linkViews: true, panMode: false, voltageChart: null, currentChart: null, voltageVisible: true, currentVisible: true, loading: false};
 
 // Inicializa los controles del visor de capturas persistentes de red; sin parámetros.
 function initGridEventsViewer() {
@@ -12,7 +12,7 @@ function initGridEventsViewer() {
         if (!this.checked) return;
         const waveOpen = $("#gridEventWaveDetails").prop("open");
         const source = waveOpen && gridWaveViewer.chart ? gridWaveViewer.chart :
-            (gridEventsViewer.currentVisible ? gridEventsViewer.currentChart : gridEventsViewer.voltageChart);
+            gridEventsViewer.voltageChart;
         syncGridChartRange(source);
     });
     $("#gridEventZoomToggle").on("click", () => setGridChartNavigationMode(false));
@@ -389,8 +389,9 @@ function renderGridEvent(event) {
     if (typeof appPhaseColor === 'function') for (const signal of voltageSeries) signal[2] = appPhaseColor(signal[1].slice(1));
     if (gridEventsViewer.voltageChart) gridEventsViewer.voltageChart.destroy();
     if (gridEventsViewer.currentChart) gridEventsViewer.currentChart.destroy();
-    gridEventsViewer.voltageChart = createGridChart("gridEventVoltageChart", "Voltaje RMS", "V", voltageSeries, displaySamples);
-    gridEventsViewer.currentChart = createGridChart("gridEventCurrentChart", "Corriente RMS", "A", [["R", "ir", "#d9534f"], ["S", "is", "#5cb85c"], ["T", "it", "#337ab7"], ["N", "inn", "#6c757d"]], displaySamples);
+    const currentSeries = [["R", "ir", "#d9534f"], ["S", "is", "#5cb85c"], ["T", "it", "#337ab7"], ["N", "inn", "#6c757d"]];
+    gridEventsViewer.voltageChart = createGridChart("gridEventVoltageChart", voltageSeries, currentSeries, displaySamples);
+    gridEventsViewer.currentChart = null;
     setGridChartNavigationMode(gridEventsViewer.panMode);
     refreshGridCharts();
 }
@@ -521,18 +522,20 @@ function resetGridChartRange() {
     if (typeof syncGridWaveRange === "function") syncGridWaveRange(null, null, true);
 }
 
-// Construye un gráfico Fast RMS; elementId identifica el contenedor y series define nombre, campo y color.
-function createGridChart(elementId, title, unit, series, samples) {
-    const data = series.map(([name, key, color]) => ({type: "line", name: name, appPhase:key === 'inn' ? 'N' : key.slice(1).toUpperCase(), appVariant:unit === 'A' ? .22 : 0,
+// Construye el gráfico FAST con dos ejes; elementId es el contenedor, voltageSeries y currentSeries definen señales y samples aporta lecturas.
+function createGridChart(elementId, voltageSeries, currentSeries, samples) {
+    // Convierte series y unidad a opciones CanvasJS conservando el eje y la unidad correspondientes.
+    const makeSeries = (series, unit) => series.map(([name, key, color]) => ({type: "line", name: (unit === "A" ? "I " : "V ") + name, signalUnit: unit, axisYType: unit === "A" ? "secondary" : "primary", appPhase:key === 'inn' ? 'N' : key.slice(1).toUpperCase(), appVariant:unit === 'A' ? .22 : 0,
         showInLegend: true, markerSize: 0, color: typeof appPhaseColor === 'function' ? appPhaseColor(key === 'inn' ? 'N' : key.slice(1),unit === 'A' ? .22 : 0) : color, connectNullData: false, dataPoints: samples.map((sample) => ({x: sample.relativeMs, y: sample[key] ?? null}))}));
+    const data = [...makeSeries(voltageSeries, "V"), ...makeSeries(currentSeries, "A")];
     let chart;
     chart = new CanvasJS.Chart(elementId, {animationEnabled: false, zoomEnabled: true,
-        toolTip: chartTooltip.options({title: "FAST RMS #" + gridEventsViewer.selectedId, unit,
+        toolTip: chartTooltip.options({title: "FAST RMS #" + gridEventsViewer.selectedId,
             markers: () => gridEventsViewer.records.map(record => ({at: record.offsetMs, priority: record.states.subject === 4 ? 0 : 1,
                 label: gridRecordSubject(record.states.subject, record.states.pointType) + " · " + (record.states.isPoint ? gridPointName(record.states.pointType) :
                     gridStateName(record.states.previous, record.states.subject) + " → " + gridStateName(record.states.current, record.states.subject)),
                 durationMs: record.states.isPoint ? record.previousDurationMs : 0}))}),
-        axisX: {title: "Tiempo relativo (ms)", stripLines: gridEventsViewer.showMarkers && samples.length ? gridRecordMarkers(gridEventsViewer.records, null, samples[0].relativeMs, samples[samples.length - 1].relativeMs) : []}, axisY: {title: title, suffix: " " + unit, includeZero: false, gridDashType: "dot"}, legend: {cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(chart), data: data});
+        axisX: {title: "Tiempo relativo (ms)", stripLines: gridEventsViewer.showMarkers && samples.length ? gridRecordMarkers(gridEventsViewer.records, null, samples[0].relativeMs, samples[samples.length - 1].relativeMs) : []}, axisY: {title: "Voltaje RMS", suffix: " V", includeZero: false, gridDashType: "dot"}, axisY2: {title: "Corriente RMS", suffix: " A", includeZero: false, gridThickness: 0}, legend: {cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(chart), data: data});
     chart.zoomEnabled = !gridEventsViewer.panMode;
     chart.panEnabled = gridEventsViewer.panMode;
     return chart;
@@ -577,12 +580,16 @@ function syncGridChartRange(source) {
 // Alterna la visibilidad de una serie; event identifica la serie y su grafico CanvasJS.
 function toggleGridSeries(event) { event.dataSeries.visible = event.dataSeries.visible === false; event.chart.render(); }
 
-// Muestra u oculta un gráfico Grid; type acepta voltage o current y visible define su estado final.
+// Muestra u oculta un grupo de señales; type acepta voltage o current y visible define su estado final.
 function setGridChartVisibility(type, visible) {
-    const isVoltage = type === "voltage", chartId = isVoltage ? "#gridEventVoltageChart" : "#gridEventCurrentChart", buttonId = isVoltage ? "#gridEventVoltageToggle" : "#gridEventCurrentToggle";
+    const isVoltage = type === "voltage", buttonId = isVoltage ? "#gridEventVoltageToggle" : "#gridEventCurrentToggle";
     gridEventsViewer[isVoltage ? "voltageVisible" : "currentVisible"] = visible;
-    $(chartId).toggleClass("d-none", !visible); $(buttonId).toggleClass("active", visible).attr("aria-pressed", visible);
-    if (visible) { const chart = isVoltage ? gridEventsViewer.voltageChart : gridEventsViewer.currentChart; if (chart) chart.render(); }
+    $(buttonId).toggleClass("active", visible).attr("aria-pressed", visible);
+    const chart = gridEventsViewer.voltageChart;
+    if (chart) {
+        chart.options.data.filter(series => series.signalUnit === (isVoltage ? "V" : "A")).forEach(series => { series.visible = visible; });
+        chart.render();
+    }
 }
 
 // Aplica las preferencias visibles a ambas gráficas después de cargar una captura.

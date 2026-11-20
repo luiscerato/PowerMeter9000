@@ -49,6 +49,13 @@ async function run() {
             await page.waitForFunction(()=>document.querySelector('#gridCaptureFilterStatus').textContent.startsWith('1 de 2'));
             assert.equal(await page.locator('#gridEventsList button').count(),1,'corte secundario de S, no disparador de R');
             assert.match(await page.locator('#gridEventsList button strong').textContent(), /Fase S.*Corte/);
+            await page.locator('#gridEventsList button').first().click();
+            await page.waitForFunction(()=>gridEventsViewer.voltageChart && gridEventsViewer.voltageChart.options.data.length >= 7);
+            assert.equal(await page.evaluate(()=>gridEventsViewer.voltageChart.options.data.filter(s=>s.signalUnit==='A').every(s=>s.axisYType==='secondary' && s.visible===true)),true);
+            await page.locator('#gridEventCurrentToggle').click();
+            assert.equal(await page.evaluate(()=>gridEventsViewer.voltageChart.options.data.filter(s=>s.signalUnit==='A').every(s=>s.visible===false)),true);
+            assert.equal(await page.evaluate(()=>gridEventsViewer.voltageChart.options.data.filter(s=>s.signalUnit==='V').every(s=>s.visible===true)),true);
+            await page.locator('#gridEventCurrentToggle').click();
             await page.locator('[aria-label="Opciones de las gráficas"]').click();
             await page.locator('#gridEventMarkers').waitFor({state:'visible'});
             await page.locator('#gridEventMarkers').uncheck();

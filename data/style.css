@@ -404,7 +404,7 @@ input[type=range][orient=vertical] {
 
 .gridEventInfo { min-width: 0; }
 .gridChartNavTools { position: relative; z-index: 1; }
-.gridChartNavTools .btn { min-height: 38px; touch-action: manipulation; }
+.gridChartNavTools .btn { touch-action: manipulation; }
 .gridChartNavTools label { min-height: 38px; padding: 0 4px; }
 .gridEventInfo summary { cursor: pointer; }
 .gridEventInfo .table { font-size: 12px; }
@@ -490,11 +490,18 @@ input[type=range][orient=vertical] {
 .gridCaptureEventTypes .btn-group { flex: 1 1 auto; }
 .gridCaptureViewTools { margin-left: auto; }
 .gridChartNavTools { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-.gridChartNavTools .btn, .gridCaptureFilters .btn, .gridChartInteraction .btn { font-size: 11px; padding: 2px 5px; }
+.gridChartNavTools .btn, .gridCaptureSelections .btn, .gridChartInteraction .btn { font-size: 12px; line-height: 1.2; min-height: 27px; padding: 3px 6px; }
+.gridCaptureSelections #gridCapturePhases .btn[aria-pressed="true"] { background: #276b86; border-color: #276b86; color: white; }
+.gridCaptureSelections #gridCaptureTypes .btn[aria-pressed="true"] { background: #47734b; border-color: #47734b; color: white; }
+.gridCaptureSelections #gridCapturePhases .btn:not([aria-pressed="true"]) { color: #276b86; border-color: #276b86; }
+.gridCaptureSelections #gridCaptureTypes .btn:not([aria-pressed="true"]) { color: #47734b; border-color: #47734b; }
 .gridChartOptions { font-size: 12px; min-width: 150px; }
 .gridChartOptions label { display: block; white-space: nowrap; padding: 3px 0; }
 .gridChartOptions input { width: auto; }
-.gridChartInteraction { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.gridFastChartWrap { position: relative; }
+.gridChartInteraction { position: absolute; right: 8px; top: 5px; z-index: 2; }
+.gridChartInteraction .btn { background: #fff; }
+.gridChartInteraction .btn.active { background: #6c757d; color: #fff; }
 #gridEventsList .list-group-item strong { font-size: 12px; font-weight: 600; }
 .gridEventExpanded > .gridChartNavTools { position: sticky; top: 0; z-index: 3; background: #fff; padding: 4px; }
 .gridCaptureFilterLine > select { width: auto; max-width: 180px; }
@@ -502,10 +509,11 @@ input[type=range][orient=vertical] {
 .gridCaptureFilterLine input[type="datetime-local"] { width: 205px; font-size: 12px; }
 .gridCaptureFilters button { font-size: 12px; }
 .gridCaptureFilters button[aria-pressed="true"] { background: #167d86; border-color: #167d86; color: #fff; }
+.gridChartNavTools button[aria-pressed="true"] { background: #59666c; border-color: #59666c; color: #fff; }
 @media (min-width: 1100px) {
     .gridCaptureSelections { column-gap: 8px; }
     .gridCaptureEventTypes { flex-wrap: nowrap; }
-    .gridCaptureEventTypes .btn { font-size: 10px; padding-inline: 3px; white-space: nowrap; }
+    .gridCaptureEventTypes .btn { white-space: nowrap; }
 }
 @media (max-width: 575px) {
     .gridCapturePeriod > .gridCaptureFilterLabel { flex-basis: 100%; }
