@@ -48,6 +48,11 @@ async function run() {
             await page.locator('#gridCapturePhases [data-capture-key="1"]').click();
             await page.waitForFunction(()=>document.querySelector('#gridCaptureFilterStatus').textContent.startsWith('1 de 2'));
             assert.equal(await page.locator('#gridEventsList button').count(),1,'corte secundario de S, no disparador de R');
+            assert.match(await page.locator('#gridEventsList button strong').textContent(), /Fase S.*Corte/);
+            await page.locator('#gridEventExpand').click();
+            assert.equal(await page.locator('#gridEventExpand').getAttribute('aria-pressed'),'true');
+            await page.keyboard.press('Escape');
+            assert.equal(await page.locator('#gridEventExpand').getAttribute('aria-pressed'),'false');
             assert.equal(peak,1);
             const before=downloads;
             await page.reload();

@@ -70,6 +70,7 @@ function showAppPage(pageId) {
     if (!capturePage) $("#" + pageId).addClass("active");
     if (typeof setEventHistoryActive === "function") setEventHistoryActive(pageId === "eventHistory");
     if (typeof setGridCaptureFiltersActive === "function") setGridCaptureFiltersActive(pageId === "gridEvents");
+    if (pageId !== "gridEvents" && typeof setGridEventExpanded === "function" && $('#gridEventWorkspace').hasClass('gridEventExpanded')) setGridEventExpanded(false);
     $(".app-page-link").removeClass("active").removeAttr("aria-current");
     $('.app-page-link[data-page="' + pageId + '"]').addClass("active").attr("aria-current", "page");
     $("#pageTitle").text(titles[pageId]);

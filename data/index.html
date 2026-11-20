@@ -638,22 +638,17 @@ bootApp();
                                 <div id="gridCaptureTypes" class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Tipo de evento"></div>
                             </div>
                         </div>
-                        <small id="gridCaptureFilterStatus" class="text-muted" role="status"></small>
                     </div>
                     <div class="row p-2">
                         <div class="col-sm-12 col-md-4 col-lg-3 mb-2">
                             <div class="border rounded p-2">
-                                <div class="d-flex justify-content-between align-items-center mb-2"><strong>Capturas</strong><div class="btn-group btn-group-sm"><button id="gridEventsTest" class="btn btn-outline-warning" type="button">Prueba</button><button id="gridEventsRefresh" class="btn btn-outline-secondary" type="button" title="Actualizar capturas" aria-label="Actualizar capturas">&#8635;</button></div></div>
+                                <div class="d-flex justify-content-between align-items-center gap-1 mb-2"><strong>Capturas</strong><small id="gridCaptureFilterStatus" class="text-muted ms-auto text-end" role="status"></small><div class="btn-group btn-group-sm"><button id="gridEventsTest" class="btn btn-outline-warning" type="button">Prueba</button><button id="gridEventsRefresh" class="btn btn-outline-secondary" type="button" title="Actualizar capturas" aria-label="Actualizar capturas">&#8635;</button></div></div>
                                 <div id="gridEventsStatus" class="small text-muted mb-2" role="status">Seleccione Eventos para cargar las capturas.</div>
                                 <div id="gridEventsList" class="list-group list-group-flush" style="max-height: 64vh; overflow-y: auto;"></div>
                             </div>
                         </div>
                         <div class="col-sm-12 col-md-8 col-lg-9">
-                            <div class="p-2">
-                                <div id="gridEventSummary" class="small fw-bold">Seleccione una captura para revisar sus registros.</div>
-                                <div id="gridEventTrigger" class="small text-muted mt-1"></div>
-                                <div id="gridEventWarnings" class="small text-danger mt-1 d-none" role="status"></div>
-                                <div id="gridEventOverview" class="gridEventOverview my-2" aria-label="Resumen de la captura"></div>
+                            <div class="p-2" id="gridEventWorkspace">
                                 <div class="gridChartNavTools d-flex flex-wrap gap-2 align-items-center justify-content-end mb-2" role="group" aria-label="Navegación de las gráficas">
                                     <label class="small d-inline-flex gap-1 align-items-center"><input id="gridEventMarkers" type="checkbox" checked>Marcas</label>
                                     <div class="btn-group btn-group-sm"><button id="gridEventVoltageToggle" class="btn btn-outline-primary active" type="button" aria-pressed="true">Voltajes</button><button id="gridEventCurrentToggle" class="btn btn-outline-primary" type="button" aria-pressed="false">Corrientes</button></div>
@@ -663,6 +658,7 @@ bootApp();
                                         <button id="gridEventPanToggle" class="btn btn-outline-secondary" type="button" aria-pressed="false" title="Arrastrá la gráfica para desplazarte" aria-label="Modo arrastrar">Mover</button>
                                     </div>
                                     <button id="gridEventResetZoom" class="btn btn-outline-secondary btn-sm" type="button" title="Ver todo el tramo" aria-label="Restablecer zoom">Vista completa</button>
+                                    <button id="gridEventExpand" class="btn btn-outline-secondary btn-sm" type="button" title="Ampliar gráficas" aria-label="Ampliar gráficas" aria-pressed="false">&#x26F6;</button>
                                 </div>
                                 <div class="row g-2">
                                     <div id="gridEventChartPanel" class="col-lg-8">
@@ -684,7 +680,7 @@ bootApp();
                                         </details>
                                     </div>
                                     <div class="col-lg-4">
-                                        <div class="border-start ps-2"><strong class="small">Transiciones y eventos</strong><div id="gridEventTransitions" class="small mt-2" style="max-height: 50vh; overflow-y: auto;"><span class="text-muted">Sin evento cargado.</span></div></div>
+                                        <div class="border-start ps-2"><div id="gridEventSummary" class="small fw-bold">Seleccione una captura para revisar sus registros.</div><div id="gridEventTrigger" class="small text-muted mt-1"></div><div id="gridEventWarnings" class="small text-danger mt-1 d-none" role="status"></div><div id="gridEventOverview" class="gridEventOverview my-2" aria-label="Resumen de la captura"></div><strong class="small">Transiciones y eventos</strong><div id="gridEventTransitions" class="small mt-2" style="max-height: 50vh; overflow-y: auto;"><span class="text-muted">Sin evento cargado.</span></div></div>
                                     </div>
                                 </div>
                             </div>

@@ -479,6 +479,8 @@ input[type=range][orient=vertical] {
 .eventHistoryLaneLabel { align-self: end; padding-bottom: 7px; }
 .eventHistoryPoints { position: relative; }
 .gridCaptureFilters { border-bottom: 1px solid #dee2e6; }
+.gridEventExpanded { position: fixed; inset: 0; z-index: 1050; overflow: auto; background: #fff; }
+.gridEventExpanded .historyChart { height: min(70vh, 700px); }
 .gridCaptureFilterLine { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .gridCapturePeriod { margin-top: 0; }
 .gridCaptureFilterLabel { font-size: 12px; white-space: nowrap; }

@@ -18,6 +18,8 @@ function initGridEventsViewer() {
     $("#gridEventZoomToggle").on("click", () => setGridChartNavigationMode(false));
     $("#gridEventPanToggle").on("click", () => setGridChartNavigationMode(true));
     $("#gridEventResetZoom").on("click", resetGridChartRange);
+    $("#gridEventExpand").on("click", () => setGridEventExpanded(!$('#gridEventWorkspace').hasClass('gridEventExpanded')));
+    $(document).on('keydown', event => { if (event.key === 'Escape' && $('#gridEventWorkspace').hasClass('gridEventExpanded')) setGridEventExpanded(false); });
     $("#gridEventWaveDetails").on("toggle", function () { if (this.open) loadGridWaves(); });
     $("#gridWaveRefresh").on("click", loadGridWaves);
     $("#gridWaveSelect").on("change", loadSelectedGridWave);
@@ -50,7 +52,7 @@ async function loadGridEventsViewer() {
         await applyGridCaptureFilters();
         setGridEventsStatus(gridEventsViewer.events.length + " eventos cargados; " + formatGridBytes(info.partitionBytes || 0) + " disponibles.");
     } catch (error) { gridEventsViewer.events = []; renderGridEventsList(); setGridEventsStatus(error.message || "No se pudo cargar el registro.", true); }
-    finally { gridEventsViewer.loading = false; }
+    finally { gridEventsViewer.loading = false; $('#gridEventsStatus').toggleClass('d-none', !$('#gridEventsStatus').hasClass('text-danger')); }
 }
 
 // Renderiza las capturas Grid recientes; sin parámetros.
@@ -69,7 +71,7 @@ function renderGridEventsList() {
         const descriptions = [...new Set(matches)];
         const details = descriptions.length ? descriptions.slice(0, 3).join('; ') + (descriptions.length > 3 ? ' · +' + (descriptions.length - 3) : '') : cached ? gridEventRecords(cached).length + " registros · " + buildGridOverview(cached).map(group => group.name).join(", ") : "Disparador: " + gridRecordSubject(event.y, event.c ? 4 : event.k) + " · " + description;
         list.append($("<button></button>").addClass("list-group-item list-group-item-action py-2").toggleClass("active", gridEventsViewer.selectedId === event.i).attr({type: "button", "aria-current": gridEventsViewer.selectedId === event.i ? "true" : "false"})
-            .html('<strong>Captura #' + event.i + '</strong><br><span class="small">' + when + '</span><br><span class="small">' + details + '</span>').on("click", () => loadGridEvent(event)));
+            .append($('<strong>').text(details), $('<div>').addClass('d-flex justify-content-between gap-1 small text-muted').append($('<span>').text('#' + event.i), $('<span>').text(when))).on("click", () => loadGridEvent(event)));
     });
 }
 
@@ -642,7 +644,14 @@ function formatGridDuration(milliseconds) {
 }
 
 // Actualiza el mensaje del visor; message describe el resultado e isError indica error.
-function setGridEventsStatus(message, isError) { $("#gridEventsStatus").text(message).toggleClass("text-danger", !!isError).toggleClass("text-muted", !isError); }
+function setGridEventsStatus(message, isError) { $("#gridEventsStatus").text(message).toggleClass("text-danger", !!isError).toggleClass("text-muted", !isError).toggleClass('d-none', !isError && !gridEventsViewer.loading); }
+
+// Amplia el area de graficas; expanded indica si ocupa la ventana.
+function setGridEventExpanded(expanded) {
+    $('#gridEventWorkspace').toggleClass('gridEventExpanded', expanded);
+    $('#gridEventExpand').attr('aria-pressed', String(expanded)).attr('title', expanded ? 'Salir de pantalla completa' : 'Ampliar gráficas');
+    for (const chart of [gridEventsViewer.voltageChart, gridEventsViewer.currentChart, gridWaveViewer.chart]) if (chart) chart.render();
+}
 
 // Convierte bytes a una etiqueta compacta; value indica la capacidad disponible.
 function formatGridBytes(value) { return value < 1048576 ? (value / 1024).toFixed(0) + " KiB" : (value / 1048576).toFixed(1) + " MiB"; }
