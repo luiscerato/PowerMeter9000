@@ -61,6 +61,7 @@ bool GridEventStore::begin()
 	neutralPreviousVoltage = NAN;
 	capture = Capture{};
 	statesReady = false;
+	gridFilter = gridStateFilter{};
 	storeMetrics.captureActive = false;
 	storeMetrics.rootPending = false;
 	storeMetrics.nextEventId = nextEventId;
@@ -142,6 +143,10 @@ void GridEventStore::observe(const phaseState& r, const phaseState& s, const pha
 		}
 		observedStates[3] = uint8_t(overall);
 		observedStartedMs[3] = sampleMs;
+		gridFilter.state = overall;
+		gridFilter.changedAtMs = sampleMs;
+		gridFilter.lastSampleMs = sampleMs;
+		gridFilter.hasSample = true;
 		statesReady = true;
 		startStartupCapture(phases, overall, voltages, meter, settings, sampleMs);
 		return;
@@ -252,7 +257,10 @@ void GridEventStore::poll()
 	bool waiting = hasPendingCandidatesInWindow();
 	for (const auto& point : points)
 		waiting |= point.active && !point.sustained && point.captured && point.captureId == capture.eventId;
-	const bool canClose = windowEnded || (!waiting && int32_t(millis() - capture.closeAfterMs) >= 0);
+	if (gridFilter.abnormalPending && int32_t(millis() - gridFilter.lastSampleMs) > 1000) gridFilter.abnormalPending = false;
+	const bool gridWaiting = gridFilter.abnormalPending && int32_t(gridFilter.pendingSinceMs - capture.startedMs) >= 0 &&
+		int32_t(capture.endMs - gridFilter.pendingSinceMs) >= 0;
+	const bool canClose = !gridWaiting && (windowEnded || (!waiting && int32_t(millis() - capture.closeAfterMs) >= 0));
 	if (!capture.rootAssigned) {
 		if (canClose || !waiting) { limitPoints(); finishCapture(false); }
 		return;
@@ -272,12 +280,12 @@ void GridEventStore::poll()
 	bool hasCompletedPage = false;
 	for (uint8_t page = 1; page < capture.pageCount; ++page)
 		hasCompletedPage |= (canClose || (page + 1 < capture.pageCount && capture.continuationSampleCount[page - 1] >= GridEventFormat::continuationSamples)) &&
-			!capture.pagePending[page] && !capture.pageWritten[page] && (canClose || !hasPendingCandidatesInPage(page - 1U));
+			!capture.pagePending[page] && !capture.pageWritten[page] && (canClose || (!gridWaiting && !hasPendingCandidatesInPage(page - 1U)));
 	if (hasCompletedPage) {
 		prepareContinuationPages();
 		for (uint8_t page = 1; page < capture.pageCount; ++page)
 			if ((canClose || (page + 1 < capture.pageCount && capture.continuationSampleCount[page - 1] >= GridEventFormat::continuationSamples)) &&
-				(canClose || !hasPendingCandidatesInPage(page - 1U)))
+				(canClose || (!gridWaiting && !hasPendingCandidatesInPage(page - 1U))))
 				submitPage(page);
 	}
 	if (!canClose) return;
@@ -438,14 +446,13 @@ void GridEventStore::observeNeutral(const meterValues& meter, const gridSettings
 void GridEventStore::observeGrid(const phaseState* phases[3], gridCondition overall, const meterValues& meter,
 	const gridSettings& settings, uint32_t sampleMs)
 {
-	const uint8_t current = uint8_t(overall);
-	if (current == observedStates[3]) return;
 	uint32_t startedMs = phases[0]->changedAtMs;
 	for (uint8_t index = 1; index < 3; ++index)
 		if (int32_t(phases[index]->changedAtMs - startedMs) > 0) startedMs = phases[index]->changedAtMs;
-	confirmGrid(overall, observedStartedMs[3], startedMs, meter, settings, sampleMs);
-	observedStates[3] = current;
-	observedStartedMs[3] = startedMs;
+	if (!updateGridStateFilter(gridFilter, overall, startedMs, sampleMs, settings.abnormalConfirmMs)) return;
+	confirmGrid(gridFilter.state, observedStartedMs[3], gridFilter.changedAtMs, meter, settings, sampleMs);
+	observedStates[3] = uint8_t(gridFilter.state);
+	observedStartedMs[3] = gridFilter.changedAtMs;
 }
 
 // Copia el contexto del primer cruce pendiente de una fase para poder reconstruirlo despues.

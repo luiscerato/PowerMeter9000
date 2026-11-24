@@ -2,10 +2,11 @@ const historyChartNames = {voltage: 'Voltajes', current: 'Corrientes', lineVolta
 let historyViewer = {charts: {}, records: [], seconds: 3600, loading: false, invalidPages: 0,
     visible: Object.fromEntries(Object.keys(historyChartNames).map(key => [key,key === 'voltage'])),
     order: Object.keys(historyChartNames), scales: {}, ranges: {}, linked: true, syncing: false, lastRange: null, seriesVisibility: {}, pan:{}};
+let historyKiloUnits = false;
 
 // Guarda orden, visibilidad, escalas y enlace localmente; sin parametros, no guarda muestras ni consulta el ESP.
 function saveHistoryViewOptions() {
-    try {localStorage.setItem('powerMeterHistoryView',JSON.stringify({order:historyViewer.order,visible:historyViewer.visible,scales:historyViewer.scales,linked:historyViewer.linked}));}
+    try {localStorage.setItem('powerMeterHistoryView',JSON.stringify({order:historyViewer.order,visible:historyViewer.visible,scales:historyViewer.scales,linked:historyViewer.linked,kilo:historyKiloUnits}));}
     catch (_) { /* El visor funciona tambien cuando el navegador no permite persistencia. */ }
 }
 
@@ -14,6 +15,7 @@ function loadHistoryViewOptions() {
     try {
         const saved = JSON.parse(localStorage.getItem('powerMeterHistoryView'));
         if (!saved || typeof saved !== 'object') return;
+        if (typeof saved.kilo === 'boolean') historyKiloUnits = saved.kilo;
         if (Array.isArray(saved.order)) historyViewer.order = [...new Set([...saved.order.filter(key => Object.hasOwn(historyChartNames,key)),...Object.keys(historyChartNames)])];
         for (const key of Object.keys(historyChartNames)) {
             if (typeof saved.visible?.[key] === 'boolean') historyViewer.visible[key] = saved.visible[key];
@@ -78,6 +80,7 @@ function applyHistoryScale(key,form) {
 // Inicializa los controles del visor histórico; sin parámetros.
 function initHistoryViewer() {
     loadHistoryViewOptions(); createHistoryChartPanels();
+    loadSharedHistoryUnits();
     const params = new URLSearchParams(location.search), from = params.get("from"), to = params.get("to");
     if (from && to && Number.isFinite(new Date(from).getTime()) && Number.isFinite(new Date(to).getTime())) {
         $("#historyFrom").val(formatHistoryDateInput(new Date(from)));
@@ -113,6 +116,35 @@ function initHistoryViewer() {
     window.addEventListener('resize',() => {clearTimeout(resizeTimer); resizeTimer = setTimeout(() => {
         for (const [key,chart] of Object.entries(historyViewer.charts)) if (chart && historyViewer.visible[key]) {chart.render(); alignHistoryPlot(chart);}
     },100);});
+}
+
+// Actualiza la unidad visual sin modificar muestras; kilo indica si se usan multiplos de mil.
+function setSharedHistoryUnits(kilo) {
+    if (historyKiloUnits === kilo) return;
+    const factor = kilo ? 0.001 : 1000;
+    for (const key of ['activePower','reactivePower','apparentPower','energy']) {
+        const scale = historyViewer.scales[key];
+        if (scale) { scale.min *= factor; scale.max *= factor; }
+    }
+    historyKiloUnits = kilo; saveHistoryViewOptions();
+    for (const key of ['activePower','reactivePower','apparentPower','energy']) {
+        const config = getHistoryChartConfig(key);
+        $('#historyPanel'+capitalizeHistoryChart(key)+' h3').text(config.title + ' (' + config.unit + ')');
+        const scale = historyViewer.scales[key];
+        if (scale) { $('#historyPanel'+capitalizeHistoryChart(key)+' [name=min]').val(scale.min); $('#historyPanel'+capitalizeHistoryChart(key)+' [name=max]').val(scale.max); }
+        if (historyViewer.visible[key]) renderHistoryChart(key);
+    }
+}
+
+// Lee la preferencia compartida en la placa; sin parametros, conserva vatios si aun no existe.
+async function loadSharedHistoryUnits() {
+    try {
+        const values = await readOptions('web',['kilo']);
+        if (values.kilo === 0 || values.kilo === 1) setSharedHistoryUnits(values.kilo === 1);
+        else if (values.kilo === 'key no existe') setSharedHistoryUnits(false);
+        const input = document.getElementById('appHistoryUnits');
+        if (input) input.value = historyKiloUnits ? '1' : '0';
+    } catch (_) { /* Una falla de configuracion no impide visualizar el historico. */ }
 }
 
 // Convierte una fecha local al formato que usa un control datetime-local; date es la fecha a mostrar.
@@ -489,10 +521,10 @@ function alignHistoryPlot(chart) {
 // Dibuja un grupo de series sobre su contenedor; chart identifica el tipo de gráfica.
 function renderHistoryChart(chart) {
     if (!historyViewer.records.length || typeof CanvasJS === "undefined") return clearHistoryChart(chart);
-    const config = getHistoryChartConfig(chart), data = config.series.map((series, lane) => ({type: config.step ? "stepLine" : "line", name: series.name, appPhase:series.phase, appVariant:series.variant || 0,
+    const config = getHistoryChartConfig(chart), divisor = historyKiloUnits && ['activePower','reactivePower','apparentPower','energy'].includes(chart) ? 1000 : 1, data = config.series.map((series, lane) => ({type: config.step ? "stepLine" : "line", name: series.name, appPhase:series.phase, appVariant:series.variant || 0,
         signalUnit: series.unit ?? config.unit, showInLegend: true, markerSize: 0, color: series.color, connectNullData:false,
         lineDashType:series.dash || 'solid', visible:historyViewer.seriesVisibility[chart+'|'+series.name] !== false,
-        dataPoints: historyViewer.records.map((record) => { const value = series.value(record); return {x: record.timestamp, y: Number.isFinite(value) ? config.step ? lane * 2 + value : value : null, tooltipText: config.step ? (value ? "Sí" : "No") : undefined}; })})).filter((series) => series.dataPoints.some(point => Number.isFinite(point.y)));
+        dataPoints: historyViewer.records.map((record) => { const value = series.value(record); return {x: record.timestamp, y: Number.isFinite(value) ? config.step ? lane * 2 + value : value / divisor : null, tooltipText: config.step ? (value ? "Sí" : "No") : undefined}; })})).filter((series) => series.dataPoints.some(point => Number.isFinite(point.y)));
     if (!data.length) return clearHistoryChart(chart, "La variable no está incluida en este perfil.");
     const axisY = {includeZero: false, gridDashType: "dot", interval: config.step ? 1 : undefined,
         labelFontFamily:'monospace', labelFontSize:10, labelAutoFit:false, labelWrap:false, margin:5, labelFormatter:event => historyAxisLabel(event,config)};
@@ -514,10 +546,18 @@ function renderHistoryChart(chart) {
     historyViewer.charts[chart].render(); alignHistoryPlot(historyViewer.charts[chart]);
 }
 
+// Devuelve el total guardado o la suma completa de fases; record es la muestra y prefix la magnitud.
+function historyTotal(record, prefix) {
+    const total = record[prefix + 'Total'];
+    if (Number.isFinite(total)) return total;
+    const phases = ['R', 'S', 'T'].map(phase => record[prefix + phase]);
+    return phases.every(Number.isFinite) ? phases.reduce((sum, value) => sum + value, 0) : null;
+}
+
 // Define las series visuales disponibles; chart identifica el grupo solicitado.
 function getHistoryChartConfig(chart) {
     const phaseSeries = (prefix, names, variant = 0, dash = 'solid') => names.map(([name, color]) => ({name: ['activeEnergy','reactiveEnergy','apparentEnergy'].includes(prefix) ? {activeEnergy:'Activa ',reactiveEnergy:'Reactiva ',apparentEnergy:'Aparente '}[prefix]+name : name, color: typeof appPhaseColor === 'function' ? appPhaseColor(name,variant) : color, phase:name, variant,dash,
-        unit: {activeEnergy: "Wh", reactiveEnergy: "varh", apparentEnergy: "VAh"}[prefix], value: (record) => record[prefix + name]}));
+        unit: {activeEnergy: historyKiloUnits?'kWh':'Wh', reactiveEnergy: historyKiloUnits?'kvarh':'varh', apparentEnergy: historyKiloUnits?'kVAh':'VAh'}[prefix], value: (record) => record[prefix + name]}));
     const colors = [["R", "#d9534f"], ["S", "#5cb85c"], ["T", "#337ab7"], ["N", "#6c757d"]];
     if (chart === "voltage") return {title: "Voltaje RMS", unit: "V", includeZero: false, series: phaseSeries("voltage", colors)};
     if (chart === "current") return {title: "Corriente RMS", unit: "A", includeZero: false, series: phaseSeries("current", colors)};
@@ -526,12 +566,13 @@ function getHistoryChartConfig(chart) {
     if (chart === 'voltageAngle') return {title:'Angulos entre fases',unit:'grados',series:['RS','ST','TR'].map((pair,index) => ({name:pair,phase:['R','S','T'][index],color:typeof appPhaseColor === 'function' ? appPhaseColor(['R','S','T'][index]) : colors[index][1],value:record => record['voltageAngle'+pair]}))};
     const batteries = {batteryVoltage:['Tension de bateria','V'],batteryInputVoltage:['Tension de entrada (Vbus)','V'],batteryCurrent:['Corriente de carga','A'],batteryLevel:['Nivel de bateria','%']};
     if (batteries[chart]) return {title:batteries[chart][0],unit:batteries[chart][1],series:[{name:historyChartNames[chart],color:'#087e83',value:record => record[chart]}]};
-    const powers = {activePower:['Potencia activa','W'],reactivePower:['Potencia reactiva','var'],apparentPower:['Potencia aparente','VA']};
-    if (powers[chart]) return {title:powers[chart][0],unit:powers[chart][1],series:[...phaseSeries(chart,colors.slice(0,3)),{name:'Total',color:'#087e83',value:record => record[chart+'Total']}]};
-    if (chart === "energy") return {title: "Energía", unit: "Wh / varh / VAh", includeZero: false, series: [
+    const powers = {activePower:['Potencia activa',historyKiloUnits?'kW':'W'],reactivePower:['Potencia reactiva',historyKiloUnits?'kvar':'var'],apparentPower:['Potencia aparente',historyKiloUnits?'kVA':'VA']};
+    if (powers[chart]) return {title:powers[chart][0],unit:powers[chart][1],series:[...phaseSeries(chart,colors.slice(0,3)),{name:'Total',color:'#087e83',value:record => historyTotal(record,chart)}]};
+    if (chart === "energy") return {title: "Energía", unit: historyKiloUnits ? "kWh / kvarh / kVAh" : "Wh / varh / VAh", includeZero: false, series: [
         ...phaseSeries("activeEnergy", colors.slice(0, 3)),
-        {name: "Reactiva total", color: "#6f42c1", unit: "varh", value: (record) => record.reactiveEnergyTotal},
-        {name: "Aparente total", color: "#fd7e14", unit: "VAh", value: (record) => record.apparentEnergyTotal},
+        {name: "Activa total", color: "#087e83", unit: historyKiloUnits?'kWh':'Wh', value: record => historyTotal(record,'activeEnergy')},
+        {name: "Reactiva total", color: "#6f42c1", unit: historyKiloUnits?'kvarh':'varh', value: record => historyTotal(record,'reactiveEnergy')},
+        {name: "Aparente total", color: "#fd7e14", unit: historyKiloUnits?'kVAh':'VAh', value: record => historyTotal(record,'apparentEnergy')},
         ...phaseSeries("reactiveEnergy", colors.slice(0,3),.2,'dash'),
         ...phaseSeries("apparentEnergy", colors.slice(0,3),.4,'dot'),
     ]};

@@ -131,6 +131,7 @@ bootApp();
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3zm0 6h18v2H3zm0 6h18v2H3zM7 8l-4 4 4 4v-3h5v-2H7z"/></svg>
             </button>
         </div>
+        <span id="mobilePageTitle" class="mobilePageTitle" aria-hidden="true"></span>
         <form class="d-flex align-items-center d-none p-1" style="height: 30px" role="search" id="navServerIP">
             <input class="form-control form-control-sm me-2" type="text" placeholder="IP de la placa ESP32" value="192.168.1.0" id="inputBoardURL" aria-label="IP de la placa" required />
             <button class="btn btn-sm btn-outline-light p-1" type="button" id="btnReloadIP">↻</button>
@@ -620,8 +621,8 @@ bootApp();
                         <div class="gridCaptureFilterLine gridCapturePeriod">
                             <strong class="gridCaptureFilterLabel">Período de análisis</strong>
                             <select id="gridCapturePreset" class="form-select form-select-sm" aria-label="Periodo de capturas"></select>
-                            <label>Desde <input id="gridCaptureFrom" type="datetime-local" step="1" class="form-control form-control-sm"></label>
-                            <label>Hasta <input id="gridCaptureTo" type="datetime-local" step="1" class="form-control form-control-sm"></label>
+                            <label>Desde <input id="gridCaptureFrom" type="datetime-local" step="1" class="form-control form-control-sm" aria-label="Desde fecha y hora"></label>
+                            <label>Hasta <input id="gridCaptureTo" type="datetime-local" step="1" class="form-control form-control-sm" aria-label="Hasta fecha y hora"></label>
                             <div class="btn-group btn-group-sm" role="group" aria-label="Desplazar periodo de capturas">
                                 <button class="btn btn-outline-secondary" type="button" data-capture-move="-1" title="Periodo anterior" aria-label="Periodo anterior">&#8592;</button>
                                 <button class="btn btn-outline-secondary" type="button" data-capture-move="0" title="Periodo actual" aria-label="Periodo actual">&#9678;</button>
@@ -630,17 +631,19 @@ bootApp();
                         </div>
                         <div class="gridCaptureFilterLine gridCaptureSelections">
                             <div class="gridCaptureFilterGroup">
-                                <span class="gridCaptureFilterLabel">Filtrar por fases</span>
+                                <button class="gridFilterMobileToggle btn btn-outline-secondary" type="button" data-grid-filter="gridCapturePhases" aria-expanded="false">Fases</button><span class="gridCaptureFilterLabel gridFilterDesktopLabel">Filtrar por fases</span>
                                 <div id="gridCapturePhases" class="btn-group btn-group-sm" role="group" aria-label="Filtrar por fases"></div>
                             </div>
                             <div class="gridCaptureFilterGroup gridCaptureEventTypes">
-                                <span class="gridCaptureFilterLabel">Tipo de evento</span>
+                                <button class="gridFilterMobileToggle btn btn-outline-secondary" type="button" data-grid-filter="gridCaptureTypes" aria-label="Filtrar tipos de evento" aria-expanded="false">Eventos <span aria-hidden="true">&#9662;</span></button><span class="gridCaptureFilterLabel gridFilterDesktopLabel">Tipo de evento</span>
                                 <div id="gridCaptureTypes" class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Tipo de evento"></div>
                             </div>
                             <div id="gridCaptureViewTools" class="gridCaptureViewTools">
                                 <div id="gridChartViewTools" class="gridChartNavTools" role="group" aria-label="Controles de vista">
+                                    <span class="gridCaptureFilterLabel">Controles de gráfica</span>
                                     <div class="btn-group btn-group-sm"><button id="gridEventVoltageToggle" class="btn btn-outline-secondary active" type="button" aria-pressed="true">Voltajes</button><button id="gridEventCurrentToggle" class="btn btn-outline-secondary active" type="button" aria-pressed="true">Corrientes</button></div>
-                                    <button id="gridEventResetZoom" class="btn btn-outline-secondary btn-sm" type="button" title="Ver todo el tramo" aria-label="Restablecer zoom">Vista completa</button>
+                                    <div class="btn-group btn-group-sm" role="group" aria-label="Modo de navegación"><button id="gridEventZoomToggle" class="btn btn-outline-secondary active" type="button" aria-pressed="true" title="Arrastrá sobre la gráfica para ampliar" aria-label="Zoom"><span class="gridDesktopButtonText">Zoom</span><svg class="gridMobileIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27A6.5 6.5 0 1 0 14 15.5l.27.28v.79l5 4.99L20.49 20l-4.99-5zm-5 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg></button><button id="gridEventPanToggle" class="btn btn-outline-secondary" type="button" aria-pressed="false" title="Arrastrá la gráfica para desplazarte" aria-label="Mover"><span class="gridDesktopButtonText">Mover</span><svg class="gridMobileIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 6.41 15.59 9 17 7.59l-5-5-5 5L8.41 9 11 6.41V11H6.41L9 8.41 7.59 7l-5 5 5 5L9 15.59 6.41 13H11v4.59L8.41 15 7 16.41l5 5 5-5L15.59 15 13 17.59V13h4.59L15 15.59 16.41 17l5-5-5-5L15 8.41 17.59 11H13z"/></svg></button></div>
+                                    <button id="gridEventResetZoom" class="btn btn-outline-secondary btn-sm" type="button" title="Ver todo el tramo" aria-label="Restablecer zoom"><span class="gridDesktopButtonText">Vista completa</span><svg class="gridMobileIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h2V5h4V3H3v6zm0 12h6v-2H5v-4H3v6zM19 19h-4v2h6v-6h-2v4zM15 3v2h4v4h2V3h-6z"/></svg></button>
                                     <button id="gridEventExpand" class="btn btn-outline-secondary btn-sm" type="button" title="Ampliar gráficas" aria-label="Ampliar gráficas" aria-pressed="false">&#x26F6;</button>
                                     <div class="dropdown"><button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Opciones de las gráficas" aria-label="Opciones de las gráficas">&#9881;</button>
                                         <div class="dropdown-menu dropdown-menu-end p-2 gridChartOptions">
@@ -652,46 +655,41 @@ bootApp();
                             </div>
                         </div>
                     </div>
-                    <div class="row p-2">
-                        <div class="col-sm-12 col-md-4 col-lg-3 mb-2">
-                            <div class="border rounded p-2">
-                                <div class="d-flex justify-content-between align-items-center gap-1 mb-2"><strong>Capturas</strong><small id="gridCaptureFilterStatus" class="text-muted ms-auto text-end" role="status"></small><div class="btn-group btn-group-sm"><button id="gridEventsTest" class="btn btn-outline-warning" type="button">Prueba</button><button id="gridEventsRefresh" class="btn btn-outline-secondary" type="button" title="Actualizar capturas" aria-label="Actualizar capturas">&#8635;</button></div></div>
+                    <div class="gridEventsLayout p-2">
+                        <div class="gridEventsCaptures">
+                            <div class="border rounded p-2 gridEventsCaptureBox">
+                                <div class="d-flex justify-content-between align-items-center gap-1 mb-2"><strong>Capturas</strong><small id="gridCaptureFilterStatus" class="text-muted ms-auto text-end" role="status"></small><div class="btn-group btn-group-sm"><button id="gridEventsRefresh" class="btn btn-outline-secondary" type="button" title="Actualizar capturas" aria-label="Actualizar capturas">&#8635;</button></div></div>
                                 <div id="gridEventsStatus" class="small text-muted mb-2" role="status">Seleccione Eventos para cargar las capturas.</div>
-                                <div id="gridEventsList" class="list-group list-group-flush" style="max-height: 64vh; overflow-y: auto;"></div>
+                                <div id="gridEventsList" class="list-group list-group-flush"></div>
                             </div>
                         </div>
-                        <div class="col-sm-12 col-md-8 col-lg-9">
-                            <div class="p-2" id="gridEventWorkspace">
-                                <div class="row g-2">
-                                    <div id="gridEventChartPanel" class="col-lg-8">
-                                        <div class="gridFastChartWrap"><div class="gridChartInteraction" role="group" aria-label="Navegación de las gráficas">
-                                            <div class="btn-group btn-group-sm" role="group" aria-label="Modo de navegación">
-                                                <button id="gridEventZoomToggle" class="btn btn-outline-secondary active" type="button" aria-pressed="true" title="Arrastrá sobre la gráfica para ampliar" aria-label="Modo zoom">Zoom</button>
-                                                <button id="gridEventPanToggle" class="btn btn-outline-secondary" type="button" aria-pressed="false" title="Arrastrá la gráfica para desplazarte" aria-label="Modo arrastrar">Mover</button>
-                                            </div>
-                                        </div>
+                        <div class="gridPanelDivider" data-panel="captures"><button type="button" class="gridPanelCollapse" aria-label="Ocultar capturas" title="Ocultar capturas">&#8249;</button></div>
+                        <div class="gridEventsWorkspace" id="gridEventWorkspace">
+                                <div class="gridEventsPanels">
+                                    <div id="gridEventChartPanel">
+                                        <div class="gridFastChartWrap">
                                         <div id="gridEventVoltageChart" class="historyChart"><div class="text-muted p-3">Sin evento cargado.</div></div>
                                         </div>
-                                        <details id="gridEventWaveDetails" class="gridEventInfo border-top mt-2 py-2">
+                                        <details id="gridEventWaveDetails" class="gridEventInfo border-top mt-2 py-2" open>
                                             <summary>Oscilografía</summary>
-                                            <div class="d-flex gap-2 align-items-center my-2"><select id="gridWaveSelect" class="form-select form-select-sm" aria-label="Captura Wave"></select><button id="gridWaveRefresh" type="button" class="btn btn-sm btn-outline-secondary">Recargar</button></div>
+                                            <div class="d-flex gap-1 align-items-center my-1"><div id="gridWaveSelect" class="gridWaveList" role="group" aria-label="Oscilografías disponibles"></div><button id="gridWaveRefresh" type="button" class="btn btn-sm btn-outline-secondary" title="Recargar oscilografías" aria-label="Recargar oscilografías"><svg class="gridActionIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.93 9h-2.02A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"/></svg></button></div>
                                             <div id="gridWaveStatus" class="small text-muted" role="status">Sin evento seleccionado.</div>
-                                            <div id="gridWaveChart" class="historyChart"></div>
+                                            <div id="gridWaveChart" class="historyChart d-none"></div>
                                         </details>
-                                        <details id="gridEventContextDetails" class="gridEventInfo border-top mt-2 py-2">
+                                    </div>
+                                    <div class="gridPanelDivider" data-panel="details"><button type="button" class="gridPanelCollapse" aria-label="Ocultar detalles" title="Ocultar detalles">&#8250;</button></div>
+                                    <div class="gridEventSide">
+                                        <div class="border-start ps-2"><div id="gridEventSummary" class="small fw-bold">Seleccione una captura para revisar sus registros.</div><div id="gridEventTrigger" class="small text-muted mt-1"></div><div id="gridEventWarnings" class="small text-danger mt-1 d-none" role="status"></div><div id="gridEventOverview" class="gridEventOverview my-2" aria-label="Resumen de la captura"></div><strong class="small">Transiciones y eventos</strong><div id="gridEventTransitions" class="small mt-2"><span class="text-muted">Sin evento cargado.</span></div></div>
+                                        <details id="gridEventContextDetails" class="gridEventInfo border-top mt-2 py-2" open>
                                             <summary class="small fw-bold">Contexto de medición</summary>
                                             <div id="gridEventContext" class="mt-2"><span class="small text-muted">Seleccione un evento para consultar su contexto.</span></div>
                                         </details>
-                                        <details id="gridEventSettingsDetails" class="gridEventInfo border-top py-2">
+                                        <details id="gridEventSettingsDetails" class="gridEventInfo border-top py-2" open>
                                             <summary class="small fw-bold">Configuración de captura</summary>
                                             <div id="gridEventSettings" class="mt-2"><span class="small text-muted">Seleccione un evento.</span></div>
                                         </details>
                                     </div>
-                                    <div class="col-lg-4">
-                                        <div class="border-start ps-2"><div id="gridEventSummary" class="small fw-bold">Seleccione una captura para revisar sus registros.</div><div id="gridEventTrigger" class="small text-muted mt-1"></div><div id="gridEventWarnings" class="small text-danger mt-1 d-none" role="status"></div><div id="gridEventOverview" class="gridEventOverview my-2" aria-label="Resumen de la captura"></div><strong class="small">Transiciones y eventos</strong><div id="gridEventTransitions" class="small mt-2" style="max-height: 50vh; overflow-y: auto;"><span class="text-muted">Sin evento cargado.</span></div></div>
-                                    </div>
                                 </div>
-                            </div>
                         </div>
                     </div>
 				</div>

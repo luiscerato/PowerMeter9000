@@ -28,7 +28,8 @@ struct gridSettings {
     uint32_t voltageConfirmMs = eventPointLimitMs();
     uint32_t recoveryConfirmMs = 250;
     uint8_t capturePages = 5;
-    uint8_t reserved[3] = {};
+    uint8_t reserved = 0;
+    uint16_t abnormalConfirmMs = 1000;
     neutralSettings neutral;
 };
 static_assert(sizeof(gridSettings) == 68, "Unexpected Grid settings size");
@@ -53,7 +54,8 @@ inline bool validGridSettings(const gridSettings& config) {
     }
     return config.lossConfirmMs >= 20 && config.lossConfirmMs <= 2000 &&
         config.voltageConfirmMs == eventPointLimitMs() &&
-        config.recoveryConfirmMs >= 20 && config.recoveryConfirmMs <= 1000 &&
+        config.recoveryConfirmMs >= 20 && config.recoveryConfirmMs <= 1000 && config.abnormalConfirmMs <= 1500 &&
+        config.abnormalConfirmMs >= (config.lossConfirmMs < 1500 ? config.lossConfirmMs : 1500) &&
         config.capturePages == eventCapturePages &&
         config.neutral.enabled && config.neutral.highVoltage >= 0.025f && config.neutral.highVoltage <= 409.55f &&
         config.neutral.hysteresis >= 0 && config.neutral.hysteresis < config.neutral.highVoltage &&
@@ -144,4 +146,31 @@ constexpr gridCondition deriveGridState(phaseCondition r, phaseCondition s, phas
         : r == phaseCondition::phaseLoss && s == r && t == r ? gridCondition::outage
         : r == phaseCondition::normal && s == r && t == r ? gridCondition::normal
         : gridCondition::abnormal;
+}
+
+struct gridStateFilter {
+    gridCondition state = gridCondition::unknown;
+    bool abnormalPending = false;
+    uint32_t pendingSinceMs = 0;
+    uint32_t changedAtMs = 0;
+    uint32_t lastSampleMs = 0;
+    bool hasSample = false;
+};
+
+// Filtra anormalidad de red; next es el estado derivado, sinceMs su inicio y nowMs el instante actual.
+inline bool updateGridStateFilter(gridStateFilter& filter, gridCondition next, uint32_t sinceMs, uint32_t nowMs, uint32_t confirmMs) {
+    const bool gap = filter.hasSample && uint32_t(nowMs - filter.lastSampleMs) > 50;
+    filter.lastSampleMs = nowMs;
+    filter.hasSample = next != gridCondition::unknown;
+    if (!filter.hasSample) { filter.abnormalPending = false; return false; }
+    if (next == filter.state) { filter.abnormalPending = false; return false; }
+    if (next == gridCondition::abnormal && filter.state != gridCondition::unknown && confirmMs) {
+        if (!filter.abnormalPending || gap) { filter.abnormalPending = true; filter.pendingSinceMs = gap ? nowMs : sinceMs; }
+        if (uint32_t(nowMs - filter.pendingSinceMs) < confirmMs) return false;
+        sinceMs = filter.pendingSinceMs;
+    }
+    filter.abnormalPending = false;
+    filter.state = next;
+    filter.changedAtMs = sinceMs;
+    return true;
 }

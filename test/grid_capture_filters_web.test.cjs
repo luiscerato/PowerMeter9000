@@ -19,7 +19,7 @@ function fixture(id,time) {
 async function run() {
     const browser=await chromium.launch({headless:true,channel:'msedge'});
     try {
-        for (const width of [1280,390]) {
+        for (const width of [1280,390,320]) {
             const page=await browser.newPage({viewport:{width,height:900}}), errors=[];
             let downloads=0,active=0,peak=0;
             page.on('pageerror',error=>errors.push(error.message));
@@ -39,23 +39,68 @@ async function run() {
             });
             await page.goto('http://captures.test/#gridEvents');
             await page.waitForFunction(()=>!gridEventsViewer.loading && gridEventsViewer.events.length===2);
+            assert.deepEqual(await page.evaluate(()=>{
+                const types=gridCaptureFilters.types, phases=gridCaptureFilters.phases;
+                gridCaptureFilters.types=new Set(['dip']); gridCaptureFilters.phases=new Set([0]);
+                const matching=gridCaptureIndexMatches({y:'R',p:'?',s:'?',k:1,t:1000},0,2000);
+                const wrongPhase=gridCaptureIndexMatches({y:'S',p:'?',s:'?',k:1,t:1000},0,2000);
+                const wrongType=gridCaptureIndexMatches({y:'R',p:'?',s:'?',k:3,t:1000},0,2000);
+                gridCaptureFilters.types=types; gridCaptureFilters.phases=phases;
+                return {matching,wrongPhase,wrongType};
+            }),{matching:true,wrongPhase:false,wrongType:false});
             assert.equal(await page.locator('#gridEventsList button').count(),2);
             await page.selectOption('#gridCapturePreset','today');
             await page.waitForFunction(()=>document.querySelectorAll('#gridEventsList button').length===1);
+            if (width < 1100) await page.locator('[data-grid-filter="gridCaptureTypes"]').click();
             await page.locator('#gridCaptureTypes [data-capture-key=all]').click();
             await page.locator('#gridCaptureTypes [data-capture-key=outage]').click();
+            if (width >= 768 && width < 1100) await page.locator('[data-grid-filter="gridCapturePhases"]').click();
             await page.locator('#gridCapturePhases [data-capture-key=all]').click();
             await page.locator('#gridCapturePhases [data-capture-key="1"]').click();
             await page.waitForFunction(()=>document.querySelector('#gridCaptureFilterStatus').textContent.startsWith('1 de 2'));
             assert.equal(await page.locator('#gridEventsList button').count(),1,'corte secundario de S, no disparador de R');
             assert.match(await page.locator('#gridEventsList button strong').textContent(), /Fase S.*Corte/);
+            assert.equal(await page.evaluate(()=>document.querySelector('.gridEventSide').contains(document.getElementById('gridEventContextDetails'))),true);
+            if (width >= 1100) {
+                assert.equal(await page.locator('.gridPanelDivider').count(),2);
+                assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('.gridEventSide')).overflowY),'auto');
+                const divider = await page.locator('[data-panel="captures"]').boundingBox();
+                const oldWidth = (await page.locator('.gridEventsCaptures').boundingBox()).width;
+                await page.mouse.move(divider.x+divider.width/2,divider.y+30); await page.mouse.down();
+                await page.mouse.move(divider.x+divider.width/2+40,divider.y+30,{steps:5}); await page.mouse.up();
+                assert.ok((await page.locator('.gridEventsCaptures').boundingBox()).width>oldWidth+20,'se puede ajustar el ancho');
+                await page.locator('[data-panel="captures"] button').click();
+                assert.equal(await page.locator('.gridEventsCaptures').isVisible(),false);
+                await page.locator('[data-panel="captures"] button').click();
+                await page.locator('[data-panel="details"] button').click();
+                assert.equal(await page.evaluate(()=>document.documentElement.scrollHeight<=innerHeight),true,'sin scroll general en escritorio');
+                assert.equal(await page.locator('.gridEventSide').isVisible(),false);
+                await page.locator('[data-panel="details"] button').click();
+            } else {
+                assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('.gridCapturePeriod')).flexWrap),'nowrap');
+                assert.equal(await page.evaluate(()=>document.getElementById('gridEventChartPanel').contains(document.getElementById('gridChartViewTools'))),true);
+                if (width < 768) {
+                    assert.equal(await page.evaluate(()=>{const bar=document.querySelector('.gridCapturePeriod'); return bar.scrollWidth<=bar.clientWidth;}),true,'fechas sin desplazamiento');
+                    assert.equal(await page.evaluate(()=>{const bar=document.querySelector('.gridCapturePeriod'), elements=[...bar.querySelectorAll('select,label,.btn-group')].map(e=>e.getBoundingClientRect()); return elements.every((box,i)=>!i || box.left>=elements[i-1].right-1);}),true,'fechas sin superposiciones');
+                    assert.equal(await page.evaluate(()=>{const phases=document.querySelector('#gridCapturePhases').getBoundingClientRect(), types=document.querySelector('[data-grid-filter="gridCaptureTypes"]').getBoundingClientRect(); return Math.abs(phases.top-types.top)<2 && phases.right<=types.left+1;}),true,'filtros de fase y tipo en una fila');
+                    assert.equal(await page.evaluate(()=>document.querySelector('#gridEventVoltageChart').getBoundingClientRect().height<100),true,'estado vacio compacto');
+                    assert.equal(await page.evaluate(()=>{const bar=document.getElementById('gridChartViewTools'); return bar.scrollWidth<=bar.clientWidth;}),true,'controles sin desplazamiento');
+                    await page.locator('[data-grid-filter="gridCaptureTypes"]').click();
+                    assert.equal(await page.evaluate(()=>{const menu=document.querySelector('#gridCaptureTypes'), box=menu.getBoundingClientRect(); return box.left>=0 && box.right<=innerWidth;}),true,'menu de eventos dentro de pantalla');
+                    await page.locator('[data-grid-filter="gridCaptureTypes"]').click();
+                }
+            }
             await page.locator('#gridEventsList button').first().click();
             await page.waitForFunction(()=>gridEventsViewer.voltageChart && gridEventsViewer.voltageChart.options.data.length >= 7);
+            assert.deepEqual(await page.evaluate(()=>gridRecordFocusRange({offsetMs:1000,previousDurationMs:3600000},0,5000)),{minimum:875,maximum:1125});
+            assert.deepEqual(await page.evaluate(()=>gridRecordFocusRange({offsetMs:20},0,5000)),{minimum:0,maximum:250});
             assert.equal(await page.evaluate(()=>gridEventsViewer.voltageChart.options.data.filter(s=>s.signalUnit==='A').every(s=>s.axisYType==='secondary' && s.visible===true)),true);
             await page.locator('#gridEventCurrentToggle').click();
             assert.equal(await page.evaluate(()=>gridEventsViewer.voltageChart.options.data.filter(s=>s.signalUnit==='A').every(s=>s.visible===false)),true);
             assert.equal(await page.evaluate(()=>gridEventsViewer.voltageChart.options.data.filter(s=>s.signalUnit==='V').every(s=>s.visible===true)),true);
+            if (width < 768) assert.equal(await page.evaluate(()=>gridEventsViewer.voltageChart.options.axisX.title==='Tiempo (ms)' && gridEventsViewer.voltageChart.options.axisY.title==='' && gridEventsViewer.voltageChart.options.legend.fontSize===10),true,'ejes y leyenda compactos');
             await page.locator('#gridEventCurrentToggle').click();
+            await page.locator('#gridEventVoltageToggle').click();
             await page.locator('[aria-label="Opciones de las gráficas"]').click();
             await page.locator('#gridEventMarkers').waitFor({state:'visible'});
             await page.locator('#gridEventMarkers').uncheck();
@@ -74,6 +119,7 @@ async function run() {
             await page.waitForFunction(()=>!gridEventsViewer.loading && document.querySelector('#gridCaptureFilterStatus').textContent.startsWith('1 de 2'));
             assert.equal(await page.locator('#gridCapturePreset').inputValue(),'today');
             assert.equal(await page.locator('#gridCapturePhases [data-capture-key="1"]').getAttribute('aria-pressed'),'true');
+            assert.equal(await page.locator('#gridEventVoltageToggle').getAttribute('aria-pressed'),'false');
             assert.equal(downloads,before,'reutiliza captura persistida');
             assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
             await page.screenshot({path:'tmp/capture-filters-'+width+'.png',fullPage:true});

@@ -25,7 +25,7 @@ const configField fields[] = {
     {"volt.loss", GRID(noVoltage), fieldType::number}, {"volt.hyst", GRID(hysteresis), fieldType::number},
     {"time.dip", POINT(dipConfirmMs), fieldType::time}, {"time.swell", POINT(swellConfirmMs), fieldType::time},
     {"time.oc", POINT(overCurrentConfirmMs), fieldType::time}, {"time.loss", GRID(lossConfirmMs), fieldType::time},
-    {"time.back", GRID(recoveryConfirmMs), fieldType::time},
+    {"time.back", GRID(recoveryConfirmMs), fieldType::time}, {"time.abnormal", GRID(abnormalConfirmMs), fieldType::pre},
     {"neut.high", NEUT(highVoltage), fieldType::number}, {"neut.hyst", NEUT(hysteresis), fieldType::number},
     {"neut.wait", NEUT(confirmMs), fieldType::time}, {"neut.back", NEUT(recoveryMs), fieldType::time},
     {"curr.high", POINT(overCurrent), fieldType::number}, {"curr.hyst", POINT(currentHysteresis), fieldType::number},

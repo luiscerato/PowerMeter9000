@@ -173,6 +173,7 @@ private:
 	uint32_t observedStartedMs[4] = {};
 	float observedVoltages[3] = {};
 	bool statesReady = false;
+	gridStateFilter gridFilter;
 	bool blockHasData[64] = {};
 	uint16_t currentBlock = 0;
 	uint8_t currentPage = 0;

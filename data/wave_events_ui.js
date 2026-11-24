@@ -4,9 +4,11 @@ let gridWaveViewer = {event: null, captures: [], request: 0, chart: null};
 function resetGridWaves(event, scope = null) {
     ++gridWaveViewer.request;
     gridWaveViewer.event = event; gridWaveViewer.captures = [];
+    gridWaveViewer.selectedId = null; gridWaveViewer.rootUs = null; gridWaveViewer.pendingTime = null;
     gridWaveViewer.cacheScope = scope;
     gridWaveViewer.controller?.abort();
     if (gridWaveViewer.chart) { gridWaveViewer.chart.destroy(); gridWaveViewer.chart = null; }
+    $('#gridWaveChart').addClass('d-none');
     $("#gridWaveSelect").empty(); $("#gridWaveStatus").text("Sin oscilografia cargada.");
 }
 
@@ -27,15 +29,16 @@ async function loadGridWaves() {
         gridWaveViewer.cacheScope = scope;
         gridWaveViewer.captures = result.captures || [];
         const select = $("#gridWaveSelect").empty();
-        for (const capture of gridWaveViewer.captures) select.append($("<option>").val(capture.id).text("Wave #" + capture.id));
-        if (!gridWaveViewer.captures.length) return $("#gridWaveStatus").text("Sin Wave confirmada. El cierre puede tardar unos segundos despues del FAST.");
+        for (const capture of gridWaveViewer.captures) select.append($("<button>").attr({type:'button', 'data-wave-id':capture.id, 'aria-pressed':'false'}).addClass('btn btn-sm btn-outline-secondary').text("#" + capture.id));
+        if (!gridWaveViewer.captures.length) return $("#gridWaveStatus").text("El evento no tiene ninguna oscilografía asociada.");
+        gridWaveViewer.selectedId = gridWaveViewer.captures[0].id;
         await loadSelectedGridWave();
     } catch (error) { if (token === gridWaveViewer.request) $("#gridWaveStatus").text(error.message); }
 }
 
 // Descarga un bloque fisico completo del selector actual; los cambios de seleccion invalidan respuestas viejas.
 async function loadSelectedGridWave() {
-    const capture = gridWaveViewer.captures.find(item => item.id === Number($("#gridWaveSelect").val()));
+    const capture = gridWaveViewer.captures.find(item => item.id === gridWaveViewer.selectedId);
     if (!capture) return;
     const token = ++gridWaveViewer.request, event = gridWaveViewer.event;
     gridWaveViewer.controller?.abort();
@@ -44,8 +47,31 @@ async function loadSelectedGridWave() {
     try {
         const wave = await loadCachedWave(event, capture, gridWaveViewer.cacheScope, controller.signal);
         if (token !== gridWaveViewer.request) return;
+        gridWaveViewer.rootUs = wave.rootUs;
+        $('#gridWaveSelect button').each(function () { $(this).toggleClass('active', Number(this.dataset.waveId) === wave.id).attr('aria-pressed', Number(this.dataset.waveId) === wave.id); });
         renderGridWave(wave, event);
+        if (gridWaveViewer.pendingTime != null) { const time = gridWaveViewer.pendingTime; gridWaveViewer.pendingTime = null; selectGridWaveForTime(time); }
     } catch (error) { if (token === gridWaveViewer.request) $("#gridWaveStatus").text(error.message); }
+}
+
+// Selecciona la oscilografia id de la lista actual y carga sus muestras.
+function selectGridWave(id) {
+    if (id === gridWaveViewer.selectedId && gridWaveViewer.chart) return;
+    gridWaveViewer.selectedId = id;
+    loadSelectedGridWave();
+}
+
+// Busca la oscilografia mas cercana a time en milisegundos respecto al FAST, cuando existe referencia comun.
+function selectGridWaveForTime(time) {
+    if (!Number.isFinite(time)) return;
+    if (!$('#gridEventWaveDetails').prop('open')) { gridWaveViewer.pendingTime = time; $('#gridEventWaveDetails').prop('open', true); return; }
+    if (!Number.isFinite(gridWaveViewer.rootUs)) { gridWaveViewer.pendingTime = time; return; }
+    const target = gridWaveViewer.rootUs + time * 1000;
+    const captures = gridWaveViewer.captures.filter(item => Number.isFinite(item.triggerUs) && Number.isFinite(item.endUs) &&
+        target >= item.endUs - (item.version === 2 ? 744000 : 1488000) && target <= item.endUs);
+    if (!captures.length) return;
+    const nearest = captures.reduce((best, item) => Math.abs(item.triggerUs - target) < Math.abs(best.triggerUs - target) ? item : best);
+    selectGridWave(nearest.id);
 }
 
 // Calcula CRC32 IEEE de bytes; start/length delimitan el rango y zeroOffset anula cuatro bytes de CRC.
@@ -167,24 +193,28 @@ function decodeCompactWaveEvent(buffer, eventId) {
 // Grafica wave con referencia temporal FAST de event; las corrientes usan un eje independiente.
 function renderGridWave(wave, event) {
     if (gridWaveViewer.chart) gridWaveViewer.chart.destroy();
+    $('#gridWaveChart').removeClass('d-none');
+    const mobileView = window.matchMedia("(max-width: 767.98px)").matches;
     const displaySamples = gridRegularSamples(wave.samples, 0.125), fastSamples = gridFastDisplaySamples(event);
     const definitions = [["R", "vr", "#d9534f"], ["S", "vs", "#5cb85c"], ["T", "vt", "#337ab7"],
         ["IR", "ir", "#d9534f"], ["IS", "is", "#5cb85c"], ["IT", "it", "#337ab7"], ["IN", "inn", "#6c757d"]];
     if (typeof appPhaseColor === 'function') for (const signal of definitions)
         signal[2] = appPhaseColor(signal[1] === 'inn' ? 'N' : signal[1].slice(1),signal[1][0] === 'i' ? .22 : 0);
-    const data = definitions.map(([name, key, color], index) => ({type: "line", name, color, markerSize: 0,
-        axisYType: index < 3 ? "primary" : "secondary", signalUnit: index < 3 ? "V" : "A", visible: index < 3, showInLegend: true,
+    const data = definitions.map(([name, key, color], index) => ({type: "line", name, color, markerSize: 0, signalGroup: index < 3 ? 'voltage' : 'current',
+        axisYType: index < 3 ? "primary" : "secondary", signalUnit: index < 3 ? "V" : "A", visible: index < 3 ? gridEventsViewer.voltageVisible : gridEventsViewer.currentVisible, showInLegend: true,
         connectNullData: false, dataPoints: displaySamples.map(point => ({x: point.relativeMs, y: point[key]}))}));
     // La leyenda permite superponer RMS de referencia sin modificar la captura almacenada.
     for (const [name, key, color] of [["R RMS", "vr", "#d9534f"], ["S RMS", "vs", "#5cb85c"], ["T RMS", "vt", "#337ab7"]])
-        data.push({type: "line", name, appPhase:key.slice(1).toUpperCase(), color:typeof appPhaseColor === 'function' ? appPhaseColor(key.slice(1)) : color, signalUnit: "V RMS", visible: false, showInLegend: true, markerSize: 0, lineDashType: "dash",
+        data.push({type: "line", name, appPhase:key.slice(1).toUpperCase(), color:typeof appPhaseColor === 'function' ? appPhaseColor(key.slice(1)) : color, signalGroup:'voltage', signalUnit: "V RMS", visible: false, showInLegend: true, markerSize: 0, lineDashType: "dash",
             dataPoints: fastSamples.map(point => ({x: point.relativeMs, y: point[key]}))});
+    for (const [name, key, color] of [["IR RMS", "ir", "#d9534f"], ["IS RMS", "is", "#5cb85c"], ["IT RMS", "it", "#337ab7"], ["IN RMS", "inn", "#6c757d"]])
+        data.push({type:"line", name, color:typeof appPhaseColor === 'function' ? appPhaseColor(key === 'inn' ? 'N' : key.slice(1), .22) : color, signalGroup:'current', signalUnit:"A RMS", axisYType:"secondary", visible:false, showInLegend:true, markerSize:0, lineDashType:"dash", dataPoints:fastSamples.map(point => ({x:point.relativeMs, y:point[key]}))});
     gridWaveViewer.chart = new CanvasJS.Chart("gridWaveChart", {animationEnabled: false, zoomEnabled: true,
         toolTip: chartTooltip.options({title: "Oscilografía #" + wave.id, digits: 3, origin: event.timestamp,
             markers: [{at: wave.triggerMs, label: "Disparo Wave"}]}),
-        axisX: {title: "Tiempo relativo al FAST (ms)", stripLines: [{value: wave.triggerMs, label: "Disparo Wave"}]},
-        axisY: {title: "Voltaje", suffix: " V"}, axisY2: {title: "Corriente", suffix: " A"},
-        legend: {cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(gridWaveViewer.chart), data});
+        axisX: {title: mobileView ? "Tiempo (ms)" : "Tiempo relativo al FAST (ms)", titleFontSize: mobileView ? 11 : 14, labelFontSize: mobileView ? 10 : 12, stripLines: [{value: wave.triggerMs, label: "Disparo Wave"}]},
+        axisY: {title: mobileView ? "" : "Voltaje", labelFontSize: mobileView ? 10 : 12, suffix: " V"}, axisY2: {title: mobileView ? "" : "Corriente", labelFontSize: mobileView ? 10 : 12, suffix: " A"},
+        legend: {fontSize: mobileView ? 10 : 12, cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(gridWaveViewer.chart), data});
     gridWaveViewer.chart.zoomEnabled = !gridEventsViewer.panMode;
     gridWaveViewer.chart.panEnabled = gridEventsViewer.panMode;
     gridWaveViewer.chart.render();

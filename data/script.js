@@ -74,6 +74,8 @@ function showAppPage(pageId) {
     $(".app-page-link").removeClass("active").removeAttr("aria-current");
     $('.app-page-link[data-page="' + pageId + '"]').addClass("active").attr("aria-current", "page");
     $("#pageTitle").text(titles[pageId]);
+    $("#mobilePageTitle").text(pageId === 'gridEvents' ? titles[pageId] : '');
+    $("#appRoot").toggleClass('mobileGridEvents', pageId === 'gridEvents');
     resetPageScroll();
 	if (typeof setMeterPollingActive === "function") setMeterPollingActive(pageId === "home" || pageId === "allMeasures");
     const menu = document.getElementById("navbarNavAltMarkup");

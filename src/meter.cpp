@@ -792,7 +792,7 @@ static void meterApplyFastRms(const float voltages[3], const float currents[4], 
 	taskENTER_CRITICAL(&gridConfigMutex);
 	const bool settingsChanged = gridConfigPending;
 	const bool resetPhases = settingsChanged &&
-		(memcmp(&gridConfig, &requestedGridConfig, offsetof(gridSettings, neutral)) != 0);
+		(memcmp(&gridConfig, &requestedGridConfig, offsetof(gridSettings, abnormalConfirmMs)) != 0);
 	if (settingsChanged) {
 		gridConfig = requestedGridConfig;
 		portENTER_CRITICAL(&captureConfigMutex);

@@ -479,6 +479,47 @@ input[type=range][orient=vertical] {
 .eventHistoryLaneLabel { align-self: end; padding-bottom: 7px; }
 .eventHistoryPoints { position: relative; }
 .gridCaptureFilters { border-bottom: 1px solid #dee2e6; }
+.gridFilterMobileToggle { display: none; }
+.mobilePageTitle, .gridMobileIcon { display: none; }
+.gridActionIcon { display: block; width: 16px; height: 16px; fill: currentColor; }
+.gridPanelDivider { display: none; }
+.gridEventsLayout, .gridEventsWorkspace, .gridEventsPanels, #gridEventChartPanel, .gridEventSide { min-width: 0; }
+#gridEventsList { max-height: 50vh; overflow-y: auto; }
+@media (min-width: 1100px) {
+    .gridEventsLayout { display: flex; gap: 8px; height: var(--gridEventsHeight, 70vh); min-height: 260px; }
+    #mainContent:has(#gridEvents.active) { height: 100dvh; overflow: hidden; padding-bottom: 45px; }
+    #mainContent:has(#gridEvents.active) + #divFooter > div:first-child { display: none; }
+    .gridEventsCaptures { width: 250px; min-width: 150px; max-width: 38%; flex: none; overflow: auto; }
+    .gridEventsCaptureBox { display: flex; flex-direction: column; height: 100%; }
+    #gridEventsList { flex: 1; min-height: 0; max-height: none; }
+    .gridEventsWorkspace { flex: 1; }
+    .gridEventsPanels { display: flex; height: 100%; gap: 8px; }
+    #gridEventChartPanel { flex: 1; overflow-y: auto; }
+    .gridEventSide { flex: none; width: 300px; min-width: 180px; max-width: 50%; overflow: auto; }
+    .gridPanelDivider { display: flex; flex: 0 0 6px; align-items: center; justify-content: center; cursor: col-resize; touch-action: none; background: #e4e9e9; }
+    .gridPanelCollapse { border: 1px solid #c3cccc; background: white; border-radius: 2px; width: 13px; padding: 0; line-height: 22px; z-index: 1; cursor: pointer; }
+    .gridEventsLayout.capturesCollapsed .gridEventsCaptures, .gridEventsPanels.detailsCollapsed .gridEventSide { display: none; }
+    .gridEventExpanded .gridEventsPanels { height: calc(100vh - 48px); }
+}
+@media (max-width: 1099px) {
+    .gridCaptureFilterLine.gridCapturePeriod { flex-wrap: nowrap; overflow-x: auto; }
+    .gridEventsWorkspace { margin-top: 8px; }
+    .gridEventSide { margin-top: 8px; }
+    .gridCaptureSelections > .gridCaptureFilterGroup { position: relative; flex: 0 1 auto; }
+    .gridFilterMobileToggle { display: inline-block; }
+    .gridFilterDesktopLabel { display: none; }
+    .gridCaptureSelections .gridCaptureFilterGroup > .btn-group { display: none; position: absolute; z-index: 20; top: 100%; left: 0; min-width: 190px; max-width: min(90vw, 370px); padding: 6px; background: #fff; border: 1px solid #adb5bd; box-shadow: 0 3px 8px #0003; flex-wrap: wrap; }
+    .gridCaptureSelections .gridCaptureFilterGroup.gridFilterOpen > .btn-group { display: flex; }
+    .gridCaptureEventTypes .btn-group { flex: none; }
+    .gridCaptureViewTools { width: 100%; margin: 0 0 6px; overflow-x: auto; }
+    .gridChartNavTools { justify-content: flex-start; flex-wrap: nowrap; width: max-content; }
+    .gridCapturePeriod { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+    .gridCapturePeriod > .gridCaptureFilterLabel { display: none; }
+    .gridCapturePeriod > label { flex: none; }
+    .gridCapturePeriod input[type="datetime-local"] { width: 175px; flex: none; }
+    .gridCapturePeriod > select { width: 110px; min-width: 110px; flex: none; }
+    .gridCapturePeriod .btn-group { flex: none; }
+}
 .gridEventExpanded { position: fixed; inset: 0; z-index: 1050; overflow: auto; background: #fff; }
 .gridEventExpanded .historyChart { height: min(70vh, 700px); }
 .gridCaptureFilterLine { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
@@ -490,7 +531,9 @@ input[type=range][orient=vertical] {
 .gridCaptureEventTypes .btn-group { flex: 1 1 auto; }
 .gridCaptureViewTools { margin-left: auto; }
 .gridChartNavTools { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-.gridChartNavTools .btn, .gridCaptureSelections .btn, .gridChartInteraction .btn { font-size: 12px; line-height: 1.2; min-height: 27px; padding: 3px 6px; }
+.gridChartNavTools .btn, .gridCaptureSelections .btn { font-size: 13px; line-height: 1.2; min-height: 28px; padding: 3px 5px; }
+.gridChartNavTools [aria-label="Ampliar gráficas"], .gridChartNavTools [aria-label="Opciones de las gráficas"] { font-size: 17px; line-height: 1; min-width: 30px; }
+.gridWaveList { display: flex; flex-wrap: wrap; gap: 4px; }
 .gridCaptureSelections #gridCapturePhases .btn[aria-pressed="true"] { background: #276b86; border-color: #276b86; color: white; }
 .gridCaptureSelections #gridCaptureTypes .btn[aria-pressed="true"] { background: #47734b; border-color: #47734b; color: white; }
 .gridCaptureSelections #gridCapturePhases .btn:not([aria-pressed="true"]) { color: #276b86; border-color: #276b86; }
@@ -499,9 +542,6 @@ input[type=range][orient=vertical] {
 .gridChartOptions label { display: block; white-space: nowrap; padding: 3px 0; }
 .gridChartOptions input { width: auto; }
 .gridFastChartWrap { position: relative; }
-.gridChartInteraction { position: absolute; right: 8px; top: 5px; z-index: 2; }
-.gridChartInteraction .btn { background: #fff; }
-.gridChartInteraction .btn.active { background: #6c757d; color: #fff; }
 #gridEventsList .list-group-item strong { font-size: 12px; font-weight: 600; }
 .gridEventExpanded > .gridChartNavTools { position: sticky; top: 0; z-index: 3; background: #fff; padding: 4px; }
 .gridCaptureFilterLine > select { width: auto; max-width: 180px; }
@@ -510,6 +550,7 @@ input[type=range][orient=vertical] {
 .gridCaptureFilters button { font-size: 12px; }
 .gridCaptureFilters button[aria-pressed="true"] { background: #167d86; border-color: #167d86; color: #fff; }
 .gridChartNavTools button[aria-pressed="true"] { background: #59666c; border-color: #59666c; color: #fff; }
+.gridCaptureViewTools:empty { display: none; }
 @media (min-width: 1100px) {
     .gridCaptureSelections { column-gap: 8px; }
     .gridCaptureEventTypes { flex-wrap: nowrap; }
@@ -521,6 +562,61 @@ input[type=range][orient=vertical] {
     .gridCaptureFilterLine > label { flex: 1 1 100%; }
     .gridCaptureFilterLine input[type="datetime-local"] { flex: 1; width: 0; min-width: 0; }
     .gridCaptureFilterLine > select { flex: 1; width: 0; min-width: 120px; max-width: none; }
+}
+@media (max-width: 1099px) {
+    .gridCapturePeriod > label { flex: none; }
+    .gridCapturePeriod > select { flex: none; width: 110px; min-width: 110px; }
+    .gridCapturePeriod input[type="datetime-local"] { flex: none; width: 175px; }
+    #gridEventChartPanel > .gridChartNavTools { display: flex; flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; width: 100%; margin-bottom: 6px; }
+    #gridEventChartPanel > .gridChartNavTools > * { flex-shrink: 0; }
+}
+@media (max-width: 767.98px) {
+    .mobileGridEvents .mobilePageTitle { display: block; font-size: 16px; font-weight: 600; margin-left: auto; margin-right: 8px; }
+    .mobileGridEvents .pageHeading { display: none; }
+    .mobileGridEvents #gridCaptureFilters { padding-top: 3px !important; padding-bottom: 3px !important; }
+    .mobileGridEvents .gridCaptureFilterLine { gap: 3px; margin-top: 3px; }
+    .mobileGridEvents .gridCapturePeriod { overflow: visible; padding: 0; }
+    .mobileGridEvents .gridCapturePeriod > select { width: 78px; min-width: 0; font-size: 11px; padding: 3px 15px 3px 3px; }
+    .mobileGridEvents .gridCapturePeriod > label { flex: 1 1 0; font-size: 0; }
+    .mobileGridEvents .gridCapturePeriod > label::before { content: 'Desde'; font-size: 10px; }
+    .mobileGridEvents .gridCapturePeriod > label:nth-of-type(2)::before { content: 'Hasta'; }
+    .mobileGridEvents .gridCapturePeriod input[type="datetime-local"] { flex: 1 1 0; width: 0; min-width: 0; overflow: hidden; padding: 3px 1px; font-size: 11px; }
+    .mobileGridEvents .gridCapturePeriod .btn { padding: 3px 4px; font-size: 11px; }
+    .mobileGridEvents .gridCaptureSelections { flex-wrap: nowrap; gap: 4px; }
+    .mobileGridEvents .gridCaptureSelections > .gridCaptureFilterGroup { flex: 0 0 auto; flex-wrap: nowrap; gap: 3px; }
+    .mobileGridEvents [data-grid-filter="gridCapturePhases"] { display: none; }
+    .mobileGridEvents .gridCaptureSelections .gridCaptureFilterGroup:first-child .gridFilterDesktopLabel { display: inline; font-size: 0; }
+    .mobileGridEvents .gridCaptureSelections .gridCaptureFilterGroup:first-child .gridFilterDesktopLabel::before { content: 'Fases'; font-size: 11px; }
+    .mobileGridEvents .gridCaptureSelections #gridCapturePhases { position: static; display: flex; flex: 0 0 auto; flex-wrap: nowrap; width: max-content; min-width: max-content; max-width: none; padding: 0; border: 0; box-shadow: none; }
+    .mobileGridEvents #gridCapturePhases .btn { min-height: 28px; padding: 3px 5px; font-size: 12px; }
+    .mobileGridEvents .gridCaptureEventTypes { margin-left: auto; }
+    .mobileGridEvents .gridCaptureEventTypes > .btn-group { left: auto; right: 0; }
+    .mobileGridEvents .gridCaptureEventTypes > .gridFilterMobileToggle { white-space: nowrap; padding: 4px 6px; }
+    .mobileGridEvents #gridEventsList { max-height: 230px; }
+    .mobileGridEvents .gridEventsCaptureBox { padding: 5px !important; }
+    .mobileGridEvents .gridEventsCaptureBox > .mb-2 { margin-bottom: 3px !important; }
+    .mobileGridEvents .gridEventOverview { font-size: 12px; }
+    .mobileGridEvents .gridEventOverviewRow { grid-template-columns: minmax(0, 88px) minmax(0, 1fr); gap: 5px; padding: 3px 0; }
+    .mobileGridEvents #gridEventTransitions .table { font-size: 11px; }
+    .mobileGridEvents #gridEventTransitions .table th,
+    .mobileGridEvents #gridEventTransitions .table td { padding: 4px 3px; }
+    .mobileGridEvents #gridEventTransitions .badge { font-size: 9px; }
+    .mobileGridEvents #gridEventVoltageChart,
+    .mobileGridEvents #gridWaveChart { height: 350px; min-height: 350px; }
+    .mobileGridEvents #gridEventVoltageChart:has(> .text-muted) { height: 76px; min-height: 76px; display: flex; align-items: center; }
+    .mobileGridEvents #gridEventVoltageChart:has(> .text-muted) > .text-muted { padding: 8px !important; }
+    .mobileGridEvents .gridChartNavTools .gridCaptureFilterLabel { display: none; }
+    .mobileGridEvents .gridChartNavTools .btn { padding: 3px 5px; }
+    .mobileGridEvents .gridDesktopButtonText { display: none; }
+    .mobileGridEvents .gridMobileIcon { display: block; width: 16px; height: 16px; fill: currentColor; }
+}
+@media (max-width: 359px) {
+    .mobileGridEvents .gridCapturePeriod > label::before { content: 'D'; }
+    .mobileGridEvents .gridCapturePeriod > label:nth-of-type(2)::before { content: 'H'; }
+    .mobileGridEvents .gridCapturePeriod > select { width: 67px; }
+    .mobileGridEvents .gridChartNavTools { gap: 2px; }
+    .mobileGridEvents .gridChartNavTools .btn { font-size: 11px; padding: 3px; }
+    .mobileGridEvents .gridChartNavTools [aria-label="Ampliar gráficas"], .mobileGridEvents .gridChartNavTools [aria-label="Opciones de las gráficas"] { min-width: 26px; font-size: 16px; }
 }
 .eventHistoryRestart { position: absolute; top: 3px; width: 10px; height: 10px; padding: 0; border: 1px solid #fff; border-radius: 50%; background: #59666c; cursor: pointer; }
 .eventHistoryRestart:focus-visible { outline: 2px solid #16859b; }

@@ -561,6 +561,7 @@ static BackupOptionType backupOptionType(const String& nameSpace, const String& 
 		if (backupKeyInList(key, meterFloat, sizeof(meterFloat) / sizeof(meterFloat[0]))) return BackupOptionType::floatingPoint;
 		if (backupKeyInList(key, meterSigned, sizeof(meterSigned) / sizeof(meterSigned[0]))) return BackupOptionType::signedInt;
 	}
+	else if (nameSpace == "web" && key == "kilo") return BackupOptionType::boolean;
 	else if (nameSpace == "ADE9000" && (key == "neutralRms" || key == "neutralFast"))
 		return BackupOptionType::floatingPoint;
 	else if (nameSpace == "ADE9000" && backupKeyInList(key, calibration, sizeof(calibration) / sizeof(calibration[0])))
@@ -915,7 +916,7 @@ static void handleBackupOptionsPost(AsyncWebServerRequest* request)
 		return;
 	}
 	const String nameSpace = request->getParam("ns", true)->value();
-	if (nameSpace != "wifi-stuff" && nameSpace != "meter" && nameSpace != "ADE9000") {
+	if (nameSpace != "wifi-stuff" && nameSpace != "meter" && nameSpace != "ADE9000" && nameSpace != "web") {
 		request->send(400, "application/json", "{\"ok\":false,\"error\":\"namespace_not_allowed\"}");
 		return;
 	}

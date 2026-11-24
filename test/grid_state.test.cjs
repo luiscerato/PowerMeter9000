@@ -81,6 +81,12 @@ constexpr bool settingsValidation() {
     if (validGridSettings(values)) return false;
     values = gridSettings{};
     values.hysteresis = -1;
+    if (validGridSettings(values)) return false;
+    values = gridSettings{}; values.abnormalConfirmMs = 249;
+    if (validGridSettings(values)) return false;
+    values.abnormalConfirmMs = 1500;
+    if (!validGridSettings(values)) return false;
+    values.abnormalConfirmMs = 1501;
     return !validGridSettings(values);
 }
 static_assert(settingsValidation(), "Validacion de ajustes");
@@ -89,6 +95,36 @@ static_assert(deriveGridState(phaseCondition::phaseLoss, phaseCondition::phaseLo
 static_assert(deriveGridState(phaseCondition::normal, phaseCondition::phaseLoss, phaseCondition::phaseLoss) == gridCondition::abnormal, "Retorno parcial");
 static_assert(deriveGridState(phaseCondition::normal, phaseCondition::normal, phaseCondition::normal) == gridCondition::normal, "Red normal");
 static_assert(deriveGridState(phaseCondition::normal, phaseCondition::unknown, phaseCondition::normal) == gridCondition::unknown, "Arranque no inventa normalidad");
+// Comprueba filtrado de anormalidad, corte inmediato, retorno y configuracion cero; sin parametros.
+constexpr bool gridFilter() {
+    gridStateFilter filter;
+    if (!updateGridStateFilter(filter, gridCondition::normal, 0, 0, 1000)) return false;
+    for (uint32_t t=10; t<1000; t+=10) {
+        updateGridStateFilter(filter, gridCondition::abnormal, 10, t, 1000);
+        if (filter.state != gridCondition::normal) return false;
+    }
+    if (!updateGridStateFilter(filter, gridCondition::outage, 1000, 1000, 1000) || filter.changedAtMs != 1000) return false;
+    for (uint32_t t=1010; t<=2010; t+=10) updateGridStateFilter(filter, gridCondition::abnormal, 1010, t, 1000);
+    if (filter.state != gridCondition::abnormal || filter.changedAtMs != 1010) return false;
+    if (!updateGridStateFilter(filter, gridCondition::normal, 2020, 2020, 1000)) return false;
+    return updateGridStateFilter(filter, gridCondition::abnormal, 2030, 2030, 0);
+}
+static_assert(gridFilter(), "Red anormal diferida y corte inmediato");
+// Verifica que intervalos breves se descarten y que un hueco no confirme el candidato; sin parametros.
+constexpr bool gridFilterTransient() {
+    gridStateFilter filter;
+    updateGridStateFilter(filter, gridCondition::normal, 0, 0, 1000);
+    for (uint32_t t=10; t<=200; t+=10) updateGridStateFilter(filter, gridCondition::abnormal, 10, t, 1000);
+    if (!updateGridStateFilter(filter, gridCondition::outage, 210, 210, 1000) || filter.state != gridCondition::outage) return false;
+    for (uint32_t t=220; t<=600; t+=10) updateGridStateFilter(filter, gridCondition::abnormal, 220, t, 1000);
+    if (!updateGridStateFilter(filter, gridCondition::normal, 610, 610, 1000)) return false;
+    updateGridStateFilter(filter, gridCondition::abnormal, 620, 620, 1000);
+    updateGridStateFilter(filter, gridCondition::abnormal, 620, 1200, 1000);
+    if (filter.state != gridCondition::normal || filter.pendingSinceMs != 1200) return false;
+    for (uint32_t t=1210; t<=2200; t+=10) updateGridStateFilter(filter, gridCondition::abnormal, 620, t, 1000);
+    return filter.state == gridCondition::abnormal && filter.changedAtMs == 1200;
+}
+static_assert(gridFilterTransient(), "No registrar anormalidades breves ni confirmar huecos");
 `;
 fs.mkdirSync(path.dirname(output), {recursive: true});
 fs.writeFileSync(output, harness);

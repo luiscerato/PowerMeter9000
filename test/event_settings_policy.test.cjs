@@ -74,12 +74,12 @@ constexpr bool commit() {
 }
 // Un fallo NVS conserva todos los ajustes anteriores y no recicla el ID de intento.
 constexpr bool failure() {
-    Store store;eventSettingsData data;uint32_t next=0;data.preMs=288;
+    Store store;eventSettingsData data;uint32_t next=0;data.preMs=48;
     store.eventSettingsQueue(data,1,&next);store.writeOk=false;store.eventSettingsPoll();
     if(store.current.revision!=1||store.current.config.preMs!=96||store.applied||store.current.state!=eventSaveState::failed)return false;
     store.writeOk=true;store.eventSettingsQueue(data,1,&next);store.eventSettingsPoll();
     eventSettingsSnapshot snapshot;store.eventSettingsGet(snapshot);
-    return next==3&&store.current.revision==3&&store.writes==2&&store.current.config.preMs==288&&snapshot.restartRequired;
+    return next==3&&store.current.revision==3&&store.writes==2&&store.current.config.preMs==48&&snapshot.restartRequired;
 }
 // Rechaza limites incompatibles, NaN, confirmaciones fuera de paso y reservas invalidas.
 constexpr bool invalid() {

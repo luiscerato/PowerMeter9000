@@ -20,7 +20,7 @@ async function run() {
         let posts = 0, optionLoads = 0, optionPosts = 0, reloads = 0, failOptions = false, failLoad = false, failSave = false;
         const meterOptions = {dipEnabled:1,dipMs:50,swellEnabled:1,swellMs:50,overcurrent:1,ocCurrent:50,ocHyst:1,ocMs:10};
         let waveSaveEnabled = true, wavePosts = 0, wavePointMask = 7;
-        const eventState={grid:values,meter:meterOptions,wave:{preMs:192,saveEnabled:true,pointMask:7},
+        const eventState={grid:values,meter:meterOptions,wave:{preMs:96,saveEnabled:true,pointMask:7},
             onGet:()=>++optionLoads,failGet:()=>failLoad||failOptions,failPost:fields=>failSave&&fields.has('volt.lowR'),
             onPost:fields=>{
                 if(fields.has('volt.lowR'))++posts;
@@ -132,10 +132,13 @@ async function run() {
         await page.click('#btnCopyGridLimits');
         assert.equal(await page.inputValue('#grid_highT'), '250');
         await page.fill('#grid_lowR', '195');
+        assert.equal(await page.inputValue('#grid_abnormalConfirmMs'), '1000');
+        await page.fill('#grid_abnormalConfirmMs', '1200');
         await page.fill('#opt_meter_ocCurrent','60');
         await page.click('#gridSettingsForm button[type=submit]');
         await page.waitForFunction(() => document.getElementById('gridSettingsStatus').textContent.startsWith('Guardado.'));
         assert.equal(values.lowR, 195);
+        assert.equal(values.abnormalConfirmMs, 1200);
         assert.equal(values.lowS, 185);
         assert.equal(posts, 1);
         assert.equal(meterOptions.ocCurrent,60,'los limites guardan tambien sobrecorriente');

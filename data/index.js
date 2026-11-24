@@ -276,7 +276,7 @@ const backupNetworkKeys = [
 ];
 
 const backupGridKeys = ["lowR", "highR", "lowS", "highS", "lowT", "highT", "noVoltage", "hysteresis",
-    "lossConfirmMs", "recoveryConfirmMs",
+    "lossConfirmMs", "recoveryConfirmMs", "abnormalConfirmMs",
     "neutralHigh", "neutralHysteresis", "neutralConfirmMs", "neutralRecoveryMs"];
 const backupHistoryKeys = ["enabled", "groupConfig", "samplePeriodDeciseconds"];
 const backupEnergyKeys = ["rWattH", "rVarH", "rVaH", "sWattH", "sVarH", "sVaH", "tWattH", "tVarH", "tVaH", "WattH", "VarH", "VaH"];
@@ -319,10 +319,14 @@ function assertSettingsMatch(expected,actual) {
 
 // Valida limites y relaciones de red; values contiene el grupo completo de estados de red.
 function validateGridValues(values) {
-    const limits={noVoltage:[1,100],hysteresis:[0,50],lossConfirmMs:[20,2000],recoveryConfirmMs:[20,1000],
+    const limits={noVoltage:[1,100],hysteresis:[0,50],lossConfirmMs:[20,2000],recoveryConfirmMs:[20,1000],abnormalConfirmMs:[0,1500],
         neutralHigh:[0.025,409.55],neutralHysteresis:[0,409.55],neutralConfirmMs:[20,2000],neutralRecoveryMs:[20,1000]};
     for(const [key,[min,max]] of Object.entries(limits))
+        if(key==='abnormalConfirmMs'&&!Object.hasOwn(values,key))continue;
+        else
         if(!settingsNumber(values[key],min,max,key.endsWith('Ms')))throw Error('Valor fuera de rango en '+key+'.');
+    if(Object.hasOwn(values,'abnormalConfirmMs') && Number(values.abnormalConfirmMs)<Math.min(Number(values.lossConfirmMs),1500))
+        throw Error('Confirmación de red anormal: el mínimo es el tiempo de pérdida de fase, limitado a 1500 ms.');
     for(const phase of ['R','S','T']) {
         const low=Number(values['low'+phase]),high=Number(values['high'+phase]),hyst=Number(values.hysteresis);
         if(!settingsNumber(values['low'+phase],1,500)||!settingsNumber(values['high'+phase],1,500)||
@@ -653,6 +657,7 @@ function createGridSettingsHtml() {
         ["hysteresis", "Histéresis (V)", 0, 50, "0.01"],
         ["lossConfirmMs", "Confirmación sin tensión (ms)", 20, 2000, "1"],
         ["recoveryConfirmMs", "Confirmación normalidad (ms)", 20, 1000, "1"],
+        ["abnormalConfirmMs", "Confirmación red anormal (ms)", 20, 1500, "1"],
     ];
     fields.forEach(([key, label, min, max, step]) => {
         html += '<div class="settingsField"><label for="grid_' + key + '">' + label + '</label><input class="form-control form-control-sm" required type="number" id="grid_' + key + '" name="' + key + '" min="' + min + '" max="' + max + '" step="' + step + '"></div>';
@@ -928,7 +933,7 @@ function fillGridSettings(values) {
 
 let eventsConfig = null, eventsStatus = null, eventsLoad = null, eventsSaving = false;
 const eventGridFields = {lowR:"volt.lowR",lowS:"volt.lowS",lowT:"volt.lowT",highR:"volt.highR",highS:"volt.highS",highT:"volt.highT",
-    noVoltage:"volt.loss",hysteresis:"volt.hyst",lossConfirmMs:"time.loss",recoveryConfirmMs:"time.back",
+    noVoltage:"volt.loss",hysteresis:"volt.hyst",lossConfirmMs:"time.loss",recoveryConfirmMs:"time.back",abnormalConfirmMs:"time.abnormal",
     neutralHigh:"neut.high",neutralHysteresis:"neut.hyst",neutralConfirmMs:"neut.wait",neutralRecoveryMs:"neut.back"};
 const eventPointFields = {dipEnabled:"rec.dip",swellEnabled:"rec.swell",overcurrent:"rec.oc",dipMs:"time.dip",swellMs:"time.swell",ocMs:"time.oc",ocCurrent:"curr.high",ocHyst:"curr.hyst"};
 
@@ -1429,7 +1434,7 @@ function validateBackupSection(section, values) {
         throw new Error("La configuración de oscilografías no es válida.");
     if (keys.some((key) => values[key] === null || !["string", "number", "boolean"].includes(typeof values[key])))
         throw new Error("Contiene un valor con formato inválido.");
-    if (section === "grid" && !backupGridKeys.every((key) => Object.prototype.hasOwnProperty.call(values, key)))
+    if (section === "grid" && !backupGridKeys.filter(key => key !== 'abnormalConfirmMs').every((key) => Object.prototype.hasOwnProperty.call(values, key)))
         throw new Error("Faltan límites o tiempos de red.");
     if (section === "history" && (!backupHistoryKeys.every((key) => Object.prototype.hasOwnProperty.call(values, key)) ||
         ![true, false, 0, 1, "true", "false", "0", "1"].includes(values.enabled) ||

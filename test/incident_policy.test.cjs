@@ -66,6 +66,7 @@ struct Store {
     uint32_t nowMs = 0, nextEventId = 1, armedThroughMs = 0;
     Capture capture;
     Candidate candidates[4] = {};
+    gridStateFilter gridFilter;
     pointTracker points[10] = {};
     uint32_t currentStartedMs[4] = {}, observedStartedMs[4] = {};
     uint8_t observedStates[4] = {1,1,1,1};
@@ -115,6 +116,8 @@ struct Store {
     ${method('appendRecord', 'bool')}
     ${method('addTransition')}
     ${method('confirmCandidate')}
+    ${method('confirmGrid')}
+    ${method('observeGrid')}
     ${method('startStartupCapture')}
     ${method('startCandidate')}
     ${method('discardCandidate')}
@@ -198,6 +201,46 @@ constexpr bool discarded() {
     Scenario off; off.config.dipEnabled = false; off.feed(150, 0, 1000, 1500); off.feed(220, 0, 1510, 3000);
     return !s.store.writtenCount && !off.store.writtenCount && !off.store.capture.active;
 }
+// Confirma solo anormalidades sostenidas y conserva el corte inmediato; sin parametros.
+constexpr bool gridTransitions() {
+    Store store; meterValues meter; gridSettings settings;
+    phaseState r, s, t; const phaseState* phases[] = {&r,&s,&t};
+    store.gridFilter.state = gridCondition::normal; store.gridFilter.hasSample = true;
+    r.changedAtMs = 100;
+    for (uint32_t ms=100; ms<=230; ms+=10) store.observeGrid(phases, gridCondition::abnormal, meter, settings, ms);
+    if (store.observedStates[3] != uint8_t(gridCondition::normal)) return false;
+    t.changedAtMs = 240; store.observeGrid(phases, gridCondition::outage, meter, settings, 240);
+    if (store.observedStates[3] != uint8_t(gridCondition::outage)) return false;
+    r.changedAtMs = 300;
+    for (uint32_t ms=300; ms<1300; ms+=10) store.observeGrid(phases, gridCondition::abnormal, meter, settings, ms);
+    if (store.observedStates[3] != uint8_t(gridCondition::outage)) return false;
+    store.observeGrid(phases, gridCondition::abnormal, meter, settings, 1300);
+    return store.observedStates[3] == uint8_t(gridCondition::abnormal) && store.observedStartedMs[3] == 300;
+}
+static_assert(gridTransitions(), "Estados de red sostenidos y corte inmediato");
+// Retiene el cierre si la marca pendiente comenzo dentro de la captura; sin parametros.
+constexpr bool gridPendingAtClose() {
+    Store store; meterValues meter; gridSettings settings;
+    Store::Candidate candidate; candidate.active=true; candidate.startedMs=1000; candidate.capturePages=5;
+    candidate.subject=GridEventFormat::Subject::grid; candidate.previousState=1; candidate.currentState=3;
+    store.confirmCandidate(candidate, 0, 1000);
+    store.gridFilter.abnormalPending=true; store.gridFilter.pendingSinceMs=5600; store.gridFilter.lastSampleMs=5790;
+    store.nowMs=5800; store.poll();
+    if (!store.capture.active || store.finished) return false;
+    store.gridFilter.abnormalPending=false; store.poll();
+    return store.finished == 1;
+}
+static_assert(gridPendingAtClose(), "No cerrar captura con marca de red pendiente");
+// Una perdida prolongada de muestras no bloquea para siempre la captura; sin parametros.
+constexpr bool gridPendingTimeout() {
+    Store store; Store::Candidate candidate; candidate.active=true; candidate.startedMs=1000; candidate.capturePages=5;
+    candidate.subject=GridEventFormat::Subject::grid; candidate.previousState=1; candidate.currentState=3;
+    store.confirmCandidate(candidate, 0, 1000);
+    store.gridFilter.abnormalPending=true; store.gridFilter.pendingSinceMs=5600; store.gridFilter.lastSampleMs=5600;
+    store.nowMs=6701; store.poll();
+    return store.finished == 1 && !store.gridFilter.abnormalPending;
+}
+static_assert(gridPendingTimeout(), "No bloquear ante muestras ausentes");
 static_assert(shortDip(), "DIP completo: RAM, duracion y posttrigger");
 static_assert(sustainedVoltage(), "Estado obligatorio, no DIP duplicado y retorno");
 static_assert(dipToOutage(), "Promocion a corte conserva el inicio");

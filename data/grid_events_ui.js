@@ -3,12 +3,23 @@ let gridEventsViewer = {events: [], cache: new Map(), selectedId: null, request:
 // Inicializa los controles del visor de capturas persistentes de red; sin parámetros.
 function initGridEventsViewer() {
     initGridCaptureFilters();
-    $("#gridEventsRefresh").on("click", loadGridEventsViewer); $("#gridEventsTest").on("click", createGridEventTest);
+    initGridEventsLayout();
+    try {
+        const saved = JSON.parse(localStorage.getItem('powerMeter.captureView') || '{}');
+        for (const key of ['voltageVisible', 'currentVisible', 'showMarkers', 'linkViews']) if (typeof saved[key] === 'boolean') gridEventsViewer[key] = saved[key];
+        for (const id of ['gridEventWaveDetails', 'gridEventContextDetails', 'gridEventSettingsDetails']) if (typeof saved[id] === 'boolean') document.getElementById(id).open = saved[id];
+    } catch (_) {}
+    $('#gridEventMarkers').prop('checked', gridEventsViewer.showMarkers);
+    $('#gridEventLinkViews').prop('checked', gridEventsViewer.linkViews);
+    refreshGridCharts();
+    $('#gridEventWaveDetails, #gridEventContextDetails, #gridEventSettingsDetails').on('toggle', saveGridCaptureView);
+    $("#gridEventsRefresh").on("click", loadGridEventsViewer);
     $("#gridEventVoltageToggle").on("click", () => setGridChartVisibility("voltage", !gridEventsViewer.voltageVisible));
     $("#gridEventCurrentToggle").on("click", () => setGridChartVisibility("current", !gridEventsViewer.currentVisible));
-    $("#gridEventMarkers").on("change", function () { gridEventsViewer.showMarkers = this.checked; refreshGridMarkers(); });
+    $("#gridEventMarkers").on("change", function () { gridEventsViewer.showMarkers = this.checked; saveGridCaptureView(); refreshGridMarkers(); });
     $("#gridEventLinkViews").on("change", function () {
         gridEventsViewer.linkViews = this.checked;
+        saveGridCaptureView();
         if (!this.checked) return;
         const waveOpen = $("#gridEventWaveDetails").prop("open");
         const source = waveOpen && gridWaveViewer.chart ? gridWaveViewer.chart :
@@ -22,7 +33,69 @@ function initGridEventsViewer() {
     $(document).on('keydown', event => { if (event.key === 'Escape' && $('#gridEventWorkspace').hasClass('gridEventExpanded')) setGridEventExpanded(false); });
     $("#gridEventWaveDetails").on("toggle", function () { if (this.open) loadGridWaves(); });
     $("#gridWaveRefresh").on("click", loadGridWaves);
-    $("#gridWaveSelect").on("change", loadSelectedGridWave);
+    $("#gridWaveSelect").on("click", "button", function () { selectGridWave(Number(this.dataset.waveId)); });
+}
+
+// Adapta paneles y controles al ancho de pantalla; no recibe parametros.
+function initGridEventsLayout() {
+    const layout = document.querySelector('.gridEventsLayout'), chartPanel = document.getElementById('gridEventChartPanel');
+    const desktop = matchMedia('(min-width: 1100px)');
+    let timer;
+    // Ajusta altura disponible y reubica la barra segun el modo actual; no recibe parametros.
+    function updateLayout() {
+        const expanded = $('#gridEventWorkspace').hasClass('gridEventExpanded');
+        if (!expanded) $('#gridChartViewTools').appendTo(desktop.matches ? '#gridCaptureViewTools' : '#gridEventChartPanel');
+        if (!desktop.matches && !expanded) $('#gridChartViewTools').prependTo(chartPanel);
+        if (desktop.matches && layout.getBoundingClientRect().top > 0)
+            layout.style.setProperty('--gridEventsHeight', Math.max(260, innerHeight - layout.getBoundingClientRect().top - 45) + 'px');
+    }
+    $('.gridFilterMobileToggle').on('click', function () {
+        const group = $(this).parent(), open = !group.hasClass('gridFilterOpen');
+        $('.gridFilterMobileToggle').attr('aria-expanded', 'false').parent().removeClass('gridFilterOpen');
+        group.toggleClass('gridFilterOpen', open); $(this).attr('aria-expanded', open);
+    });
+    $('.gridPanelDivider').each(function () {
+        const divider = this, left = divider.dataset.panel === 'captures';
+        const panel = document.querySelector(left ? '.gridEventsCaptures' : '.gridEventSide');
+        const container = document.querySelector(left ? '.gridEventsLayout' : '.gridEventsPanels');
+        const className = left ? 'capturesCollapsed' : 'detailsCollapsed', button = divider.querySelector('button');
+        button.addEventListener('click', () => {
+            const collapsed = container.classList.toggle(className);
+            button.textContent = left ? (collapsed ? '›' : '‹') : (collapsed ? '‹' : '›');
+            const label = (collapsed ? 'Mostrar ' : 'Ocultar ') + (left ? 'capturas' : 'detalles');
+            button.setAttribute('aria-label', label); button.title = label;
+        });
+        divider.addEventListener('pointerdown', event => {
+            if (event.target === button || container.classList.contains(className)) return;
+            const startX = event.clientX, startWidth = panel.getBoundingClientRect().width;
+            divider.setPointerCapture(event.pointerId);
+            // Ajusta el panel segun el desplazamiento horizontal del puntero; move es el evento activo.
+            const move = move => { panel.style.width = Math.max(left ? 150 : 180, startWidth + (move.clientX - startX) * (left ? 1 : -1)) + 'px'; };
+            // Finaliza el arrastre y retira los escuchadores; no recibe parametros.
+            const end = () => { divider.removeEventListener('pointermove', move); divider.removeEventListener('pointerup', end); divider.removeEventListener('pointercancel', end); };
+            divider.addEventListener('pointermove', move); divider.addEventListener('pointerup', end); divider.addEventListener('pointercancel', end);
+        });
+    });
+    $(document).on('click', event => {
+        if (!$(event.target).closest('.gridFilterOpen').length)
+            $('.gridFilterMobileToggle').attr('aria-expanded', 'false').parent().removeClass('gridFilterOpen');
+    });
+    $(window).on('resize', updateLayout);
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => {
+        clearTimeout(timer); timer = setTimeout(() => {
+            updateLayout();
+            for (const chart of [gridEventsViewer.voltageChart, gridWaveViewer.chart]) if (chart) chart.render();
+        }, 150);
+    }).observe(chartPanel);
+    updateLayout();
+}
+
+// Guarda la visibilidad y los paneles del visor en este navegador; no recibe parametros.
+function saveGridCaptureView() {
+    const saved = {};
+    for (const key of ['voltageVisible', 'currentVisible', 'showMarkers', 'linkViews']) saved[key] = gridEventsViewer[key];
+    for (const id of ['gridEventWaveDetails', 'gridEventContextDetails', 'gridEventSettingsDetails']) saved[id] = document.getElementById(id).open;
+    try { localStorage.setItem('powerMeter.captureView', JSON.stringify(saved)); } catch (_) {}
 }
 
 // Descarga el índice reciente y actualiza la lista de eventos disponibles; sin parámetros.
@@ -52,15 +125,15 @@ async function loadGridEventsViewer() {
         await applyGridCaptureFilters();
         setGridEventsStatus(gridEventsViewer.events.length + " eventos cargados; " + formatGridBytes(info.partitionBytes || 0) + " disponibles.");
     } catch (error) { gridEventsViewer.events = []; renderGridEventsList(); setGridEventsStatus(error.message || "No se pudo cargar el registro.", true); }
-    finally { gridEventsViewer.loading = false; $('#gridEventsStatus').toggleClass('d-none', !$('#gridEventsStatus').hasClass('text-danger')); }
+    finally { gridEventsViewer.loading = false; renderGridEventsList(); $('#gridEventsStatus').toggleClass('d-none', !$('#gridEventsStatus').hasClass('text-danger')); }
 }
 
 // Renderiza las capturas Grid recientes; sin parámetros.
 function renderGridEventsList() {
     const list = $("#gridEventsList").empty();
-    if (!gridEventsViewer.events.length) return list.append('<div class="text-muted small p-2">No hay eventos persistidos todavía.</div>');
+    if (!gridEventsViewer.events.length) return list.append('<div class="text-muted small p-2">' + (gridEventsViewer.loading ? 'Cargando capturas...' : 'No hay eventos persistidos todavía.') + '</div>');
     const visible = gridCaptureVisibleEvents();
-    if (!visible.length) list.append('<div class="text-muted small p-2">Sin capturas para estos filtros.</div>');
+    if (!visible.length) list.append('<div class="text-muted small p-2">' + (gridEventsViewer.loading || gridCaptureFilters.checking ? 'Buscando capturas para estos filtros...' : 'Sin capturas para estos filtros.') + '</div>');
     visible.forEach((event) => {
         const when = formatGridTime(event.t);
         const saved = gridEventsViewer.cache.get(event.i), cached = saved && saved.timestamp === event.t ? saved : null, description = Object.prototype.hasOwnProperty.call(event, "k") ? gridPointName(event.k) + (event.l ? " · limitado" : "") : gridStateName(event.p) + " → " + gridStateName(event.s);
@@ -460,6 +533,7 @@ function selectGridRecord(number) {
     $("#gridEventTransitions tr[data-record]").each(function () { $(this).toggleClass("table-primary", Number(this.dataset.record) === number); });
     $("#gridEventTransitions .gridEventRecord").each(function () { $(this).attr("aria-pressed", Number(this.dataset.record) === number); });
     zoomGridRecords([record]);
+    selectGridWaveForTime(record.offsetMs);
 }
 
 // Amplia todos los cambios guardados de un sujeto; group es el resumen de tension o corriente elegido.
@@ -503,13 +577,20 @@ function zoomGridRecords(records) {
         if (!chart) continue;
         const samples = chart.options.data[0].dataPoints;
         if (!samples.length) continue;
-        const range = gridSelectionRange(records, samples[0].x, samples[samples.length - 1].x, gridEventsViewer.records);
+        const range = records.length === 1 ? gridRecordFocusRange(records[0], samples[0].x, samples[samples.length - 1].x) : gridSelectionRange(records, samples[0].x, samples[samples.length - 1].x, gridEventsViewer.records);
         if (!range) continue;
-        chart.options.axisX.viewportMinimum = range.minimum;
-        chart.options.axisX.viewportMaximum = range.maximum;
+        setGridChartRange(chart, range.minimum, range.maximum);
     }
     refreshGridMarkers();
     if (typeof syncGridWaveRange === "function") syncGridWaveRange();
+}
+
+// Centra una transicion en hasta 250 ms; record identifica el instante y minimum/maximum limitan la captura.
+function gridRecordFocusRange(record, minimum, maximum) {
+    const at = record.offsetMs;
+    if (!Number.isFinite(at) || at < minimum || at > maximum || maximum <= minimum) return null;
+    const width = Math.min(250, maximum - minimum), start = Math.max(minimum, Math.min(at - width / 2, maximum - width));
+    return {minimum:start, maximum:start + width};
 }
 
 // Restaura el rango temporal completo en ambos graficos; sin parametros.
@@ -525,6 +606,7 @@ function resetGridChartRange() {
 // Construye el gráfico FAST con dos ejes; elementId es el contenedor, voltageSeries y currentSeries definen señales y samples aporta lecturas.
 function createGridChart(elementId, voltageSeries, currentSeries, samples) {
     // Convierte series y unidad a opciones CanvasJS conservando el eje y la unidad correspondientes.
+    const mobileView = window.matchMedia("(max-width: 767.98px)").matches;
     const makeSeries = (series, unit) => series.map(([name, key, color]) => ({type: "line", name: (unit === "A" ? "I " : "V ") + name, signalUnit: unit, axisYType: unit === "A" ? "secondary" : "primary", appPhase:key === 'inn' ? 'N' : key.slice(1).toUpperCase(), appVariant:unit === 'A' ? .22 : 0,
         showInLegend: true, markerSize: 0, color: typeof appPhaseColor === 'function' ? appPhaseColor(key === 'inn' ? 'N' : key.slice(1),unit === 'A' ? .22 : 0) : color, connectNullData: false, dataPoints: samples.map((sample) => ({x: sample.relativeMs, y: sample[key] ?? null}))}));
     const data = [...makeSeries(voltageSeries, "V"), ...makeSeries(currentSeries, "A")];
@@ -535,7 +617,7 @@ function createGridChart(elementId, voltageSeries, currentSeries, samples) {
                 label: gridRecordSubject(record.states.subject, record.states.pointType) + " · " + (record.states.isPoint ? gridPointName(record.states.pointType) :
                     gridStateName(record.states.previous, record.states.subject) + " → " + gridStateName(record.states.current, record.states.subject)),
                 durationMs: record.states.isPoint ? record.previousDurationMs : 0}))}),
-        axisX: {title: "Tiempo relativo (ms)", stripLines: gridEventsViewer.showMarkers && samples.length ? gridRecordMarkers(gridEventsViewer.records, null, samples[0].relativeMs, samples[samples.length - 1].relativeMs) : []}, axisY: {title: "Voltaje RMS", suffix: " V", includeZero: false, gridDashType: "dot"}, axisY2: {title: "Corriente RMS", suffix: " A", includeZero: false, gridThickness: 0}, legend: {cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(chart), data: data});
+        axisX: {title: mobileView ? "Tiempo (ms)" : "Tiempo relativo (ms)", titleFontSize: mobileView ? 11 : 14, labelFontSize: mobileView ? 10 : 12, stripLines: gridEventsViewer.showMarkers && samples.length ? gridRecordMarkers(gridEventsViewer.records, null, samples[0].relativeMs, samples[samples.length - 1].relativeMs) : []}, axisY: {title: mobileView ? "" : "Voltaje RMS", titleFontSize: 12, labelFontSize: mobileView ? 10 : 12, suffix: " V", includeZero: false, gridDashType: "dot"}, axisY2: {title: mobileView ? "" : "Corriente RMS", titleFontSize: 12, labelFontSize: mobileView ? 10 : 12, suffix: " A", includeZero: false, gridThickness: 0}, legend: {fontSize: mobileView ? 10 : 12, cursor: "pointer", itemclick: toggleGridSeries}, rangeChanged: () => syncGridChartRange(chart), data: data});
     chart.zoomEnabled = !gridEventsViewer.panMode;
     chart.panEnabled = gridEventsViewer.panMode;
     return chart;
@@ -584,11 +666,16 @@ function toggleGridSeries(event) { event.dataSeries.visible = event.dataSeries.v
 function setGridChartVisibility(type, visible) {
     const isVoltage = type === "voltage", buttonId = isVoltage ? "#gridEventVoltageToggle" : "#gridEventCurrentToggle";
     gridEventsViewer[isVoltage ? "voltageVisible" : "currentVisible"] = visible;
+    saveGridCaptureView();
     $(buttonId).toggleClass("active", visible).attr("aria-pressed", visible);
     const chart = gridEventsViewer.voltageChart;
     if (chart) {
         chart.options.data.filter(series => series.signalUnit === (isVoltage ? "V" : "A")).forEach(series => { series.visible = visible; });
         chart.render();
+    }
+    if (gridWaveViewer.chart) {
+        gridWaveViewer.chart.options.data.filter(series => series.signalGroup === (isVoltage ? 'voltage' : 'current')).forEach(series => { series.visible = visible; });
+        gridWaveViewer.chart.render();
     }
 }
 
@@ -657,7 +744,8 @@ function setGridEventsStatus(message, isError) { $("#gridEventsStatus").text(mes
 function setGridEventExpanded(expanded) {
     $('#gridEventWorkspace').toggleClass('gridEventExpanded', expanded);
     if (expanded) $('#gridChartViewTools').prependTo('#gridEventWorkspace');
-    else $('#gridChartViewTools').appendTo('#gridCaptureViewTools');
+    else if (matchMedia('(min-width: 1100px)').matches) $('#gridChartViewTools').appendTo('#gridCaptureViewTools');
+    else $('#gridChartViewTools').prependTo('#gridEventChartPanel');
     $('#gridEventExpand').attr('aria-pressed', String(expanded)).attr('title', expanded ? 'Salir de pantalla completa' : 'Ampliar gráficas');
     for (const chart of [gridEventsViewer.voltageChart, gridEventsViewer.currentChart, gridWaveViewer.chart]) if (chart) chart.render();
 }
@@ -699,6 +787,16 @@ function gridCaptureMatches(capture, types, phases, from, to) {
     });
 }
 
+// Comprueba solo el disparador del indice; entry es la cabecera y from/to delimitan el periodo.
+function gridCaptureIndexMatches(entry, from, to) {
+    const subject = ['R','S','T','N','G'].indexOf(entry.y);
+    if (subject < 0 || !Number.isFinite(entry.t) || entry.t < from || entry.t > to) return false;
+    const names = subject === 4 ? {'?':0,N:1,A:2,O:3} : {'?':0,N:1,L:2,H:3,X:4,C:5};
+    const states = {subject, previous:names[entry.p] ?? 0, current:names[entry.s] ?? 0,
+        isPoint:Object.hasOwn(entry,'k'), pointType:entry.k || 0, isCurrent:!!entry.c};
+    return gridCaptureFilters.phases.has(subject) && gridCaptureRecordTypes({states}, false).some(type => gridCaptureFilters.types.has(type));
+}
+
 // Lee limites inclusivos de los controles; sin parametros, rechaza fechas invalidas.
 function gridCaptureRange() {
     const fromText = $('#gridCaptureFrom').val(), toText = $('#gridCaptureTo').val();
@@ -715,7 +813,7 @@ function gridCaptureVisibleEvents() {
     return gridEventsViewer.events.filter(event => {
         const saved = gridCaptureFilters.records.get(event.i);
         if (saved && saved.timestamp === event.t) return gridCaptureMatches(saved, gridCaptureFilters.types, gridCaptureFilters.phases, range.from, range.to);
-        return all && event.t >= range.from && event.t <= range.to;
+        return all && event.t >= range.from && event.t <= range.to || gridCaptureIndexMatches(event, range.from, range.to);
     });
 }
 
@@ -731,11 +829,12 @@ async function applyGridCaptureFilters() {
     const token = ++gridCaptureFilters.run;
     gridCaptureFilters.controller?.abort();
     const controller = gridCaptureFilters.controller = new AbortController();
+    gridCaptureFilters.checking = true;
     try {
         const range = gridCaptureRange(), all = gridCaptureFilters.types.size === Object.keys(gridCaptureTypeNames).length && gridCaptureFilters.phases.size === 5;
         renderGridEventsList();
         const candidates = gridEventsViewer.events.filter(event => event.t >= range.from - 32768 && event.t <= range.to + 32768);
-        let checked = 0, failed = 0;
+        let checked = 0, failed = 0, lastRender = 0;
         for (const entry of candidates) {
             if (token !== gridCaptureFilters.run) return;
             const saved = gridCaptureFilters.records.get(entry.i);
@@ -747,11 +846,11 @@ async function applyGridCaptureFilters() {
                     if (event.id !== entry.i || event.partial) throw Error('Captura incompleta');
                     rememberGridCaptureRecords(event);
                 } catch (error) { if (controller.signal.aborted) return; ++failed; }
-                renderGridEventsList();
+                if (performance.now() - lastRender > 250) { renderGridEventsList(); lastRender = performance.now(); }
             }
         }
-        if (token === gridCaptureFilters.run) $('#gridCaptureFilterStatus').text(gridCaptureVisibleEvents().length + ' de ' + gridEventsViewer.events.length + ' capturas' + (failed ? ' · ' + failed + ' sin verificar; actualice para reintentar' : ''));
-    } catch (error) { if (token === gridCaptureFilters.run) $('#gridCaptureFilterStatus').text(error.message); }
+        if (token === gridCaptureFilters.run) { gridCaptureFilters.checking = false; renderGridEventsList(); $('#gridCaptureFilterStatus').text(gridCaptureVisibleEvents().length + ' de ' + gridEventsViewer.events.length + ' capturas' + (failed ? ' · ' + failed + ' sin verificar; actualice para reintentar' : '')); }
+    } catch (error) { if (token === gridCaptureFilters.run) { gridCaptureFilters.checking = false; $('#gridCaptureFilterStatus').text(error.message); renderGridEventsList(); } }
 }
 
 // Persiste los controles del visor por navegador; sin parametros, no guarda muestras.

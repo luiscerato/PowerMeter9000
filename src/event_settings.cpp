@@ -10,7 +10,7 @@ namespace {
 constexpr uint32_t settingsMagic = 0x45564331;
 struct settingsRecord {
     uint32_t magic = settingsMagic, revision = 1;
-    uint16_t version = 1, reserved = 0;
+    uint16_t version = 2, reserved = 0;
     eventSettingsData config;
     uint32_t crc = 0;
 };
@@ -48,6 +48,7 @@ const char* eventSettingsInvalidKey(const eventSettingsData& data) {
     if (grid.lossConfirmMs < 20 || grid.lossConfirmMs > 2000) return "time.loss";
     if (grid.voltageConfirmMs != eventPointLimitMs() || grid.capturePages != eventCapturePages) return "time.loss";
     if (grid.recoveryConfirmMs < 20 || grid.recoveryConfirmMs > 1000) return "time.back";
+    if (grid.abnormalConfirmMs > 1500 || grid.abnormalConfirmMs < (grid.lossConfirmMs < 1500 ? grid.lossConfirmMs : 1500)) return "time.abnormal";
     if (!grid.neutral.enabled || !(grid.neutral.highVoltage >= 0.025f && grid.neutral.highVoltage <= 409.55f)) return "neut.high";
     if (!(grid.neutral.hysteresis >= 0 && grid.neutral.hysteresis < grid.neutral.highVoltage)) return "neut.hyst";
     if (grid.neutral.confirmMs < 20 || grid.neutral.confirmMs > 2000) return "neut.wait";
@@ -67,7 +68,10 @@ static void loadPreviousEventSettings(eventSettingsData& dest) {
     Preferences prefs;
     if (prefs.begin("grid", true)) {
         gridSettings grid;
-        if (prefs.getBytesLength("settings") == sizeof(grid) && prefs.getBytes("settings", &grid, sizeof(grid)) == sizeof(grid) && validGridSettings(grid)) dest.grid = grid;
+        if (prefs.getBytesLength("settings") == sizeof(grid) && prefs.getBytes("settings", &grid, sizeof(grid)) == sizeof(grid)) {
+            grid.abnormalConfirmMs = grid.lossConfirmMs > 1500 ? 1500 : grid.lossConfirmMs > 1000 ? grid.lossConfirmMs : 1000;
+            if (validGridSettings(grid)) dest.grid = grid;
+        }
         prefs.end();
     }
     if (prefs.begin("meter", true)) {
@@ -95,8 +99,10 @@ void eventSettingsBegin() {
     bool found = false;
     if (prefs.begin("events", true)) {
         found = prefs.getBytesLength("cfg") == sizeof(record) && prefs.getBytes("cfg", &record, sizeof(record)) == sizeof(record) &&
-            record.magic == settingsMagic && record.version == 1 && record.revision &&
-            record.crc == waveEventFormat::crc32(&record, offsetof(settingsRecord, crc)) && validEventSettings(record.config);
+            record.magic == settingsMagic && (record.version == 1 || record.version == 2) && record.revision &&
+            record.crc == waveEventFormat::crc32(&record, offsetof(settingsRecord, crc));
+        if (found && record.version == 1) record.config.grid.abnormalConfirmMs = record.config.grid.lossConfirmMs > 1500 ? 1500 : record.config.grid.lossConfirmMs > 1000 ? record.config.grid.lossConfirmMs : 1000;
+        if (found) found = validEventSettings(record.config);
         prefs.end();
     }
     if (!found) { record = settingsRecord{}; loadPreviousEventSettings(record.config); }

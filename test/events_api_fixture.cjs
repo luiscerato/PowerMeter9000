@@ -3,7 +3,7 @@ function config(state) {
     const g=state.grid,m=state.meter,w=state.wave;
     return {rev:state.rev||1,save:{state:'ok',rev:0},restartRequired:w.preMs!==(state.bootPreMs??96),
         volt:{lowR:g.lowR,lowS:g.lowS,lowT:g.lowT,highR:g.highR,highS:g.highS,highT:g.highT,loss:g.noVoltage,hyst:g.hysteresis},
-        time:{dip:m.dipMs,swell:m.swellMs,oc:m.ocMs,loss:g.lossConfirmMs,back:g.recoveryConfirmMs},
+        time:{dip:m.dipMs,swell:m.swellMs,oc:m.ocMs,loss:g.lossConfirmMs,back:g.recoveryConfirmMs,abnormal:g.abnormalConfirmMs??1000},
         neut:{high:g.neutralHigh,hyst:g.neutralHysteresis,wait:g.neutralConfirmMs,back:g.neutralRecoveryMs},
         curr:{high:m.ocCurrent,hyst:m.ocHyst},rec:{dip:!!m.dipEnabled,swell:!!m.swellEnabled,oc:!!m.overcurrent},
         wave:{on:w.saveEnabled,pre:w.preMs,dip:!!(w.pointMask&1),swell:!!(w.pointMask&2),oc:!!(w.pointMask&4)}};
@@ -29,7 +29,7 @@ async function routeEvents(route,state) {
     const g=state.grid,m=state.meter,w=state.wave;
     const mapping={ 'volt.lowR':[g,'lowR'],'volt.lowS':[g,'lowS'],'volt.lowT':[g,'lowT'],'volt.highR':[g,'highR'],
         'volt.highS':[g,'highS'],'volt.highT':[g,'highT'],'volt.loss':[g,'noVoltage'],'volt.hyst':[g,'hysteresis'],
-        'time.loss':[g,'lossConfirmMs'],'time.back':[g,'recoveryConfirmMs'],'neut.high':[g,'neutralHigh'],
+        'time.loss':[g,'lossConfirmMs'],'time.back':[g,'recoveryConfirmMs'],'time.abnormal':[g,'abnormalConfirmMs'],'neut.high':[g,'neutralHigh'],
         'neut.hyst':[g,'neutralHysteresis'],'neut.wait':[g,'neutralConfirmMs'],'neut.back':[g,'neutralRecoveryMs'],
         'time.dip':[m,'dipMs'],'time.swell':[m,'swellMs'],'time.oc':[m,'ocMs'],
         'curr.high':[m,'ocCurrent'],'curr.hyst':[m,'ocHyst'],'rec.dip':[m,'dipEnabled'],
@@ -44,7 +44,7 @@ async function routeEvents(route,state) {
 // Devuelve ajustes validos predeterminados para pruebas de navegacion sin personalizaciones.
 function defaultState() {
     return {grid:{lowR:190,lowS:190,lowT:190,highR:250,highS:250,highT:250,noVoltage:20,hysteresis:5,
-        lossConfirmMs:250,recoveryConfirmMs:250,neutralHigh:25,neutralHysteresis:2,neutralConfirmMs:100,neutralRecoveryMs:250},
+        lossConfirmMs:250,recoveryConfirmMs:250,abnormalConfirmMs:1000,neutralHigh:25,neutralHysteresis:2,neutralConfirmMs:100,neutralRecoveryMs:250},
         meter:{dipEnabled:1,swellEnabled:1,overcurrent:1,dipMs:50,swellMs:50,ocMs:10,ocCurrent:50,ocHyst:1},
         wave:{preMs:96,saveEnabled:true,pointMask:7}};
 }
